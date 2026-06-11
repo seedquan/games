@@ -38,7 +38,8 @@
    burn out; edges wrap — only your own tail can kill you.
    Speed ramps with length; quick eats build a combo.
 
-   Controls: Arrows / WASD to steer, swipe on touch.
+   Controls: move the mouse to steer (the serpent chases the
+             cursor); drag on touch. Arrows / WASD also work.
              P or Esc = pause, M = mute.
    ============================================================ */
 
@@ -395,7 +396,28 @@ function die() {
 }
 
 /* ---------------- §H INPUT ---------------- */
+/* Mouse / drag steering: the serpent chases the pointer. A direction
+   keypress takes over until the pointer moves again. */
+let mouseX = 0, mouseY = 0, mouseSteer = false;
+
+function steerTowardPointer() {
+  const head = snake[0];
+  const dx = mouseX - cx(head.x), dy = mouseY - cy(head.y);
+  if (Math.hypot(dx, dy) < cell * 0.6) return;   // dead zone around the head
+  const sx = Math.sign(dx), sy = Math.sign(dy);
+  const cands = Math.abs(dx) >= Math.abs(dy)
+    ? [{ x: sx, y: 0 }, { x: 0, y: sy }]
+    : [{ x: 0, y: sy }, { x: sx, y: 0 }];
+  for (const c of cands) {
+    if (c.x === 0 && c.y === 0) continue;
+    if (c.x === -dir.x && c.y === -dir.y) continue;  // no reversal
+    dir = c;
+    return;
+  }
+}
+
 function queueDir(nx, ny) {
+  mouseSteer = false;
   const last = inputQueue.length ? inputQueue[inputQueue.length - 1] : dir;
   if (last.x === nx && last.y === ny) return;          // same direction
   if (last.x === -nx && last.y === -ny) return;        // reversal
@@ -434,27 +456,26 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-/* touch: swipe to steer, tap to start */
-let touchSX = 0, touchSY = 0, touchT = 0, swiped = false;
+canvas.addEventListener("mousemove", (e) => {
+  mouseX = e.clientX; mouseY = e.clientY;
+  mouseSteer = true;
+});
+
+/* touch: drag to steer (finger acts as the cursor), tap to start */
+let touchSX = 0, touchSY = 0, touchT = 0;
 canvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
   audio.unlock();
   const t = e.changedTouches[0];
   touchSX = t.clientX; touchSY = t.clientY;
-  touchT = performance.now(); swiped = false;
+  touchT = performance.now();
 }, { passive: false });
 
 canvas.addEventListener("touchmove", (e) => {
   e.preventDefault();
-  if (swiped || state !== ST.PLAY) return;
   const t = e.changedTouches[0];
-  const dx = t.clientX - touchSX, dy = t.clientY - touchSY;
-  if (Math.hypot(dx, dy) < 24) return;
-  if (Math.abs(dx) > Math.abs(dy)) queueDir(dx > 0 ? 1 : -1, 0);
-  else queueDir(0, dy > 0 ? 1 : -1);
-  swiped = true;
-  touchSX = t.clientX; touchSY = t.clientY; // allow chained swipes
-  setTimeout(() => { swiped = false; }, 80);
+  mouseX = t.clientX; mouseY = t.clientY;
+  mouseSteer = true;
 }, { passive: false });
 
 canvas.addEventListener("touchend", (e) => {
@@ -473,6 +494,7 @@ canvas.addEventListener("mousedown", (e) => {
 /* ---------------- §I UPDATE ---------------- */
 function step() {
   if (inputQueue.length) dir = inputQueue.shift();
+  else if (mouseSteer) steerTowardPointer();
   const head = snake[0];
   let nx = (head.x + dir.x + COLS) % COLS;   // wrap-around edges
   let ny = (head.y + dir.y + ROWS) % ROWS;
@@ -782,7 +804,7 @@ function drawTitle() {
   text("tap / press to start", cw / 2, ch * 0.55, 20, "#ffffff", "center", 14);
   ctx.globalAlpha = 1;
   text("BEST  " + best, cw / 2, ch * 0.55 + 40, 16, "#ffd35a", "center", 10);
-  text("arrows / WASD or swipe — eat orbs, chase comets,", cw / 2, ch * 0.72, 13, "rgba(190,190,230,0.75)", "center");
+  text("move the mouse to steer — eat orbs, chase comets,", cw / 2, ch * 0.72, 13, "rgba(190,190,230,0.75)", "center");
   text("edges wrap — only your tail can end you", cw / 2, ch * 0.72 + 20, 13, "rgba(190,190,230,0.75)", "center");
   text("P pause   M mute", cw / 2, ch * 0.72 + 44, 12, "rgba(150,150,190,0.6)", "center");
 }
