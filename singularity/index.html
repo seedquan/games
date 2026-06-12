@@ -255,6 +255,7 @@ const audio = new AudioEngine();
 /* ---------------- §E INPUT ---------------- */
 const keys = {};
 let pointerX = -1, pointerY = -1, pointerDown = false, pointerSeen = false;
+let touchUI = window.matchMedia && matchMedia("(pointer: coarse)").matches;
 
 function anyInputUnlock() { audio.unlock(); }
 
@@ -273,6 +274,7 @@ window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
 
 canvas.addEventListener("pointerdown", (e) => {
   anyInputUnlock();
+  if (e.pointerType === "touch") touchUI = true;
   pointerDown = true; pointerSeen = true;
   pointerX = e.clientX; pointerY = e.clientY;
   if (state === "title" || state === "victory") startGame();
@@ -1469,15 +1471,32 @@ function drawTitle() {
   hudText("TAP / PRESS ANY KEY TO BEGIN", cx, cy + 110, 18, "#8be9ff", "center", 12);
   ctx.globalAlpha = 1;
   if (bestTime) hudText("BEST DEVOUR: " + fmtTime(bestTime), cx, cy + 142, 14, "#ffd866", "center", 8);
-  hudText("mouse / touch to drift · WASD works too · P pause · M mute" + (audio.muted ? " (muted)" : ""),
-    cx, ch - 28, 12, "rgba(220,235,255,0.5)", "center", 3);
+  // HOW TO PLAY / 操作说明 — device-aware bilingual panel
+  const help = touchUI ? [
+    "目标：吞噬整座城市（100%），用时越短越好 — devour 100% of the city, fastest time wins",
+    "按住拖动，黑洞向手指漂移 — touch-drag and the hole drifts toward your finger",
+    "吞掉比你小的东西来变大 — eat smaller things to grow",
+    "太大的物体会挡住你，先变大再来 — too-big objects block you: grow first",
+  ] : [
+    "目标：吞噬整座城市（100%），用时越短越好 — devour 100% of the city, fastest time wins",
+    "黑洞向鼠标方向漂移 · WASD 也可移动 — the hole drifts toward your mouse · WASD works too",
+    "吞掉比你小的东西来变大 — eat smaller things to grow",
+    "太大的物体会挡住你，先变大再来 — too-big objects block you: grow first",
+    "P/Esc 暂停 · M 静音 — pause / mute" + (audio.muted ? " (已静音 muted)" : ""),
+  ];
+  let hy = ch - 24 - (help.length - 1) * 18;
+  hudText("HOW TO PLAY / 操作说明", cx, hy - 22, 13, "rgba(139,233,255,0.6)", "center", 4);
+  for (const line of help) {
+    hudText(line, cx, hy, 12, "rgba(190,190,230,0.75)", "center", 3);
+    hy += 18;
+  }
 }
 
 function drawPaused() {
   ctx.fillStyle = "rgba(5, 5, 20, 0.6)";
   ctx.fillRect(0, 0, cw, ch);
   hudText("PAUSED", cw / 2, ch / 2 - 10, 40, "#8be9ff", "center", 18);
-  hudText("P / ESC to resume · M mute" + (audio.muted ? " (muted)" : ""), cw / 2, ch / 2 + 24, 14, "rgba(220,235,255,0.7)", "center", 4);
+  hudText("P/Esc 继续 · M 静音 — P / ESC to resume · M mute" + (audio.muted ? " (已静音 muted)" : ""), cw / 2, ch / 2 + 24, 14, "rgba(220,235,255,0.7)", "center", 4);
 }
 
 function drawVictory() {

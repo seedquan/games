@@ -371,7 +371,7 @@ let waves = [], waveIdx = 0, roomClear = false, boss = null;
 let freezeT = 0, shakeT = 0, shakeA = 0, redFlash = 0, roomFade = 0;
 let boonChoices = [], boonFromStart = false;
 let uiRects = [];
-let touchUI = false;
+let touchUI = window.matchMedia && matchMedia("(pointer: coarse)").matches;
 let timeNow = 0;
 let bossWarnT = 0;
 
@@ -2101,10 +2101,30 @@ function drawTitle() {
   ctx.fillStyle = "rgba(255,204,68,0.9)";
   ctx.font = 13 * u + "px 'Courier New', monospace";
   if (best > 0) ctx.fillText("BEST DEPTH: " + best + "   ◆ " + cores + " cores", cw / 2, ch * 0.7);
-  ctx.fillStyle = "rgba(150,170,220,0.55)";
+  // HOW TO PLAY / 操作说明 — device-aware bilingual panel
   ctx.font = 12 * u + "px 'Courier New', monospace";
-  ctx.fillText("WASD move · mouse aim · LMB slash · RMB/Shift bolt · Space dash", cw / 2, ch * 0.82);
-  ctx.fillText("P pause · M mute", cw / 2, ch * 0.82 + 20 * u);
+  const help = touchUI ? [
+    "HOW TO PLAY / 操作说明",
+    "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
+    "左半屏虚拟摇杆移动 — left-half joystick to move",
+    "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
+    "DASH 冲刺（无敌帧）· BOLT 等离子弹 — dash (i-frames) · plasma bolt",
+    "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
+  ] : [
+    "HOW TO PLAY / 操作说明",
+    "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
+    "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
+    "左键挥砍 · 右键/Shift/E 等离子弹（耗能量） — LMB slash · RMB/Shift/E bolt (energy)",
+    "空格冲刺（无敌帧） — Space dash with i-frames",
+    "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
+    "P/Esc 暂停 · M 静音 — pause / mute",
+  ];
+  let hy = ch * 0.73;
+  for (let i = 0; i < help.length; i++) {
+    ctx.fillStyle = i === 0 ? "rgba(94,230,255,0.6)" : "rgba(190,190,230,0.75)";
+    ctx.fillText(help[i], cw / 2, hy);
+    hy += 17 * u;
+  }
 }
 
 function drawSummary() {
@@ -2278,7 +2298,7 @@ function drawPause() {
   noglow();
   ctx.fillStyle = "rgba(190,210,255,0.7)";
   ctx.font = 14 * u + "px 'Courier New', monospace";
-  ctx.fillText(touchUI ? "tap to resume" : "press P / Esc / click to resume — M to mute", cw / 2, ch * 0.52);
+  ctx.fillText(touchUI ? "点按继续 — tap to resume" : "P/Esc/点击 继续 · M 静音 — P / Esc / click to resume · M mute", cw / 2, ch * 0.52);
 }
 
 function uiClick(x, y) {

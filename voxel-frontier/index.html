@@ -164,12 +164,7 @@
     <button class="neon" id="btnPlay">PLAY</button>
     <button class="neon pink" id="btnNew">NEW WORLD</button>
   </div>
-  <div class="controls">
-    <b>WASD</b> move &nbsp; <b>SPACE</b> jump &nbsp; <b>MOUSE</b> look<br>
-    <b>LMB</b> mine &nbsp; <b>RMB</b> place &nbsp; <b>1-9 / WHEEL</b> select block<br>
-    <b>F</b> or double-space fly &nbsp; <b>M</b> mute &nbsp; <b>R</b> new world &nbsp; <b>ESC</b> pause<br>
-    touch: left stick moves, drag right to look, tap to dig / place
-  </div>
+  <div class="controls" id="howto"></div>
 </div>
 
 <div class="overlay" id="overlayPause" style="display:none">
@@ -179,7 +174,7 @@
     <button class="neon" id="btnResume">RESUME</button>
     <button class="neon pink" id="btnReset">NEW WORLD</button>
   </div>
-  <div class="controls">progress is saved automatically &middot; <b>M</b> mute</div>
+  <div class="controls">进度自动保存 · <b>M</b> 静音 — progress is saved automatically &middot; mute</div>
 </div>
 
 <div id="glfail">
@@ -1385,6 +1380,28 @@ let joyId = -1, joyOX = 0, joyOY = 0, joyVX = 0, joyVY = 0;
 let lookId = -1, lookLX = 0, lookLY = 0, lookSX = 0, lookSY = 0, lookT0 = 0, lookMoved = 0;
 let touchJump = false, touchDown = false;
 
+/* HOW TO PLAY / 操作说明 — device-aware bilingual panel on the title overlay */
+const elHowto = document.getElementById("howto");
+function renderHowTo() {
+  const coarse = touchMode || (window.matchMedia && matchMedia("(pointer: coarse)").matches);
+  elHowto.innerHTML = coarse ? (
+    "<b>HOW TO PLAY / 操作说明</b><br>" +
+    "目标：自由探索、挖掘与建造 — explore, mine and build freely<br>" +
+    "<b>左侧摇杆</b> 移动 · <b>拖动右侧</b> 转视角 — left stick moves &middot; drag right to look<br>" +
+    "点按方块来挖掘 / 放置 — tap a block to dig / place<br>" +
+    "<b>DIG/PLACE</b> 切换模式 · 底栏选方块 — toggle mode &middot; pick blocks in hotbar<br>" +
+    "<b>JUMP</b> 跳跃 · <b>FLY</b> 飞行 — jump / fly buttons"
+  ) : (
+    "<b>HOW TO PLAY / 操作说明</b><br>" +
+    "目标：自由探索、挖掘与建造 — explore, mine and build freely<br>" +
+    "点击锁定鼠标 · <b>WASD</b> 移动 · <b>SPACE</b> 跳跃 — click to lock pointer &middot; move &middot; jump<br>" +
+    "<b>左键</b> 挖掘 · <b>右键</b> 放置 · <b>1-9 / 滚轮</b> 选方块 — LMB break &middot; RMB place &middot; select block<br>" +
+    "<b>F</b> 或双击空格飞行 · <b>R</b> 重置世界 — F / double-space to fly &middot; R new world<br>" +
+    "<b>ESC</b> 暂停 · <b>M</b> 静音 — pause / mute"
+  );
+}
+renderHowTo();
+
 function gatherInput() {
   let fwd = (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) - (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0);
   let strafe = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
@@ -1553,7 +1570,7 @@ bindTouchBtn("btnMode", () => {
 bindTouchBtn("btnPauseT", () => { if (state === "play") pauseGame(); });
 
 window.addEventListener("touchstart", (e) => {
-  if (!touchMode) { touchMode = true; document.body.classList.add("touch"); }
+  if (!touchMode) { touchMode = true; document.body.classList.add("touch"); renderHowTo(); }
   audio.unlock();
   if (state !== "play") return;
   if (e.target && e.target.closest && (e.target.closest(".tbtn") || e.target.closest("#hotbar"))) return;
