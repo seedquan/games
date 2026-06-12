@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>SINGULARITY</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #050514; overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none;
+  }
+  canvas { display: block; touch-action: none; }
+  #back {
+    position: fixed; left: 14px; bottom: 12px; z-index: 10;
+    font: 13px "Courier New", monospace; letter-spacing: 1px;
+    color: #8be9ff; text-decoration: none; opacity: 0.35;
+    text-shadow: 0 0 8px rgba(80,200,255,0.8);
+    transition: opacity 0.25s;
+  }
+  #back:hover { opacity: 0.9; }
+  #back.hidden { display: none; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<a id="back" href="../">&larr; Arcade</a>
+<script>
+"use strict";
+
+/* ============================================================
+   SINGULARITY — a hole.io-style city-devouring arcade game.
+   Single file, zero dependencies, all art & audio procedural.
+
+   You are a black hole loose in a neon night city.
+   Eat what is smaller than you. Grow. Eat bigger things.
+   Consume the ENTIRE city. Best time is the only score.
+
+   Controls: mouse / touch-drag = drift toward point.
+             WASD / arrows also steer.
+             P or Esc = pause, M = mute.
+   ============================================================ */
+
+/* ---------------- §B CONFIG ---------------- */
+const CONFIG = Object.freeze({
+  gridN: 8,             // city blocks per side
+  blockSize: 310,       // px per block
+  roadW: 72,            // px road width
+  holeR0: 10,           // starting hole radius
+  edibleFactor: 0.95,   // obj.size <= holeR * this  → edible
+  edibleGrace: 2,       // flat px of grace added to threshold
+  pullRange: 2.2,       // pull begins inside holeR * this
+  captureRange: 1.05,   // spiral-in begins inside holeR * this
+  speedBase: 285,       // hole px/s at start size
+  speedExp: 0.20,       // speed falls off with size^this
+  zoomFill: 0.105,      // hole radius as fraction of min screen dim
+  zoomMax: 1.8,
+  zoomMin: 0.30,
+  comboWindow: 2.0,     // s between eats to keep a combo alive
+  comboMultStep: 0.10,  // growth bonus per combo step
+  comboMultMax: 1.6,
+  frenzyAt: 5,          // combo count that triggers FEEDING FRENZY
+  fallSpeedBase: 1.7,   // spiral-in speed
+  maxParticles: 700,
+  collapseTime: 3.2,    // s of victory implosion
+  starCount: 320,
+});
+
+/* ---------------- §C UTIL ---------------- */
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+const easeIn = (t) => t * t * t;
+const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+/* deterministic 0..1 hash for window flicker etc. */
+function hash2(a, b) {
+  const n = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+  return n - Math.floor(n);
+}
+
+function fmtTime(s) {
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60), r = Math.floor(s % 60);
+  return m + ":" + (r < 10 ? "0" : "") + r;
+}
+
+const store = {
+  get(k) { try { return localStorage.getItem("singularity." + k); } catch (e) { return this._m && this._m[k]; } },
+  set(k, v) { try { localStorage.setItem("singularity." + k, v); } catch (e) { (this._m = this._m || {})[k] = v; } },
+};
+
+/* ---------------- canvas / view ---------------- */
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+const backLink = document.getElementById("back");
+let cw = 0, ch = 0, dpr = 1;
+
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  cw = window.innerWidth; ch = window.innerHeight;
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(ch * dpr);
+  canvas.style.width = cw + "px";
+  canvas.style.height = ch + "px";
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ---------------- §D AUDIO ---------------- */
+class AudioEngine {
+  constructor() {
+    this.ctx = null;
+    this.muted = store.get("muted") === "1";
+    this.lastGulp = 0;
+    this.lastBump = 0;
+  }
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const c = this.ctx = new AC();
+      this.master = c.createGain();
+      this.master.gain.value = this.muted ? 0 : 1;
+      const comp = c.createDynamicsCompressor();
+      this.master.connect(comp);
+      comp.connect(c.destination);
+      // fake reverb: feedback delay
+      this.send = c.createGain(); this.send.gain.value = 0.45;
+      const delay = c.createDelay(1); delay.delayTime.value = 0.27;
+      const fb = c.createGain(); fb.gain.value = 0.34;
+      this.send.connect(delay); delay.connect(fb); fb.connect(delay);
+      delay.connect(this.master);
+      // 1s noise buffer for SFX
+      const buf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      this.noiseBuf = buf;
+      this.startDrone();
+    }
+    if (this.ctx.state !== "running") this.ctx.resume();
+  }
+  toggleMute() {
+    this.muted = !this.muted;
+    store.set("muted", this.muted ? "1" : "0");
+    if (this.master) this.master.gain.value = this.muted ? 0 : 1;
+  }
+  ok() { return this.ctx && this.ctx.state === "running" && !this.muted; }
+  tone(type, f0, f1, t0, dur, vol, wet) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    if (wet) g.connect(this.send);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  noise(t0, dur, vol, filterType, f0, f1) {
+    const c = this.ctx, s = c.createBufferSource(), g = c.createGain();
+    s.buffer = this.noiseBuf; s.loop = true;
+    const fl = c.createBiquadFilter();
+    fl.type = filterType;
+    fl.frequency.setValueAtTime(f0, t0);
+    if (f1) fl.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(fl); fl.connect(g); g.connect(this.master);
+    s.start(t0); s.stop(t0 + dur + 0.05);
+  }
+  /* low cosmic drone, intensity grows with the hole */
+  startDrone() {
+    const c = this.ctx;
+    this.droneGain = c.createGain();
+    this.droneGain.gain.value = 0.05;
+    const fl = c.createBiquadFilter();
+    fl.type = "lowpass"; fl.frequency.value = 240; fl.Q.value = 4;
+    const lfo = c.createOscillator(), lg = c.createGain();
+    lfo.frequency.value = 0.06; lg.gain.value = 110;
+    lfo.connect(lg); lg.connect(fl.frequency); lfo.start();
+    [36.71, 55.0, 73.42].forEach((f, i) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = i === 2 ? "sine" : "sawtooth";
+      o.frequency.value = f;
+      o.detune.value = rand(-6, 6);
+      g.gain.value = i === 2 ? 0.5 : 0.32;
+      o.connect(g); g.connect(fl); o.start();
+    });
+    fl.connect(this.droneGain);
+    this.droneGain.connect(this.master);
+    // faint high shimmer
+    const sh = c.createOscillator(), sg = c.createGain();
+    sh.type = "sine"; sh.frequency.value = 1174.66;
+    sg.gain.value = 0.006;
+    const tr = c.createOscillator(), tg = c.createGain();
+    tr.frequency.value = 0.11; tg.gain.value = 0.005;
+    tr.connect(tg); tg.connect(sg.gain); tr.start();
+    sh.connect(sg); sg.connect(this.send); sh.start();
+  }
+  setDroneLevel(x) {
+    if (this.droneGain) this.droneGain.gain.value = 0.05 + 0.06 * clamp(x, 0, 1);
+  }
+  /* gulp: pitch falls as the hole grows */
+  gulp(holeR, big) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    if (t - this.lastGulp < 0.05) return;
+    this.lastGulp = t;
+    const f0 = clamp(160 + 720 * Math.pow(CONFIG.holeR0 / holeR, 0.8), 130, 880);
+    this.tone("sine", f0, f0 * 0.32, t, 0.18 + (big ? 0.12 : 0), 0.16, true);
+    this.tone("triangle", f0 * 0.5, f0 * 0.2, t, 0.16, 0.08, false);
+    this.noise(t, 0.12, 0.07, "bandpass", f0 * 2.5, f0 * 0.8);
+    if (big) this.tone("sine", 60, 34, t, 0.5, 0.22, false);
+  }
+  tierUp() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [261.63, 329.63, 392.0, 523.25].forEach((f, i) =>
+      this.tone("triangle", f, f, t + i * 0.07, 0.22, 0.10, true));
+  }
+  frenzy(level) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    const base = 440 * Math.pow(2, Math.min(4, level) / 12);
+    [1, 1.25, 1.5, 2].forEach((m, i) =>
+      this.tone("square", base * m, base * m, t + i * 0.045, 0.1, 0.07, true));
+    this.noise(t, 0.25, 0.1, "highpass", 3000, 6000);
+  }
+  bump() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    if (t - this.lastBump < 0.25) return;
+    this.lastBump = t;
+    this.tone("sine", 90, 50, t, 0.12, 0.10, false);
+    this.noise(t, 0.08, 0.05, "lowpass", 500, 120);
+  }
+  victory() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 2.2, 0.25, "lowpass", 2200, 60);
+    this.tone("sine", 55, 27, t, 2.0, 0.3, false);
+    [261.63, 329.63, 392.0, 523.25, 659.25, 783.99].forEach((f, i) =>
+      this.tone("sine", f, f, t + 0.9 + i * 0.12, 0.9, 0.09, true));
+  }
+}
+const audio = new AudioEngine();
+
+/* ---------------- §E INPUT ---------------- */
+const keys = {};
+let pointerX = -1, pointerY = -1, pointerDown = false, pointerSeen = false;
+
+function anyInputUnlock() { audio.unlock(); }
+
+window.addEventListener("keydown", (e) => {
+  anyInputUnlock();
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (k === "m") { audio.toggleMute(); return; }
+  if (k === "p" || k === "escape") { togglePause(); return; }
+  if (state === "title" || state === "victory") {
+    if (k !== "f5" && k !== "f12") startGame();
+  }
+  if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+});
+window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+
+canvas.addEventListener("pointerdown", (e) => {
+  anyInputUnlock();
+  pointerDown = true; pointerSeen = true;
+  pointerX = e.clientX; pointerY = e.clientY;
+  if (state === "title" || state === "victory") startGame();
+  else if (state === "paused") togglePause();
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "mouse" || pointerDown) {
+    pointerX = e.clientX; pointerY = e.clientY;
+    pointerSeen = true;
+  }
+});
+window.addEventListener("pointerup", () => { pointerDown = false; });
+window.addEventListener("pointercancel", () => { pointerDown = false; });
+window.addEventListener("blur", () => { if (state === "playing") togglePause(); });
+
+/* ---------------- §F PARTICLES & POPUPS ---------------- */
+const particles = [];
+function spawnParticle(x, y, vx, vy, life, size, color, drag) {
+  if (particles.length >= CONFIG.maxParticles) particles.shift();
+  particles.push({ x, y, vx, vy, t: 0, life, size, color, drag: drag || 0.92 });
+}
+function burst(x, y, n, color, speed, size) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed);
+    spawnParticle(x, y, Math.cos(a) * s, Math.sin(a) * s,
+      rand(0.3, 0.8), rand(size * 0.5, size * 1.4), color);
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.t += dt;
+    if (p.t >= p.life) { particles.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.vx *= p.drag; p.vy *= p.drag;
+  }
+}
+
+const popups = []; // world-space floating texts
+function popup(x, y, text, color, size) {
+  popups.push({ x, y, text, color, size: size || 14, t: 0, life: 1.1 });
+  if (popups.length > 40) popups.shift();
+}
+let banner = null; // big center-screen message {text, sub, t, life, color}
+function showBanner(text, sub, color, life) {
+  banner = { text, sub: sub || "", t: 0, life: life || 2.2, color: color || "#ff66cc" };
+}
+
+/* ---------------- §G SPATIAL HASH ---------------- */
+class SpatialGrid {
+  constructor(cell) { this.cell = cell; this.map = new Map(); }
+  _key(cx, cy) { return cx * 100000 + cy; }
+  insert(o) {
+    const cx = Math.floor(o.x / this.cell), cy = Math.floor(o.y / this.cell);
+    o._cx = cx; o._cy = cy;
+    const k = this._key(cx, cy);
+    let arr = this.map.get(k);
+    if (!arr) { arr = []; this.map.set(k, arr); }
+    arr.push(o);
+  }
+  remove(o) {
+    const k = this._key(o._cx, o._cy);
+    const arr = this.map.get(k);
+    if (arr) {
+      const i = arr.indexOf(o);
+      if (i >= 0) arr.splice(i, 1);
+    }
+  }
+  move(o) {
+    const cx = Math.floor(o.x / this.cell), cy = Math.floor(o.y / this.cell);
+    if (cx === o._cx && cy === o._cy) return;
+    this.remove(o);
+    this.insert(o);
+  }
+  query(x, y, r, out) {
+    out.length = 0;
+    const c = this.cell;
+    const x0 = Math.floor((x - r) / c), x1 = Math.floor((x + r) / c);
+    const y0 = Math.floor((y - r) / c), y1 = Math.floor((y + r) / c);
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const arr = this.map.get(this._key(cx, cy));
+        if (arr) for (let i = 0; i < arr.length; i++) out.push(arr[i]);
+      }
+    }
+    return out;
+  }
+}
+
+/* ---------------- §H OBJECT TYPES & WORLD GEN ---------------- */
+/* size: collision/edibility radius. gain: hole area added when eaten. */
+const TYPES = {
+  streetlight: { tier: 0, size: 7,   gain: 3,    label: "streetlight" },
+  hydrant:     { tier: 0, size: 6,   gain: 2.5,  label: "hydrant" },
+  mailbox:     { tier: 0, size: 7,   gain: 3,    label: "mailbox" },
+  bench:       { tier: 0, size: 9,   gain: 3.5,  label: "bench" },
+  bush:        { tier: 0, size: 8,   gain: 3,    label: "bush" },
+  tree:        { tier: 1, size: 13,  gain: 10,   label: "tree" },
+  car:         { tier: 1, size: 16,  gain: 14,   label: "car" },
+  kiosk:       { tier: 1, size: 19,  gain: 18,   label: "kiosk" },
+  house:       { tier: 2, size: 28,  gain: 42,   label: "house" },
+  shop:        { tier: 2, size: 34,  gain: 55,   label: "shop" },
+  midrise:     { tier: 3, size: 50,  gain: 170,  label: "mid-rise" },
+  skyscraper:  { tier: 4, size: 72,  gain: 520,  label: "skyscraper" },
+  stadium:     { tier: 5, size: 96,  gain: 1500, label: "stadium" },
+  tower:       { tier: 5, size: 100, gain: 1600, label: "mega-tower" },
+};
+const TIER_LABELS = [
+  "STREET PROPS", "TREES & CARS", "HOUSES & SHOPS",
+  "MID-RISES", "SKYSCRAPERS", "LANDMARKS",
+];
+const TIER_MIN_SIZE = (() => {
+  const m = [99, 99, 99, 99, 99, 999].map(() => Infinity);
+  for (const k in TYPES) {
+    const t = TYPES[k];
+    if (t.size < m[t.tier]) m[t.tier] = t.size;
+  }
+  return m;
+})();
+
+const P = CONFIG.blockSize + CONFIG.roadW;            // grid pitch
+const WORLD = CONFIG.gridN * P + CONFIG.roadW;        // world side length
+
+let objects = [];      // all city objects
+let fallingList = [];  // objects spiraling into the hole
+let grid = null;       // spatial hash
+let stars = [];        // void starfield around the city
+let totalMass = 0, consumedMass = 0, aliveCount = 0;
+let nextId = 1;
+const queryOut = [];   // reused query buffer
+
+function makeObj(type, x, y, extra) {
+  const spec = TYPES[type];
+  const o = {
+    id: nextId++,
+    type, spec,
+    tier: spec.tier,
+    size: spec.size * rand(0.92, 1.08),
+    gain: spec.gain,
+    x, y,
+    rot: 0,
+    seed: Math.random() * 1000,
+    alive: true,
+    falling: false,
+    fallT: 0, fallAngle: 0, fallDist: 0, fallSpin: 1, fallRot: 0,
+    hue: 0,
+  };
+  if (extra) Object.assign(o, extra);
+  return o;
+}
+
+function blockRect(i, j) {
+  return { x: CONFIG.roadW + i * P, y: CONFIG.roadW + j * P, w: CONFIG.blockSize, h: CONFIG.blockSize };
+}
+
+function addObj(o) {
+  objects.push(o);
+  grid.insert(o);
+  totalMass += o.gain;
+  aliveCount++;
+}
+
+function generateWorld() {
+  objects = []; fallingList = []; particles.length = 0; popups.length = 0;
+  banner = null;
+  grid = new SpatialGrid(150);
+  totalMass = 0; consumedMass = 0; aliveCount = 0; nextId = 1;
+
+  const N = CONFIG.gridN, c = (N - 1) / 2;
+  // pick two landmark blocks on the ring around downtown, opposite-ish corners
+  const ringBlocks = [];
+  for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+    const ring = Math.max(Math.abs(i - c), Math.abs(j - c));
+    if (ring > 1 && ring <= 1.5) ringBlocks.push([i, j]);
+  }
+  const lm1 = pick(ringBlocks);
+  let lm2 = pick(ringBlocks), guard = 0;
+  while ((Math.abs(lm2[0] - lm1[0]) + Math.abs(lm2[1] - lm1[1])) < 3 && guard++ < 50) lm2 = pick(ringBlocks);
+
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const r = blockRect(i, j);
+      const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+      const ring = Math.max(Math.abs(i - c), Math.abs(j - c));
+
+      // streetlights at two random corners of every block (on the sidewalk)
+      const corners = [[r.x + 14, r.y + 14], [r.x + r.w - 14, r.y + 14],
+                       [r.x + 14, r.y + r.h - 14], [r.x + r.w - 14, r.y + r.h - 14]];
+      const ci = randInt(0, 3);
+      addObj(makeObj("streetlight", corners[ci][0], corners[ci][1]));
+      addObj(makeObj("streetlight", corners[(ci + 2) % 4][0], corners[(ci + 2) % 4][1]));
+
+      if ((i === lm1[0] && j === lm1[1]) || (i === lm2[0] && j === lm2[1])) {
+        const isFirst = (i === lm1[0] && j === lm1[1]);
+        addObj(makeObj(isFirst ? "stadium" : "tower", cx, cy, { rot: rand(0, TAU) }));
+        continue;
+      }
+
+      if (ring <= 1) {
+        // DOWNTOWN — skyscrapers
+        for (let s = 0; s < 2; s++) {
+          const o = makeObj("skyscraper", cx + (s === 0 ? -1 : 1) * r.w * 0.22, cy + rand(-r.h, r.h) * 0.18);
+          o.w = o.size * rand(1.3, 1.55); o.d = o.size * rand(1.3, 1.55);
+          o.h = rand(120, 180); o.hue = pick([195, 265, 320]);
+          addObj(o);
+        }
+        if (Math.random() < 0.7) addObj(makeObj("hydrant", r.x + rand(20, r.w - 20), r.y + r.h - 16));
+      } else if (ring <= 2) {
+        // INNER RING — mid-rises + kiosks
+        const n = randInt(1, 2);
+        for (let s = 0; s < n; s++) {
+          const o = makeObj("midrise",
+            cx + (n === 1 ? 0 : (s === 0 ? -1 : 1) * r.w * 0.23),
+            cy + rand(-0.15, 0.15) * r.h);
+          o.w = o.size * rand(1.4, 1.7); o.d = o.size * rand(1.4, 1.7);
+          o.h = rand(60, 95); o.hue = pick([195, 265, 320, 30]);
+          addObj(o);
+        }
+        if (Math.random() < 0.8) addObj(makeObj("kiosk", r.x + rand(28, r.w - 28), r.y + 26, { hue: pick([320, 180, 45]) }));
+        if (Math.random() < 0.5) addObj(makeObj("mailbox", r.x + rand(20, r.w - 20), r.y + r.h - 15));
+        if (Math.random() < 0.5) addObj(makeObj("tree", r.x + rand(30, r.w - 30), r.y + r.h - 30));
+      } else if (ring <= 3) {
+        // COMMERCIAL — shops, kiosks, parked cars
+        const o = makeObj("shop", cx + rand(-20, 20), cy + rand(-20, 20));
+        o.w = o.size * rand(1.6, 1.9); o.d = o.size * rand(1.3, 1.6);
+        o.h = rand(28, 44); o.hue = pick([320, 180, 45, 265]);
+        addObj(o);
+        if (Math.random() < 0.55) addObj(makeObj("kiosk", r.x + rand(28, r.w - 28), pick([r.y + 26, r.y + r.h - 26]), { hue: pick([320, 180, 45]) }));
+        if (Math.random() < 0.8) addObj(makeObj("car", r.x + rand(40, r.w - 40), pick([r.y + 18, r.y + r.h - 18]),
+          { rot: pick([0, Math.PI]), driving: false, hue: pick([195, 320, 45, 0, 265]) }));
+        addObj(makeObj("hydrant", pick([r.x + 16, r.x + r.w - 16]), r.y + rand(30, r.h - 30)));
+        if (Math.random() < 0.6) addObj(makeObj("bench", r.x + rand(30, r.w - 30), r.y + r.h - 16, { rot: 0 }));
+        if (Math.random() < 0.6) addObj(makeObj("bush", r.x + rand(24, r.w - 24), r.y + rand(24, r.h - 24)));
+      } else {
+        // RESIDENTIAL — houses, trees, bushes, benches, mailboxes
+        const o = makeObj("house", cx + rand(-25, 25), cy + rand(-25, 25));
+        o.w = o.size * rand(1.5, 1.8); o.d = o.size * rand(1.3, 1.6);
+        o.h = rand(18, 28); o.hue = pick([30, 45, 320, 180]);
+        addObj(o);
+        const nt = randInt(1, 2);
+        for (let s = 0; s < nt; s++)
+          addObj(makeObj("tree", r.x + rand(26, r.w - 26), pick([r.y + rand(20, 50), r.y + r.h - rand(20, 50)])));
+        addObj(makeObj("bush", r.x + rand(22, r.w - 22), r.y + rand(22, r.h - 22)));
+        if (Math.random() < 0.6) addObj(makeObj("bush", r.x + rand(22, r.w - 22), r.y + rand(22, r.h - 22)));
+        if (Math.random() < 0.6) addObj(makeObj("mailbox", pick([r.x + 14, r.x + r.w - 14]), r.y + rand(26, r.h - 26)));
+        if (Math.random() < 0.65) addObj(makeObj("bench", r.x + rand(30, r.w - 30), pick([r.y + 15, r.y + r.h - 15])));
+      }
+    }
+  }
+
+  // driving cars on the road grid
+  for (let k = 0; k < 18; k++) {
+    const axis = k % 2;                       // 0 = horizontal road, 1 = vertical
+    const line = randInt(0, N);               // which road
+    const lanePos = line * P + CONFIG.roadW / 2 + pick([-14, 14]);
+    const along = rand(60, WORLD - 60);
+    const dir = pick([-1, 1]);
+    const o = makeObj("car",
+      axis === 0 ? along : lanePos,
+      axis === 0 ? lanePos : along,
+      { driving: true, axis, dir, drvSpeed: rand(40, 85), hue: pick([195, 320, 45, 0, 265]) });
+    o.rot = axis === 0 ? (dir > 0 ? 0 : Math.PI) : (dir > 0 ? Math.PI / 2 : -Math.PI / 2);
+    addObj(o);
+  }
+
+  // void starfield in a band around the city
+  stars = [];
+  const M = 1400;
+  while (stars.length < CONFIG.starCount) {
+    const x = rand(-M, WORLD + M), y = rand(-M, WORLD + M);
+    if (x > -40 && x < WORLD + 40 && y > -40 && y < WORLD + 40) continue;
+    stars.push({ x, y, r: rand(0.6, 2.2), tw: rand(0, TAU), sp: rand(0.5, 2.5) });
+  }
+}
+
+/* ---------------- §I HOLE ---------------- */
+const hole = {
+  x: 0, y: 0, vx: 0, vy: 0,
+  r: CONFIG.holeR0,
+  area: CONFIG.holeR0 * CONFIG.holeR0,
+  spin: 0,
+  feed: 0,          // 0..1 feeding intensity (eases down)
+  unlockedTier: 0,
+};
+
+function resetHole() {
+  // start at a quiet residential intersection near the corner
+  hole.x = P + CONFIG.roadW / 2;
+  hole.y = P + CONFIG.roadW / 2;
+  hole.vx = 0; hole.vy = 0;
+  hole.r = CONFIG.holeR0;
+  hole.area = hole.r * hole.r;
+  hole.spin = 0; hole.feed = 0;
+  hole.unlockedTier = 0;
+}
+
+function edibleThreshold() { return hole.r * CONFIG.edibleFactor + CONFIG.edibleGrace; }
+function isEdible(o) { return o.size <= edibleThreshold(); }
+function holeSpeed() { return CONFIG.speedBase * Math.pow(CONFIG.holeR0 / hole.r, CONFIG.speedExp); }
+
+function maxEdibleTier() {
+  const th = edibleThreshold();
+  let t = 0;
+  for (let i = 0; i < TIER_MIN_SIZE.length; i++) if (TIER_MIN_SIZE[i] <= th) t = i;
+  return t;
+}
+
+/* smallest object still too big — the "next meal" hint */
+function nextTierTarget() {
+  let best = null;
+  const th = edibleThreshold();
+  for (let i = 0; i < objects.length; i++) {
+    const o = objects[i];
+    if (!o.alive || o.size <= th) continue;
+    if (!best || o.size < best.size) best = o;
+  }
+  return best;
+}
+
+/* ---------------- §J CAMERA ---------------- */
+const cam = { x: 0, y: 0, zoom: 1, zoomT: 1 };
+
+function camTargetZoom() {
+  const minDim = Math.min(cw, ch);
+  return clamp(minDim * CONFIG.zoomFill / hole.r, CONFIG.zoomMin, CONFIG.zoomMax);
+}
+function updateCamera(dt, snap) {
+  cam.zoomT = camTargetZoom();
+  if (snap) { cam.x = hole.x; cam.y = hole.y; cam.zoom = cam.zoomT; return; }
+  const k = 1 - Math.pow(0.0008, dt);
+  cam.x = lerp(cam.x, hole.x, k);
+  cam.y = lerp(cam.y, hole.y, k);
+  cam.zoom = lerp(cam.zoom, cam.zoomT, 1 - Math.pow(0.05, dt));
+}
+function screenToWorldX(sx) { return (sx - cw / 2) / cam.zoom + cam.x; }
+function screenToWorldY(sy) { return (sy - ch / 2) / cam.zoom + cam.y; }
+
+/* ---------------- §K GAME STATE ---------------- */
+let state = "title";   // title | playing | paused | collapse | victory
+let now = 0;           // global animation clock (always runs)
+let elapsed = 0;       // run timer
+let combo = 0, comboTimer = 0, comboBest = 0;
+let bumpFlash = 0, bumpMsg = "";
+let collapseT = 0;
+let victoryIsBest = false;
+let bestTime = parseFloat(store.get("best") || "0") || 0;
+let titleDrift = Math.random() * TAU;
+
+function setState(s) {
+  state = s;
+  backLink.classList.toggle("hidden", !(s === "title" || s === "victory" || s === "paused"));
+}
+
+function startGame() {
+  generateWorld();
+  resetHole();
+  elapsed = 0;
+  combo = 0; comboTimer = 0; comboBest = 0;
+  bumpFlash = 0; collapseT = 0;
+  updateCamera(0, true);
+  setState("playing");
+  audio.setDroneLevel(0);
+  showBanner("DEVOUR THE CITY", "start small. eat everything.", "#8be9ff", 2.6);
+}
+
+function togglePause() {
+  if (state === "playing") setState("paused");
+  else if (state === "paused") setState("playing");
+}
+
+function winGame() {
+  collapseT = 0;
+  setState("collapse");
+  audio.victory();
+}
+
+function finishVictory() {
+  victoryIsBest = false;
+  if (!bestTime || elapsed < bestTime) {
+    bestTime = elapsed;
+    store.set("best", String(bestTime));
+    victoryIsBest = true;
+  }
+  setState("victory");
+}
+
+/* ---------------- §L UPDATE ---------------- */
+function updateHoleMovement(dt) {
+  let dx = 0, dy = 0, hasDir = false;
+  const kl = keys["a"] || keys["arrowleft"], kr = keys["d"] || keys["arrowright"];
+  const ku = keys["w"] || keys["arrowup"], kd = keys["s"] || keys["arrowdown"];
+  if (kl || kr || ku || kd) {
+    dx = (kr ? 1 : 0) - (kl ? 1 : 0);
+    dy = (kd ? 1 : 0) - (ku ? 1 : 0);
+    const m = Math.hypot(dx, dy) || 1;
+    dx /= m; dy /= m; hasDir = true;
+  } else if (pointerSeen) {
+    const tx = screenToWorldX(pointerX), ty = screenToWorldY(pointerY);
+    const d = dist(hole.x, hole.y, tx, ty);
+    if (d > hole.r * 0.25) {
+      const ease = clamp(d / (hole.r * 2.5), 0.15, 1);
+      dx = (tx - hole.x) / d * ease;
+      dy = (ty - hole.y) / d * ease;
+      hasDir = true;
+    }
+  }
+  const sp = holeSpeed();
+  const targetVx = hasDir ? dx * sp : 0;
+  const targetVy = hasDir ? dy * sp : 0;
+  const k = 1 - Math.pow(0.002, dt);
+  hole.vx = lerp(hole.vx, targetVx, k);
+  hole.vy = lerp(hole.vy, targetVy, k);
+  hole.x += hole.vx * dt;
+  hole.y += hole.vy * dt;
+  const pad = hole.r * 0.4;
+  hole.x = clamp(hole.x, pad, WORLD - pad);
+  hole.y = clamp(hole.y, pad, WORLD - pad);
+  hole.spin += dt * (1.2 + hole.feed * 3.5);
+  hole.feed = Math.max(0, hole.feed - dt * 1.4);
+}
+
+function startFall(o) {
+  o.falling = true;
+  o.fallT = 0;
+  o.fallAngle = Math.atan2(o.y - hole.y, o.x - hole.x);
+  o.fallDist = dist(hole.x, hole.y, o.x, o.y);
+  o.fallSpin = pick([-1, 1]) * rand(0.8, 1.3);
+  o.fallRot = o.rot;
+  grid.remove(o);
+  fallingList.push(o);
+}
+
+function consume(o) {
+  o.alive = false;
+  aliveCount--;
+  consumedMass += o.gain;
+  // combo / frenzy
+  combo++;
+  comboTimer = CONFIG.comboWindow;
+  if (combo > comboBest) comboBest = combo;
+  const mult = Math.min(CONFIG.comboMultMax, 1 + CONFIG.comboMultStep * Math.max(0, combo - 1));
+  if (combo >= CONFIG.frenzyAt && combo % CONFIG.frenzyAt === 0) {
+    showBanner("FEEDING FRENZY x" + combo, "growth +" + Math.round((mult - 1) * 100) + "%", "#ff66cc", 1.5);
+    audio.frenzy(combo / CONFIG.frenzyAt);
+  }
+  // grow (area-based so growth feels mass-proportional)
+  const before = maxEdibleTier();
+  hole.area += o.gain * mult;
+  hole.r = Math.sqrt(hole.area);
+  hole.feed = Math.min(1, hole.feed + 0.5);
+  audio.setDroneLevel((hole.r - CONFIG.holeR0) / 110);
+  const after = maxEdibleTier();
+  if (after > before && after > hole.unlockedTier) {
+    hole.unlockedTier = after;
+    showBanner(TIER_LABELS[after] + " ON THE MENU", "you can feel yourself getting heavier", "#7dffb0", 2.4);
+    audio.tierUp();
+  }
+  // feedback
+  const big = o.tier >= 3;
+  audio.gulp(hole.r, big);
+  const colors = ["#8be9ff", "#7dffb0", "#ffd866", "#ff9f43", "#ff66cc", "#c792ff"];
+  burst(hole.x + Math.cos(o.fallAngle) * hole.r * 0.6,
+        hole.y + Math.sin(o.fallAngle) * hole.r * 0.6,
+        Math.min(26, 6 + o.tier * 4), colors[o.tier], 90 + o.tier * 50, 2 + o.tier);
+  popup(o.x, o.y - o.size, "+" + Math.round(o.gain * mult), colors[o.tier], 12 + o.tier * 3);
+  if (aliveCount <= 0 && state === "playing") winGame();
+}
+
+function updateFalling(dt) {
+  for (let i = fallingList.length - 1; i >= 0; i--) {
+    const o = fallingList[i];
+    o.fallT += dt * (CONFIG.fallSpeedBase + hole.r * 0.004 + o.fallT * 1.5);
+    o.fallAngle += dt * (3.0 + 5.0 * o.fallT) * o.fallSpin;
+    o.fallRot += dt * 6 * o.fallSpin;
+    const t = clamp(o.fallT, 0, 1);
+    const d = o.fallDist * Math.pow(1 - t, 1.5);
+    o.x = hole.x + Math.cos(o.fallAngle) * d;
+    o.y = hole.y + Math.sin(o.fallAngle) * d;
+    if (o.fallT >= 1) {
+      fallingList.splice(i, 1);
+      consume(o);
+    }
+  }
+}
+
+function collideAndEat(dt) {
+  const reach = hole.r * CONFIG.pullRange + 160;
+  grid.query(hole.x, hole.y, reach, queryOut);
+  const th = edibleThreshold();
+  for (let i = 0; i < queryOut.length; i++) {
+    const o = queryOut[i];
+    if (!o.alive || o.falling) continue;
+    const d = dist(hole.x, hole.y, o.x, o.y);
+    if (o.size <= th) {
+      if (d < hole.r * CONFIG.captureRange + o.size * 0.55) {
+        startFall(o);
+      } else if (d < hole.r * CONFIG.pullRange + o.size) {
+        // gravitational drag toward the hole
+        const pull = (1 - d / (hole.r * CONFIG.pullRange + o.size)) * 230 * dt;
+        const inv = 1 / Math.max(1, d);
+        o.x += (hole.x - o.x) * inv * pull;
+        o.y += (hole.y - o.y) * inv * pull;
+        o.rot += dt * 1.5 * (hash2(o.seed, 1) > 0.5 ? 1 : -1) * (1 - d / reach);
+        grid.move(o);
+      }
+    } else {
+      // too big: gently block the hole
+      const minD = hole.r * 0.7 + o.size * 0.8;
+      if (d < minD) {
+        const nx = (hole.x - o.x) / Math.max(0.001, d);
+        const ny = (hole.y - o.y) / Math.max(0.001, d);
+        hole.x = o.x + nx * minD;
+        hole.y = o.y + ny * minD;
+        const vDot = hole.vx * nx + hole.vy * ny;
+        if (vDot < 0) { hole.vx -= vDot * nx; hole.vy -= vDot * ny; }
+        if (bumpFlash <= 0) {
+          bumpMsg = "TOO BIG... GROW MORE";
+          audio.bump();
+        }
+        bumpFlash = 1;
+      }
+    }
+  }
+}
+
+function updateCars(dt) {
+  for (let i = 0; i < objects.length; i++) {
+    const o = objects[i];
+    if (!o.alive || o.falling || o.type !== "car" || !o.driving) continue;
+    if (o.axis === 0) {
+      o.x += o.dir * o.drvSpeed * dt;
+      if (o.x < 50 || o.x > WORLD - 50) { o.dir *= -1; o.x = clamp(o.x, 50, WORLD - 50); }
+      o.rot = o.dir > 0 ? 0 : Math.PI;
+    } else {
+      o.y += o.dir * o.drvSpeed * dt;
+      if (o.y < 50 || o.y > WORLD - 50) { o.dir *= -1; o.y = clamp(o.y, 50, WORLD - 50); }
+      o.rot = o.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+    }
+    grid.move(o);
+  }
+}
+
+function updatePopups(dt) {
+  for (let i = popups.length - 1; i >= 0; i--) {
+    const p = popups[i];
+    p.t += dt;
+    p.y -= 28 * dt;
+    if (p.t >= p.life) popups.splice(i, 1);
+  }
+  if (banner) {
+    banner.t += dt;
+    if (banner.t >= banner.life) banner = null;
+  }
+}
+
+function update(dt) {
+  now += dt;
+  if (state === "playing") {
+    elapsed += dt;
+    updateHoleMovement(dt);
+    collideAndEat(dt);
+    updateFalling(dt);
+    updateCars(dt);
+    updateCamera(dt);
+    comboTimer -= dt;
+    if (comboTimer <= 0) combo = 0;
+    bumpFlash = Math.max(0, bumpFlash - dt * 0.7);
+  } else if (state === "title") {
+    // slow cinematic drift over the sleeping city
+    titleDrift += dt * 0.05;
+    cam.x = WORLD / 2 + Math.cos(titleDrift) * WORLD * 0.22;
+    cam.y = WORLD / 2 + Math.sin(titleDrift * 0.8) * WORLD * 0.22;
+    cam.zoom = lerp(cam.zoom, 0.55, 1 - Math.pow(0.1, dt));
+    updateCars(dt);
+  } else if (state === "collapse") {
+    collapseT += dt;
+    updateFalling(dt);
+    hole.spin += dt * (2 + collapseT * 6);
+    if (Math.random() < 0.5) {
+      const a = rand(0, TAU), d = rand(hole.r, hole.r * 4);
+      spawnParticle(hole.x + Math.cos(a) * d, hole.y + Math.sin(a) * d,
+        -Math.cos(a) * d * 1.5, -Math.sin(a) * d * 1.5,
+        rand(0.3, 0.7), rand(1.5, 4), pick(["#8be9ff", "#ff66cc", "#c792ff", "#fff"]), 1.0);
+    }
+    if (collapseT >= CONFIG.collapseTime) finishVictory();
+  }
+  if (state !== "paused") {
+    updateParticles(dt);
+    updatePopups(dt);
+  }
+}
+
+/* ---------------- §M OBJECT DRAWING ----------------
+   All draws are in local coords centered on the object,
+   already rotated/scaled by the caller. `glow` toggles
+   shadowBlur for performance at far zoom. */
+
+function setGlow(color, blur, glow) {
+  ctx.shadowColor = glow ? color : "transparent";
+  ctx.shadowBlur = glow ? blur : 0;
+}
+
+function drawStreetlight(o, glow) {
+  const pulse = 0.75 + 0.25 * Math.sin(now * 2 + o.seed);
+  // light pool
+  ctx.fillStyle = "rgba(255, 220, 140, 0.05)";
+  ctx.beginPath(); ctx.arc(0, 0, 16, 0, TAU); ctx.fill();
+  // pole
+  ctx.strokeStyle = "#3a3a5c"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 5); ctx.lineTo(0, -6); ctx.stroke();
+  // glowing head
+  setGlow("#ffd27a", 12, glow);
+  ctx.fillStyle = "rgba(255, 214, 130," + (0.85 * pulse) + ")";
+  ctx.beginPath(); ctx.arc(0, -7, 3.4, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+}
+
+function drawHydrant(o, glow) {
+  setGlow("#ff5f56", 8, glow);
+  ctx.fillStyle = "#c33b3b";
+  ctx.beginPath(); ctx.arc(0, 0, 4.2, 0, TAU); ctx.fill();
+  ctx.fillStyle = "#ff7b6b";
+  ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+  ctx.fillStyle = "#8c2c2c";
+  ctx.fillRect(-5.5, -1.2, 2.4, 2.4); ctx.fillRect(3.1, -1.2, 2.4, 2.4);
+}
+
+function drawMailbox(o, glow) {
+  setGlow("#5fa8ff", 7, glow);
+  ctx.fillStyle = "#2855a0";
+  ctx.fillRect(-4.5, -5, 9, 8);
+  setGlow("", 0, false);
+  ctx.fillStyle = "#3f74cf";
+  ctx.fillRect(-4.5, -5, 9, 2.4);
+  ctx.fillStyle = "#1a3a70";
+  ctx.fillRect(-1, 3, 2, 3);
+}
+
+function drawBench(o, glow) {
+  setGlow("#caa05a", 6, glow);
+  ctx.fillStyle = "#7a5c33";
+  ctx.fillRect(-9, -3, 18, 2.4);
+  ctx.fillRect(-9, 0.6, 18, 2.4);
+  setGlow("", 0, false);
+  ctx.fillStyle = "#4d3a20";
+  ctx.fillRect(-9, -3.4, 2, 7); ctx.fillRect(7, -3.4, 2, 7);
+}
+
+function drawBush(o, glow) {
+  const sway = Math.sin(now * 1.3 + o.seed) * 0.6;
+  setGlow("#3ddc84", 7, glow);
+  ctx.fillStyle = "#13502e";
+  ctx.beginPath();
+  ctx.arc(-3 + sway, 1, 4.5, 0, TAU);
+  ctx.arc(3 + sway, 0.5, 4, 0, TAU);
+  ctx.arc(sway * 1.4, -2.5, 4.2, 0, TAU);
+  ctx.fill();
+  setGlow("", 0, false);
+  ctx.fillStyle = "rgba(80, 230, 140, 0.25)";
+  ctx.beginPath(); ctx.arc(sway, -3, 2, 0, TAU); ctx.fill();
+}
+
+function drawTree(o, glow) {
+  const sway = Math.sin(now * 0.9 + o.seed) * 1.2;
+  ctx.fillStyle = "#4d3a20";
+  ctx.beginPath(); ctx.arc(0, 0, 2.6, 0, TAU); ctx.fill();
+  setGlow("#3ddc84", 10, glow);
+  const g = ctx.createRadialGradient(sway, -2, 1, sway, -2, 11);
+  g.addColorStop(0, "#2c8a4e"); g.addColorStop(1, "#0e3d22");
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(sway, -2, 11, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+  ctx.fillStyle = "rgba(120, 255, 170, 0.18)";
+  ctx.beginPath(); ctx.arc(sway - 3, -5, 3.5, 0, TAU); ctx.fill();
+}
+
+function drawCar(o, glow) {
+  // body, facing +x
+  const hue = o.hue;
+  ctx.save();
+  ctx.rotate(o.rot);
+  setGlow("hsl(" + hue + ", 80%, 60%)", 9, glow);
+  ctx.fillStyle = "hsl(" + hue + ", 55%, 32%)";
+  roundRect(-13, -6.5, 26, 13, 4); ctx.fill();
+  setGlow("", 0, false);
+  // cabin
+  ctx.fillStyle = "rgba(140, 220, 255, 0.35)";
+  roundRect(-6, -4.8, 10, 9.6, 2.5); ctx.fill();
+  // headlights
+  setGlow("#fff7c0", 8, glow);
+  ctx.fillStyle = "#fff3a8";
+  ctx.beginPath(); ctx.arc(12.4, -4, 1.7, 0, TAU); ctx.arc(12.4, 4, 1.7, 0, TAU); ctx.fill();
+  // taillights
+  setGlow("#ff4060", 7, glow);
+  ctx.fillStyle = "#ff5070";
+  ctx.beginPath(); ctx.arc(-12.4, -4, 1.4, 0, TAU); ctx.arc(-12.4, 4, 1.4, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+  // headlight beam (driving only)
+  if (o.driving) {
+    ctx.fillStyle = "rgba(255, 245, 180, 0.06)";
+    ctx.beginPath();
+    ctx.moveTo(13, -5); ctx.lineTo(34, -10); ctx.lineTo(34, 10); ctx.lineTo(13, 5);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawKiosk(o, glow) {
+  setGlow("hsl(" + o.hue + ", 90%, 65%)", 10, glow);
+  ctx.fillStyle = "#1c1c3d";
+  ctx.fillRect(-13, -11, 26, 22);
+  setGlow("", 0, false);
+  // striped awning
+  for (let i = 0; i < 5; i++) {
+    ctx.fillStyle = i % 2 ? "hsl(" + o.hue + ", 80%, 55%)" : "#e8e8f5";
+    ctx.fillRect(-13 + i * 5.2, -14, 5.2, 4);
+  }
+  // glowing sign
+  const flick = hash2(Math.floor(now * 3), o.seed) > 0.1 ? 1 : 0.3;
+  setGlow("hsl(" + o.hue + ", 95%, 70%)", 12, glow);
+  ctx.fillStyle = "hsla(" + o.hue + ", 95%, 68%," + (0.9 * flick) + ")";
+  ctx.fillRect(-9, -7, 18, 4.5);
+  setGlow("", 0, false);
+  ctx.fillStyle = "#11112a";
+  ctx.fillRect(-5, 3, 10, 8);
+}
+
+/* generic extruded building with lit window grid on the front face */
+function drawExtruded(o, glow, opts) {
+  const w = o.w, d = o.d, h = o.h;
+  const x0 = -w / 2, y0 = -d / 2;
+  const ox = h * 0.30, oy = -h * 0.55;
+  const hue = o.hue;
+  // footprint shadow
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(x0 - 3, y0 - 3, w + 6, d + 6);
+  // right face
+  ctx.fillStyle = "hsl(" + hue + ", 30%, 9%)";
+  ctx.beginPath();
+  ctx.moveTo(x0 + w, y0); ctx.lineTo(x0 + w, y0 + d);
+  ctx.lineTo(x0 + w + ox, y0 + d + oy); ctx.lineTo(x0 + w + ox, y0 + oy);
+  ctx.closePath(); ctx.fill();
+  // front (bottom) face
+  ctx.fillStyle = "hsl(" + hue + ", 32%, 13%)";
+  ctx.beginPath();
+  ctx.moveTo(x0, y0 + d); ctx.lineTo(x0 + w, y0 + d);
+  ctx.lineTo(x0 + w + ox, y0 + d + oy); ctx.lineTo(x0 + ox, y0 + d + oy);
+  ctx.closePath(); ctx.fill();
+  // windows on front face (unit-square transform onto the parallelogram)
+  const cols = opts.cols, rows = opts.rows;
+  ctx.save();
+  ctx.transform(w, 0, ox, oy, x0, y0 + d);
+  for (let wy = 0; wy < rows; wy++) {
+    for (let wx = 0; wx < cols; wx++) {
+      const lit = hash2(o.seed + wx * 7.3, wy * 13.7) < opts.litChance;
+      if (!lit) continue;
+      let a = 0.85;
+      if (hash2(o.seed + wx * 3.1, wy * 5.9) > 0.88)
+        a = 0.3 + 0.55 * (0.5 + 0.5 * Math.sin(now * 3 + wx * 2 + wy)); // flicker
+      const warm = hash2(o.seed + wx, wy) < 0.7;
+      ctx.fillStyle = warm ? "rgba(255, 209, 122," + a + ")" : "rgba(139, 233, 255," + a + ")";
+      ctx.fillRect(0.08 + wx * (0.84 / cols), 0.10 + wy * (0.82 / rows),
+        0.5 / cols, 0.45 / rows);
+    }
+  }
+  ctx.restore();
+  // roof
+  setGlow("hsl(" + hue + ", 90%, 60%)", glow ? 10 : 0, glow);
+  ctx.fillStyle = "hsl(" + hue + ", 26%, 16%)";
+  ctx.fillRect(x0 + ox, y0 + oy, w, d);
+  setGlow("", 0, false);
+  ctx.strokeStyle = "hsla(" + hue + ", 90%, 65%, 0.5)";
+  ctx.lineWidth = 1.2;
+  ctx.strokeRect(x0 + ox, y0 + oy, w, d);
+  return { ox, oy, x0, y0 };
+}
+
+function drawHouse(o, glow) {
+  const f = drawExtruded(o, glow, { cols: 3, rows: 1, litChance: 0.65 });
+  // pitched roof ridge
+  ctx.strokeStyle = "hsla(" + o.hue + ", 80%, 70%, 0.65)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(f.x0 + f.ox + 4, f.y0 + f.oy + o.d / 2);
+  ctx.lineTo(f.x0 + f.ox + o.w - 4, f.y0 + f.oy + o.d / 2);
+  ctx.stroke();
+}
+
+function drawShop(o, glow) {
+  drawExtruded(o, glow, { cols: 4, rows: 1, litChance: 0.8 });
+  // neon sign band across the front
+  const flick = hash2(Math.floor(now * 4), o.seed) > 0.08 ? 1 : 0.25;
+  setGlow("hsl(" + o.hue + ", 95%, 65%)", 14, glow);
+  ctx.fillStyle = "hsla(" + o.hue + ", 95%, 62%," + (0.85 * flick) + ")";
+  ctx.fillRect(-o.w / 2 + 4, o.d / 2 - 5, o.w - 8, 4);
+  setGlow("", 0, false);
+}
+
+function drawMidrise(o, glow) {
+  drawExtruded(o, glow, { cols: 5, rows: 4, litChance: 0.55 });
+}
+
+function drawSkyscraper(o, glow) {
+  drawExtruded(o, glow, { cols: 6, rows: 8, litChance: 0.5 });
+  // rooftop beacon
+  const b = 0.5 + 0.5 * Math.sin(now * 2.5 + o.seed);
+  setGlow("#ff4060", 12, glow);
+  ctx.fillStyle = "rgba(255, 64, 96," + (0.4 + 0.6 * b) + ")";
+  ctx.beginPath();
+  ctx.arc(o.h * 0.30, -o.d / 2 - o.h * 0.55 + 4, 2.5, 0, TAU);
+  ctx.fill();
+  setGlow("", 0, false);
+}
+
+function drawStadium(o, glow) {
+  ctx.save();
+  ctx.rotate(o.rot);
+  // bowl
+  setGlow("#7dffb0", glow ? 16 : 0, glow);
+  ctx.fillStyle = "#15152f";
+  ctx.beginPath(); ctx.ellipse(0, 0, 95, 70, 0, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+  ctx.strokeStyle = "rgba(160, 200, 255, 0.35)";
+  ctx.lineWidth = 10;
+  ctx.beginPath(); ctx.ellipse(0, 0, 86, 61, 0, 0, TAU); ctx.stroke();
+  // glowing field
+  const pulse = 0.8 + 0.2 * Math.sin(now * 1.1);
+  setGlow("#3ddc84", glow ? 18 : 0, glow);
+  ctx.fillStyle = "rgba(20, 120, 60," + pulse + ")";
+  ctx.beginPath(); ctx.ellipse(0, 0, 58, 36, 0, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+  ctx.strokeStyle = "rgba(220, 255, 230, 0.5)";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(-44, -26, 88, 52);
+  ctx.beginPath(); ctx.arc(0, 0, 12, 0, TAU); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, 26); ctx.stroke();
+  // floodlight masts
+  setGlow("#fff7c0", 14, glow);
+  ctx.fillStyle = "#fff3a8";
+  [[-78, -52], [78, -52], [-78, 52], [78, 52]].forEach((m) => {
+    ctx.beginPath(); ctx.arc(m[0], m[1], 4, 0, TAU); ctx.fill();
+  });
+  setGlow("", 0, false);
+  ctx.restore();
+}
+
+function drawTower(o, glow) {
+  // mega-tower: huge extrusion + spire
+  const w = 110, d = 110, h = 260;
+  const x0 = -w / 2, y0 = -d / 2;
+  const ox = h * 0.30, oy = -h * 0.55;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(x0 - 4, y0 - 4, w + 8, d + 8);
+  ctx.fillStyle = "hsl(265, 35%, 8%)";
+  ctx.beginPath();
+  ctx.moveTo(x0 + w, y0); ctx.lineTo(x0 + w, y0 + d);
+  ctx.lineTo(x0 + w + ox, y0 + d + oy); ctx.lineTo(x0 + w + ox, y0 + oy);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = "hsl(265, 38%, 12%)";
+  ctx.beginPath();
+  ctx.moveTo(x0, y0 + d); ctx.lineTo(x0 + w, y0 + d);
+  ctx.lineTo(x0 + w + ox, y0 + d + oy); ctx.lineTo(x0 + ox, y0 + d + oy);
+  ctx.closePath(); ctx.fill();
+  // window columns
+  ctx.save();
+  ctx.transform(w, 0, ox, oy, x0, y0 + d);
+  for (let wy = 0; wy < 14; wy++) {
+    for (let wx = 0; wx < 7; wx++) {
+      if (hash2(o.seed + wx * 7.3, wy * 13.7) > 0.55) continue;
+      const a = hash2(o.seed + wx * 3.1, wy * 5.9) > 0.9
+        ? 0.3 + 0.6 * (0.5 + 0.5 * Math.sin(now * 3 + wx * 2 + wy)) : 0.85;
+      ctx.fillStyle = wy % 3 === 0 ? "rgba(199, 146, 255," + a + ")" : "rgba(139, 233, 255," + a + ")";
+      ctx.fillRect(0.07 + wx * 0.125, 0.06 + wy * 0.066, 0.06, 0.034);
+    }
+  }
+  ctx.restore();
+  // roof + spire
+  setGlow("#c792ff", glow ? 18 : 0, glow);
+  ctx.fillStyle = "hsl(265, 30%, 16%)";
+  ctx.fillRect(x0 + ox, y0 + oy, w, d);
+  ctx.strokeStyle = "rgba(199, 146, 255, 0.7)";
+  ctx.lineWidth = 1.6;
+  ctx.strokeRect(x0 + ox, y0 + oy, w, d);
+  ctx.beginPath();
+  ctx.moveTo(ox, oy);
+  ctx.lineTo(ox + h * 0.16, oy - h * 0.30);
+  ctx.stroke();
+  const b = 0.5 + 0.5 * Math.sin(now * 2.2);
+  ctx.fillStyle = "rgba(255, 64, 96," + (0.4 + 0.6 * b) + ")";
+  setGlow("#ff4060", 14, glow);
+  ctx.beginPath(); ctx.arc(ox + h * 0.16, oy - h * 0.30, 3.5, 0, TAU); ctx.fill();
+  setGlow("", 0, false);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+const DRAWERS = {
+  streetlight: drawStreetlight, hydrant: drawHydrant, mailbox: drawMailbox,
+  bench: drawBench, bush: drawBush, tree: drawTree, car: drawCar,
+  kiosk: drawKiosk, house: drawHouse, shop: drawShop, midrise: drawMidrise,
+  skyscraper: drawSkyscraper, stadium: drawStadium, tower: drawTower,
+};
+
+function drawObject(o, glow) {
+  ctx.save();
+  ctx.translate(o.x, o.y);
+  if (o.falling) {
+    const t = clamp(o.fallT, 0, 1);
+    ctx.rotate(o.fallRot);
+    const s = Math.max(0.02, 1 - easeIn(t) * 0.999);
+    ctx.scale(s, s);
+    ctx.globalAlpha = clamp(1.3 - t, 0, 1);
+  } else if (o.rot && o.type !== "car" && o.type !== "stadium") {
+    ctx.rotate(o.rot);
+  }
+  DRAWERS[o.type](o, glow);
+  ctx.restore();
+}
+
+/* ---------------- §N RENDER ---------------- */
+const visList = [];
+
+function viewRect() {
+  const hw = cw / 2 / cam.zoom, hh = ch / 2 / cam.zoom;
+  return { x0: cam.x - hw, y0: cam.y - hh, x1: cam.x + hw, y1: cam.y + hh };
+}
+
+function drawGround(v) {
+  // void sky behind everything
+  ctx.fillStyle = "#050514";
+  ctx.fillRect(v.x0, v.y0, v.x1 - v.x0, v.y1 - v.y0);
+  // stars in the void around the city
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (s.x < v.x0 - 5 || s.x > v.x1 + 5 || s.y < v.y0 - 5 || s.y > v.y1 + 5) continue;
+    const tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(now * s.sp + s.tw));
+    ctx.fillStyle = "rgba(200, 220, 255," + tw + ")";
+    ctx.fillRect(s.x, s.y, s.r, s.r);
+  }
+  // city ground slab
+  const gx0 = Math.max(v.x0, 0), gy0 = Math.max(v.y0, 0);
+  const gx1 = Math.min(v.x1, WORLD), gy1 = Math.min(v.y1, WORLD);
+  if (gx1 <= gx0 || gy1 <= gy0) return;
+  ctx.fillStyle = "#0a0a20";
+  ctx.fillRect(gx0, gy0, gx1 - gx0, gy1 - gy0);
+  // city edge neon border
+  ctx.strokeStyle = "rgba(139, 233, 255, 0.35)";
+  ctx.lineWidth = 3;
+  ctx.shadowColor = "#8be9ff"; ctx.shadowBlur = 18;
+  ctx.strokeRect(0, 0, WORLD, WORLD);
+  ctx.shadowBlur = 0;
+  // sidewalk blocks
+  const N = CONFIG.gridN;
+  const i0 = clamp(Math.floor((gx0 - CONFIG.roadW) / P), 0, N - 1);
+  const i1 = clamp(Math.floor(gx1 / P), 0, N - 1);
+  const j0 = clamp(Math.floor((gy0 - CONFIG.roadW) / P), 0, N - 1);
+  const j1 = clamp(Math.floor(gy1 / P), 0, N - 1);
+  for (let i = i0; i <= i1; i++) {
+    for (let j = j0; j <= j1; j++) {
+      const r = blockRect(i, j);
+      ctx.fillStyle = "#0e0e28";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.strokeStyle = "rgba(120, 140, 220, 0.14)";
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = "#0b0b21";
+      ctx.fillRect(r.x + 18, r.y + 18, r.w - 36, r.h - 36);
+    }
+  }
+  // road lane dashes
+  ctx.strokeStyle = "rgba(139, 233, 255, 0.16)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([16, 26]);
+  ctx.beginPath();
+  for (let k = 0; k <= N; k++) {
+    const x = k * P + CONFIG.roadW / 2;
+    if (x >= gx0 - 4 && x <= gx1 + 4) { ctx.moveTo(x, gy0); ctx.lineTo(x, gy1); }
+    const y = k * P + CONFIG.roadW / 2;
+    if (y >= gy0 - 4 && y <= gy1 + 4) { ctx.moveTo(gx0, y); ctx.lineTo(gx1, y); }
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawHole() {
+  const r = hole.r;
+  const feed = hole.feed;
+  ctx.save();
+  ctx.translate(hole.x, hole.y);
+  // outer gravity glow
+  const og = ctx.createRadialGradient(0, 0, r * 0.6, 0, 0, r * 2.4);
+  og.addColorStop(0, "rgba(120, 60, 200, " + (0.22 + feed * 0.25) + ")");
+  og.addColorStop(0.55, "rgba(80, 30, 160, 0.10)");
+  og.addColorStop(1, "rgba(40, 10, 90, 0)");
+  ctx.fillStyle = og;
+  ctx.beginPath(); ctx.arc(0, 0, r * 2.4, 0, TAU); ctx.fill();
+  // swirling accretion arcs
+  ctx.save();
+  ctx.rotate(hole.spin);
+  const arcs = 5;
+  for (let i = 0; i < arcs; i++) {
+    const ar = r * (1.08 + i * 0.10) + Math.sin(now * 3 + i * 2) * r * 0.02;
+    const hue = 270 + i * 22 + feed * 40;
+    ctx.strokeStyle = "hsla(" + hue + ", 95%, " + (58 + feed * 18) + "%, " + (0.5 - i * 0.07 + feed * 0.3) + ")";
+    ctx.lineWidth = r * (0.10 - i * 0.012);
+    ctx.shadowColor = "hsl(" + hue + ", 95%, 65%)";
+    ctx.shadowBlur = 14 + feed * 16;
+    ctx.beginPath();
+    ctx.arc(0, 0, ar, i * 1.7, i * 1.7 + 2.4 + feed * 1.5);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  ctx.restore();
+  // distortion ring (counter-rotating shimmer)
+  ctx.strokeStyle = "rgba(190, 160, 255, " + (0.18 + feed * 0.2) + ")";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 1.32 + Math.sin(now * 5) * r * 0.04, -hole.spin * 0.6, -hole.spin * 0.6 + TAU * 0.8);
+  ctx.stroke();
+  // the void itself
+  const dg = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+  dg.addColorStop(0, "#000000");
+  dg.addColorStop(0.78, "#02010a");
+  dg.addColorStop(1, "rgba(60, 20, 120, 0.9)");
+  ctx.fillStyle = dg;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+  // event horizon rim
+  ctx.strokeStyle = "hsla(" + (280 + feed * 50) + ", 95%, 65%, " + (0.8 + feed * 0.2) + ")";
+  ctx.lineWidth = Math.max(1.2, r * 0.045);
+  ctx.shadowColor = "#c792ff"; ctx.shadowBlur = 16 + feed * 20;
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+function drawWorldScene() {
+  const v = viewRect();
+  drawGround(v);
+  // visible objects, small drawn first so big structures overlay
+  visList.length = 0;
+  for (let i = 0; i < objects.length; i++) {
+    const o = objects[i];
+    if (!o.alive || o.falling) continue;
+    const m = o.size * 3 + 160;
+    if (o.x < v.x0 - m || o.x > v.x1 + m || o.y < v.y0 - m || o.y > v.y1 + m) continue;
+    visList.push(o);
+  }
+  visList.sort((a, b) => (a.size - b.size) || (a.y - b.y));
+  const glow = cam.zoom > 0.5;
+  for (let i = 0; i < visList.length; i++) drawObject(visList[i], glow);
+  drawHole();
+  // falling objects spiral on top of the hole's mouth
+  for (let i = 0; i < fallingList.length; i++) drawObject(fallingList[i], glow);
+  // particles
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    const a = 1 - p.t / p.life;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+  // floating +mass popups
+  ctx.textAlign = "center";
+  for (let i = 0; i < popups.length; i++) {
+    const p = popups[i];
+    const a = clamp(1.4 - p.t / p.life * 1.4, 0, 1);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    ctx.font = "bold " + (p.size / Math.max(0.4, cam.zoom)) + "px 'Courier New', monospace";
+    ctx.shadowColor = p.color; ctx.shadowBlur = 8;
+    ctx.fillText(p.text, p.x, p.y);
+    ctx.shadowBlur = 0;
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ----- screen-space HUD & overlays ----- */
+function hudText(text, x, y, size, color, align, blur) {
+  ctx.font = (size >= 30 ? "bold " : "") + size + "px 'Courier New', monospace";
+  ctx.textAlign = align || "left";
+  ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = blur === undefined ? 8 : blur;
+  ctx.fillText(text, x, y);
+  ctx.shadowBlur = 0;
+}
+
+function drawHUD() {
+  const pct = totalMass > 0 ? consumedMass / totalMass * 100 : 0;
+  // mass / radius
+  hudText("MASS " + Math.round(hole.area), 16, 28, 15, "#c792ff");
+  hudText("R " + hole.r.toFixed(1) + "m", 16, 48, 13, "rgba(199,146,255,0.7)", "left", 4);
+  // timer
+  hudText(fmtTime(elapsed), cw - 16, 28, 16, "#8be9ff", "right");
+  if (bestTime) hudText("BEST " + fmtTime(bestTime), cw - 16, 48, 12, "rgba(139,233,255,0.55)", "right", 3);
+  // progress bar
+  const bw = Math.min(360, cw * 0.45), bx = cw / 2 - bw / 2, by = 18;
+  ctx.fillStyle = "rgba(139, 233, 255, 0.12)";
+  ctx.fillRect(bx, by, bw, 10);
+  const grad = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+  grad.addColorStop(0, "#8be9ff"); grad.addColorStop(1, "#ff66cc");
+  ctx.fillStyle = grad;
+  ctx.shadowColor = "#8be9ff"; ctx.shadowBlur = 10;
+  ctx.fillRect(bx, by, bw * pct / 100, 10);
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = "rgba(139, 233, 255, 0.4)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by, bw, 10);
+  hudText(pct.toFixed(1) + "% CONSUMED", cw / 2, by + 26, 12, "rgba(220,235,255,0.8)", "center", 4);
+  // next-tier hint
+  const tgt = nextTierTarget();
+  if (tgt) {
+    const need = tgt.size / CONFIG.edibleFactor;
+    const prog = clamp(hole.r / need, 0, 1);
+    hudText("NEXT: " + TIER_LABELS[tgt.tier] + "  [" + Math.round(prog * 100) + "%]",
+      16, ch - 18, 12, "rgba(125,255,176,0.65)", "left", 4);
+  } else {
+    hudText("EVERYTHING IS EDIBLE", 16, ch - 18, 12, "rgba(255,102,204,0.8)", "left", 6);
+  }
+  // combo readout
+  if (combo >= 2 && comboTimer > 0) {
+    const mult = Math.min(CONFIG.comboMultMax, 1 + CONFIG.comboMultStep * (combo - 1));
+    hudText("COMBO x" + combo + "  (+" + Math.round((mult - 1) * 100) + "%)",
+      cw - 16, ch - 18, 13, "#ff66cc", "right");
+  }
+  // too-big flash
+  if (bumpFlash > 0) {
+    const a = bumpFlash * (0.6 + 0.4 * Math.sin(now * 14));
+    ctx.globalAlpha = clamp(a, 0, 1);
+    hudText(bumpMsg, cw / 2, ch * 0.62, 18, "#ff9f43", "center", 12);
+    ctx.globalAlpha = 1;
+  }
+  // banner
+  if (banner) {
+    const t = banner.t / banner.life;
+    const a = t < 0.15 ? t / 0.15 : t > 0.7 ? (1 - t) / 0.3 : 1;
+    ctx.globalAlpha = clamp(a, 0, 1);
+    const yo = -easeOut(t) * 14;
+    hudText(banner.text, cw / 2, ch * 0.30 + yo, Math.min(34, cw * 0.05), banner.color, "center", 18);
+    if (banner.sub) hudText(banner.sub, cw / 2, ch * 0.30 + yo + 26, 13, "rgba(220,235,255,0.75)", "center", 5);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawVignette() {
+  const g = ctx.createRadialGradient(cw / 2, ch / 2, Math.min(cw, ch) * 0.45, cw / 2, ch / 2, Math.max(cw, ch) * 0.72);
+  g.addColorStop(0, "rgba(5,5,20,0)");
+  g.addColorStop(1, "rgba(2,2,12,0.55)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, cw, ch);
+}
+
+function drawTitle() {
+  ctx.fillStyle = "rgba(5, 5, 20, 0.55)";
+  ctx.fillRect(0, 0, cw, ch);
+  const cx = cw / 2, cy = ch * 0.36;
+  // emblem: a small hole
+  const er = 34 + Math.sin(now * 1.5) * 2;
+  ctx.save();
+  ctx.translate(cx, cy - 90);
+  ctx.rotate(now * 0.8);
+  for (let i = 0; i < 4; i++) {
+    const hue = 270 + i * 25;
+    ctx.strokeStyle = "hsla(" + hue + ", 95%, 62%, " + (0.55 - i * 0.1) + ")";
+    ctx.lineWidth = 4 - i * 0.6;
+    ctx.shadowColor = "hsl(" + hue + ", 95%, 65%)"; ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(0, 0, er * (1.1 + i * 0.14), i * 1.8, i * 1.8 + 2.6);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#01000a";
+  ctx.beginPath(); ctx.arc(0, 0, er, 0, TAU); ctx.fill();
+  ctx.strokeStyle = "rgba(199, 146, 255, 0.9)";
+  ctx.lineWidth = 2;
+  ctx.shadowColor = "#c792ff"; ctx.shadowBlur = 18;
+  ctx.beginPath(); ctx.arc(0, 0, er, 0, TAU); ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+  hudText("SINGULARITY", cx, cy + 16, Math.min(64, cw * 0.10), "#c792ff", "center", 24);
+  hudText("a city is about to disappear", cx, cy + 48, 14, "rgba(139,233,255,0.8)", "center", 6);
+  const blink = 0.55 + 0.45 * Math.sin(now * 3);
+  ctx.globalAlpha = blink;
+  hudText("TAP / PRESS ANY KEY TO BEGIN", cx, cy + 110, 18, "#8be9ff", "center", 12);
+  ctx.globalAlpha = 1;
+  if (bestTime) hudText("BEST DEVOUR: " + fmtTime(bestTime), cx, cy + 142, 14, "#ffd866", "center", 8);
+  hudText("mouse / touch to drift · WASD works too · P pause · M mute" + (audio.muted ? " (muted)" : ""),
+    cx, ch - 28, 12, "rgba(220,235,255,0.5)", "center", 3);
+}
+
+function drawPaused() {
+  ctx.fillStyle = "rgba(5, 5, 20, 0.6)";
+  ctx.fillRect(0, 0, cw, ch);
+  hudText("PAUSED", cw / 2, ch / 2 - 10, 40, "#8be9ff", "center", 18);
+  hudText("P / ESC to resume · M mute" + (audio.muted ? " (muted)" : ""), cw / 2, ch / 2 + 24, 14, "rgba(220,235,255,0.7)", "center", 4);
+}
+
+function drawVictory() {
+  ctx.fillStyle = "rgba(2, 1, 10, 0.88)";
+  ctx.fillRect(0, 0, cw, ch);
+  const cx = cw / 2, cy = ch * 0.40;
+  // lone hole, sated
+  ctx.save();
+  ctx.translate(cx, cy - 110);
+  ctx.rotate(now * 0.4);
+  for (let i = 0; i < 5; i++) {
+    const hue = 270 + i * 20;
+    ctx.strokeStyle = "hsla(" + hue + ", 95%, 62%, " + (0.5 - i * 0.08) + ")";
+    ctx.lineWidth = 5 - i * 0.7;
+    ctx.shadowColor = "hsl(" + hue + ", 95%, 65%)"; ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(0, 0, 48 + i * 9, i * 1.5, i * 1.5 + 2.8); ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "#000";
+  ctx.beginPath(); ctx.arc(0, 0, 46, 0, TAU); ctx.fill();
+  ctx.restore();
+  hudText("CITY CONSUMED", cx, cy + 10, Math.min(48, cw * 0.08), "#ff66cc", "center", 22);
+  hudText("100% — nothing remains but you", cx, cy + 40, 14, "rgba(220,235,255,0.7)", "center", 4);
+  hudText("TIME  " + fmtTime(elapsed), cx, cy + 86, 26, "#8be9ff", "center", 14);
+  if (victoryIsBest) {
+    const b = 0.6 + 0.4 * Math.sin(now * 4);
+    ctx.globalAlpha = b;
+    hudText("NEW BEST TIME!", cx, cy + 116, 16, "#ffd866", "center", 12);
+    ctx.globalAlpha = 1;
+  } else if (bestTime) {
+    hudText("BEST  " + fmtTime(bestTime), cx, cy + 116, 14, "rgba(255,216,102,0.7)", "center", 6);
+  }
+  const blink = 0.55 + 0.45 * Math.sin(now * 3);
+  ctx.globalAlpha = blink;
+  hudText("TAP / PRESS TO DEVOUR ANOTHER CITY", cx, cy + 170, 16, "#7dffb0", "center", 10);
+  ctx.globalAlpha = 1;
+}
+
+function render() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#050514";
+  ctx.fillRect(0, 0, cw, ch);
+
+  if (state === "collapse") {
+    // the whole world implodes into the hole
+    const t = clamp(collapseT / CONFIG.collapseTime, 0, 1);
+    const shrink = Math.pow(1 - easeIn(Math.min(1, t * 1.15)), 1) * 0.98 + 0.02;
+    const z = cam.zoom * shrink;
+    ctx.save();
+    ctx.translate(cw / 2, ch / 2);
+    ctx.rotate(easeIn(t) * 3.0);
+    ctx.scale(z, z);
+    ctx.translate(-hole.x, -hole.y);
+    const saveZoom = cam.zoom, saveX = cam.x, saveY = cam.y;
+    cam.zoom = z; cam.x = hole.x; cam.y = hole.y;
+    drawWorldScene();
+    cam.zoom = saveZoom; cam.x = saveX; cam.y = saveY;
+    ctx.restore();
+    // expanding hole swallowing the screen
+    const maxR = Math.hypot(cw, ch) * 0.6;
+    const hr = lerp(hole.r * z, maxR, easeIn(t));
+    ctx.save();
+    ctx.translate(cw / 2, ch / 2);
+    ctx.strokeStyle = "hsla(" + (280 + t * 60) + ", 95%, 65%, " + (0.9 - t * 0.4) + ")";
+    ctx.lineWidth = 4;
+    ctx.shadowColor = "#c792ff"; ctx.shadowBlur = 30;
+    ctx.beginPath(); ctx.arc(0, 0, hr, 0, TAU); ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.arc(0, 0, hr, 0, TAU); ctx.fill();
+    ctx.restore();
+    // terminal flash
+    if (t > 0.82) {
+      ctx.globalAlpha = (t - 0.82) / 0.18 * 0.9;
+      ctx.fillStyle = "#dccfff";
+      ctx.fillRect(0, 0, cw, ch);
+      ctx.globalAlpha = 1;
+    }
+    hudText(fmtTime(elapsed), cw - 16, 28, 16, "#8be9ff", "right");
+    return;
+  }
+
+  // world pass
+  ctx.save();
+  ctx.translate(cw / 2, ch / 2);
+  ctx.scale(cam.zoom, cam.zoom);
+  ctx.translate(-cam.x, -cam.y);
+  drawWorldScene();
+  ctx.restore();
+
+  drawVignette();
+
+  if (state === "playing") drawHUD();
+  else if (state === "paused") { drawHUD(); drawPaused(); }
+  else if (state === "title") drawTitle();
+  else if (state === "victory") drawVictory();
+
+  if (audio.muted && state === "playing")
+    hudText("MUTED", cw / 2, ch - 16, 11, "rgba(255,255,255,0.35)", "center", 0);
+}
+
+/* ---------------- §O MAIN LOOP ---------------- */
+let lastT = performance.now();
+function frame(t) {
+  const dt = Math.min(0.05, (t - lastT) / 1000);
+  lastT = t;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+generateWorld();
+resetHole();
+cam.x = WORLD / 2; cam.y = WORLD / 2; cam.zoom = 0.55;
+setState("title");
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
