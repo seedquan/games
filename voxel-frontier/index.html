@@ -158,6 +158,7 @@
 
 <div class="overlay" id="overlayTitle">
   <h1>VOXEL FRONTIER</h1>
+  <div class="seed" style="color:#9db4d8">无限世界，向任何方向探索 — INFINITE WORLD, EXPLORE IN ANY DIRECTION</div>
   <div class="seed" id="seedLineTitle">SEED 000000</div>
   <div class="blink">CLICK / TAP TO PLAY</div>
   <div>
@@ -198,8 +199,10 @@
 
 /* ---------------- §1 CONFIG ---------------- */
 const CONFIG = Object.freeze({
-  worldX: 128, worldZ: 128, worldY: 48,   // world dimensions in blocks
+  worldY: 48,                             // world height in blocks (X/Z are infinite)
   chunk: 16,                              // chunk side (columns)
+  loadRadius: 5,                          // chunks streamed around the player
+  genPerFrame: 2,                         // chunk generation budget per frame
   waterLevel: 15,
   gravity: 24,
   jumpVel: 8.4,
@@ -211,7 +214,7 @@ const CONFIG = Object.freeze({
   eyeHeight: 1.62,
   reach: 6,                               // block interaction distance
   fov: 70 * Math.PI / 180,
-  fogNear: 26, fogFar: 62,
+  fogNear: 26, fogFar: 62,                // fogFar = (loadRadius-1)*16 - 2: fog hides the streaming edge
   fogColor: [0.085, 0.06, 0.16],
   waterFog: [0.03, 0.10, 0.22],
   step: 1 / 120,                          // fixed physics timestep
@@ -220,8 +223,9 @@ const CONFIG = Object.freeze({
   dprCap: 1.5,
 });
 
-const WX = CONFIG.worldX, WZ = CONFIG.worldZ, WY = CONFIG.worldY;
-const CH = CONFIG.chunk, CXN = WX / CH, CZN = WZ / CH;
+const WY = CONFIG.worldY;
+const CH = CONFIG.chunk;
+const LOAD_R = CONFIG.loadRadius, UNLOAD_R = LOAD_R + 2;
 
 /* ---------------- §2 UTIL / STORE ---------------- */
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -708,70 +712,58 @@ function aabbVisible(x0, y0, z0, x1, y1, z1) {
   return true;
 }
 
-/* ---------------- §9 WORLD DATA ---------------- */
-const world = new Uint8Array(WX * WY * WZ);
-const heightMap = new Int16Array(WX * WZ);
-let edits = new Map();        // "x,y,z" -> block id (diff vs generated world)
+/* ---------------- §9 WORLD DATA (infinite, chunked) ---------------- */
+/* The world is unbounded in X and Z. Terrain lives in 16x16-column chunks
+   stored in a Map keyed "cx,cz"; each chunk owns a Uint8Array of CH*CH*WY
+   block ids. Generation is a pure function of (worldX, worldZ, seed), so a
+   chunk's terrain is byte-identical no matter when, or in which order
+   relative to its neighbors, it is generated. Negative coordinates use
+   floor-division (Math.floor(x / CH)) so x - cx*CH == ((x % 16) + 16) % 16. */
 
-function idx(x, y, z) { return (x * WZ + z) * WY + y; }
+const chunkMap = new Map();   // "cx,cz" -> chunk record { cx, cz, data, vboO, cntO, vboW, cntW, dirty }
+let edits = new Map();        // "x,y,z" -> block id (player diffs; insertion order = oldest first)
+const editIndex = new Map();  // "cx,cz" -> Map("x,y,z" -> id), survives chunk unload
+
+function chunkKey(cx, cz) { return cx + "," + cz; }
 
 function getBlock(x, y, z) {
   if (y < 0) return B_STONE;
   if (y >= WY) return B_AIR;
-  if (x < 0 || x >= WX || z < 0 || z >= WZ) return B_AIR;
-  return world[(x * WZ + z) * WY + y];
+  const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
+  const c = chunkMap.get(cx + "," + cz);
+  if (!c) return B_AIR;
+  return c.data[((x - cx * CH) * CH + (z - cz * CH)) * WY + y];
 }
 function isSolid(x, y, z) { return BLOCKS[getBlock(x, y, z)].solid; }
 function isOpaque(x, y, z) { return BLOCKS[getBlock(x, y, z)].opaque; }
 
-function genWorld() {
-  world.fill(B_AIR);
-  const WL = CONFIG.waterLevel;
-  for (let x = 0; x < WX; x++) {
-    for (let z = 0; z < WZ; z++) {
-      const f1 = fbm(x * 0.018, z * 0.018, seed);
-      const f2 = fbm(x * 0.065 + 97.3, z * 0.065 + 41.7, seed + 7);
-      let h = Math.floor(4 + f1 * 27 + f2 * 7);
-      h = clamp(h, 2, WY - 10);
-      heightMap[x * WZ + z] = h;
-      const sandy = h <= WL + 1;
-      for (let y = 0; y <= h; y++) {
-        let id;
-        if (y === h) id = sandy ? B_SAND : B_GRASS;
-        else if (y >= h - 3) id = sandy ? B_SAND : B_DIRT;
-        else id = B_STONE;
-        world[idx(x, y, z)] = id;
-      }
-      for (let y = h + 1; y <= WL; y++) world[idx(x, y, z)] = B_WATER;
-    }
-  }
-  // trees, flowers, crystals (deterministic by seed)
-  for (let x = 2; x < WX - 2; x++) {
-    for (let z = 2; z < WZ - 2; z++) {
-      const h = heightMap[x * WZ + z];
-      if (world[idx(x, h, z)] !== B_GRASS) {
-        // glow crystals occasionally sprout from underwater sand
-        if (world[idx(x, h, z)] === B_SAND && h < CONFIG.waterLevel &&
-            hash2(x * 5 + 11, z * 3 + 29, seed + 91) < 0.004) {
-          world[idx(x, h + 1, z)] = B_CRYSTAL;
-        }
-        continue;
-      }
-      const r = hash2(x * 7 + 3, z * 13 + 1, seed + 17);
-      if (r < 0.011 && h + 7 < WY) {
-        plantTree(x, h, z);
-      } else if (r > 0.985) {
-        world[idx(x, h + 1, z)] = B_FLOWER;
-      } else if (r > 0.978) {
-        world[idx(x, h + 1, z)] = B_CRYSTAL;
-      }
-    }
-  }
+/* terrain height: pure function of (worldX, worldZ, seed) */
+function heightAt(x, z) {
+  const f1 = fbm(x * 0.018, z * 0.018, seed);
+  const f2 = fbm(x * 0.065 + 97.3, z * 0.065 + 41.7, seed + 7);
+  return clamp(Math.floor(4 + f1 * 27 + f2 * 7), 2, WY - 10);
 }
 
-function plantTree(x, h, z) {
+/* deterministic per-column tree roll; returns surface height or -1 */
+function treeRootAt(x, z) {
+  const h = heightAt(x, z);
+  if (h <= CONFIG.waterLevel + 1) return -1;           // sandy shore: no trees
+  if (h + 7 >= WY) return -1;
+  return hash2(x * 7 + 3, z * 13 + 1, seed + 17) < 0.011 ? h : -1;
+}
+
+/* write one tree's blocks, clipped to the chunk whose data/origin we hold.
+   Trunk overwrites anything; leaves only fill air (both order-independent). */
+function writeTree(data, x0, z0, x, h, z) {
+  function put(wx, wy, wz, id, keepExisting) {
+    const lx = wx - x0, lz = wz - z0;
+    if (lx < 0 || lx >= CH || lz < 0 || lz >= CH || wy < 0 || wy >= WY) return;
+    const i = (lx * CH + lz) * WY + wy;
+    if (keepExisting && data[i] !== B_AIR) return;
+    data[i] = id;
+  }
   const trunk = 4 + Math.floor(hash2(x, z, seed + 23) * 2); // 4-5
-  for (let y = h + 1; y <= h + trunk; y++) world[idx(x, y, z)] = B_WOOD;
+  for (let y = h + 1; y <= h + trunk; y++) put(x, y, z, B_WOOD, false);
   const top = h + trunk;
   for (let dy = -2; dy <= 1; dy++) {
     const rad = dy <= -1 ? 2 : 1;
@@ -780,45 +772,138 @@ function plantTree(x, h, z) {
         if (dx === 0 && dz === 0 && dy <= 0) continue; // trunk space
         if (Math.abs(dx) === rad && Math.abs(dz) === rad &&
             hash2(x + dx * 31, z + dz * 17 + dy * 7, seed + 5) < 0.5) continue; // ragged corners
-        const tx = x + dx, ty = top + dy, tz = z + dz;
-        if (tx < 0 || tx >= WX || tz < 0 || tz >= WZ || ty < 0 || ty >= WY) continue;
-        if (world[idx(tx, ty, tz)] === B_AIR) world[idx(tx, ty, tz)] = B_LEAVES;
+        put(x + dx, top + dy, z + dz, B_LEAVES, true);
       }
     }
   }
-  if (top + 2 < WY) world[idx(x, top + 2, z)] = B_LEAVES;
+  put(x, top + 2, z, B_LEAVES, true);
 }
 
-function applyEdits() {
-  for (const [k, v] of edits) {
-    const p = k.split(",");
-    const x = +p[0], y = +p[1], z = +p[2];
-    if (x >= 0 && x < WX && y >= 0 && y < WY && z >= 0 && z < WZ) {
-      world[idx(x, y, z)] = v;
+const TREE_MARGIN = 3; // canopy radius 2 + 1 spare: covers any tree crossing into this chunk
+
+/* pure chunk terrain: identical bytes for the same (cx, cz, seed) regardless
+   of generation order. Trees rooted in a margin around the chunk are also
+   evaluated so canopies crossing chunk borders are seamless. */
+function genChunkData(cx, cz) {
+  const data = new Uint8Array(CH * CH * WY);
+  const WL = CONFIG.waterLevel;
+  const x0 = cx * CH, z0 = cz * CH;
+  // pass 1: terrain columns + small flora (deterministic per column)
+  for (let lx = 0; lx < CH; lx++) {
+    for (let lz = 0; lz < CH; lz++) {
+      const x = x0 + lx, z = z0 + lz;
+      const h = heightAt(x, z);
+      const sandy = h <= WL + 1;
+      const base = (lx * CH + lz) * WY;
+      for (let y = 0; y <= h; y++) {
+        data[base + y] = y === h ? (sandy ? B_SAND : B_GRASS)
+                       : y >= h - 3 ? (sandy ? B_SAND : B_DIRT)
+                       : B_STONE;
+      }
+      for (let y = h + 1; y <= WL; y++) data[base + y] = B_WATER;
+      if (sandy) {
+        // glow crystals occasionally sprout from underwater sand
+        if (h < WL && hash2(x * 5 + 11, z * 3 + 29, seed + 91) < 0.004) {
+          data[base + h + 1] = B_CRYSTAL;
+        }
+      } else {
+        const r = hash2(x * 7 + 3, z * 13 + 1, seed + 17);
+        if (r > 0.985) data[base + h + 1] = B_FLOWER;
+        else if (r > 0.978) data[base + h + 1] = B_CRYSTAL;
+      }
     }
   }
+  // pass 2: trees, including roots in the surrounding margin
+  for (let x = x0 - TREE_MARGIN; x < x0 + CH + TREE_MARGIN; x++) {
+    for (let z = z0 - TREE_MARGIN; z < z0 + CH + TREE_MARGIN; z++) {
+      const h = treeRootAt(x, z);
+      if (h >= 0) writeTree(data, x0, z0, x, h, z);
+    }
+  }
+  return data;
 }
 
-function surfaceY(x, z) {
-  for (let y = WY - 1; y >= 0; y--) {
-    const id = getBlock(x, y, z);
-    if (id !== B_AIR && id !== B_WATER && !BLOCKS[id].cross) return y;
+/* create (or return existing) chunk: pure terrain + re-applied player edits */
+function genChunk(cx, cz) {
+  const key = cx + "," + cz;
+  let c = chunkMap.get(key);
+  if (c) return c;
+  c = { cx, cz, data: genChunkData(cx, cz), vboO: null, cntO: 0, vboW: null, cntW: 0, dirty: true };
+  const m = editIndex.get(key);
+  if (m) {
+    for (const [k, v] of m) {
+      const p = k.split(",");
+      const y = +p[1];
+      if (y >= 0 && y < WY) {
+        c.data[((+p[0] - cx * CH) * CH + (+p[2] - cz * CH)) * WY + y] = v;
+      }
+    }
   }
-  return 0;
+  chunkMap.set(key, c);
+  return c;
 }
 
-/* ---------------- §10 CHUNKS & MESHING ---------------- */
-/* one VBO pair (opaque + water) per 16x16-column chunk */
-const chunks = [];
-for (let cx = 0; cx < CXN; cx++) {
-  for (let cz = 0; cz < CZN; cz++) {
-    chunks.push({ cx, cz, vboO: null, cntO: 0, vboW: null, cntW: 0, dirty: true });
-  }
+function recordEdit(x, y, z, id) {
+  const k = x + "," + y + "," + z;
+  if (edits.has(k)) edits.delete(k); // re-insert so newest edits sit last
+  edits.set(k, id);
+  const ck = Math.floor(x / CH) + "," + Math.floor(z / CH);
+  let m = editIndex.get(ck);
+  if (!m) editIndex.set(ck, m = new Map());
+  m.set(k, id);
 }
+
+/* ---------------- §10 CHUNK STREAMING & MESHING ---------------- */
+/* one VBO pair (opaque + water) per loaded 16x16-column chunk */
 function chunkAt(x, z) {
-  const cx = x >> 4, cz = z >> 4;
-  if (cx < 0 || cx >= CXN || cz < 0 || cz >= CZN) return null;
-  return chunks[cx * CZN + cz];
+  return chunkMap.get(Math.floor(x / CH) + "," + Math.floor(z / CH)) || null;
+}
+
+/* chunk offsets within the load radius, sorted nearest-first */
+const RING = (() => {
+  const list = [];
+  for (let dx = -LOAD_R; dx <= LOAD_R; dx++) {
+    for (let dz = -LOAD_R; dz <= LOAD_R; dz++) {
+      if (dx * dx + dz * dz <= LOAD_R * LOAD_R + 1) list.push([dx, dz]);
+    }
+  }
+  list.sort((a, b) => (a[0] * a[0] + a[1] * a[1]) - (b[0] * b[0] + b[1] * b[1]));
+  return list;
+})();
+
+function unloadChunk(c) {
+  if (gl) {
+    if (c.vboO) gl.deleteBuffer(c.vboO);
+    if (c.vboW) gl.deleteBuffer(c.vboW);
+  }
+  chunkMap.delete(c.cx + "," + c.cz);
+}
+
+/* each frame: generate missing chunks near the player (budgeted, nearest
+   first) and unload chunks beyond the keep radius. Player edits live in
+   `edits`/`editIndex` and are re-applied on regeneration, so nothing is lost. */
+function streamChunks(genBudget) {
+  const pcx = Math.floor(player.x / CH), pcz = Math.floor(player.z / CH);
+  for (let i = 0; i < RING.length && genBudget > 0; i++) {
+    const cx = pcx + RING[i][0], cz = pcz + RING[i][1];
+    if (!chunkMap.has(cx + "," + cz)) { genChunk(cx, cz); genBudget--; }
+  }
+  const drop = (UNLOAD_R + 0.5) * (UNLOAD_R + 0.5);
+  for (const c of chunkMap.values()) {
+    const dx = c.cx - pcx, dz = c.cz - pcz;
+    if (dx * dx + dz * dz > drop) unloadChunk(c);
+  }
+}
+
+/* a chunk may only be meshed once all 8 neighbors' terrain exists, so
+   border face culling and AO sample real blocks, never missing chunks */
+function neighborsReady(c) {
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      if ((dx || dz) && !chunkMap.has((c.cx + dx) + "," + (c.cz + dz))) return false;
+    }
+  }
+  return true;
 }
 
 const FACE_NORM = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -902,10 +987,12 @@ function pushCross(arr, x, y, z, block) {
 function buildChunk(c) {
   const opaque = [], water = [];
   const x0 = c.cx * CH, z0 = c.cz * CH;
-  for (let x = x0; x < x0 + CH; x++) {
-    for (let z = z0; z < z0 + CH; z++) {
+  for (let lx = 0; lx < CH; lx++) {
+    for (let lz = 0; lz < CH; lz++) {
+      const x = x0 + lx, z = z0 + lz;
+      const col = (lx * CH + lz) * WY;
       for (let y = 0; y < WY; y++) {
-        const id = world[(x * WZ + z) * WY + y];
+        const id = c.data[col + y];
         if (id === B_AIR) continue;
         const B = BLOCKS[id];
         if (B.cross) { pushCross(opaque, x, y, z, B); continue; }
@@ -930,6 +1017,8 @@ function buildChunk(c) {
       }
     }
   }
+  c.dirty = false;
+  if (!gl) return; // headless (tests): meshing is a no-op
   if (!c.vboO) c.vboO = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, c.vboO);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(opaque), gl.DYNAMIC_DRAW);
@@ -938,7 +1027,6 @@ function buildChunk(c) {
   gl.bindBuffer(gl.ARRAY_BUFFER, c.vboW);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(water), gl.DYNAMIC_DRAW);
   c.cntW = water.length / 6;
-  c.dirty = false;
 }
 
 function markDirtyAround(x, z) {
@@ -953,16 +1041,22 @@ function markDirtyAround(x, z) {
 
 function rebuildDirty(maxN) {
   let n = 0;
-  for (const c of chunks) {
-    if (c.dirty) { buildChunk(c); if (++n >= maxN) break; }
+  for (const c of chunkMap.values()) {
+    if (c.dirty && neighborsReady(c)) {
+      buildChunk(c);
+      if (++n >= maxN) break;
+    }
   }
 }
 
 function setBlock(x, y, z, id, record) {
-  if (x < 0 || x >= WX || y < 0 || y >= WY || z < 0 || z >= WZ) return false;
-  world[idx(x, y, z)] = id;
+  if (y < 0 || y >= WY) return false;
+  const cx = Math.floor(x / CH), cz = Math.floor(z / CH);
+  const c = chunkMap.get(cx + "," + cz);
+  if (!c) return false;
+  c.data[((x - cx * CH) * CH + (z - cz * CH)) * WY + y] = id;
   if (record) {
-    edits.set(x + "," + y + "," + z, id);
+    recordEdit(x, y, z, id);
     scheduleSave();
   }
   markDirtyAround(x, z);
@@ -999,7 +1093,7 @@ function raycast(ox, oy, oz, dx, dy, dz, maxDist) {
 
 /* ---------------- §12 PLAYER ---------------- */
 const player = {
-  x: WX / 2 + 0.5, y: 30, z: WZ / 2 + 0.5,
+  x: 0.5, y: 30, z: 0.5,
   vx: 0, vy: 0, vz: 0,
   yaw: 0.6, pitch: -0.1,
   onGround: false, fly: false, inWater: false, eyeInWater: false,
@@ -1008,23 +1102,23 @@ const player = {
 };
 
 function spawnPlayer() {
-  // spiral out from center looking for dry land
-  const cx = WX >> 1, cz = WZ >> 1;
-  let bx = cx, bz = cz;
+  // deterministic spiral out from the origin looking for dry, tree-free land
+  // (uses the pure heightAt/treeRootAt functions, so no chunks are required)
+  let bx = 0, bz = 0, by = heightAt(0, 0);
   outer:
-  for (let r = 0; r < 40; r++) {
+  for (let r = 0; r < 64; r++) {
     for (let dx = -r; dx <= r; dx++) {
       for (let dz = -r; dz <= r; dz++) {
         if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-        const x = cx + dx, z = cz + dz;
-        if (x < 2 || x >= WX - 2 || z < 2 || z >= WZ - 2) continue;
-        const sy = surfaceY(x, z);
-        if (sy > CONFIG.waterLevel) { bx = x; bz = z; break outer; }
+        const h = heightAt(dx, dz);
+        if (h > CONFIG.waterLevel + 1 && treeRootAt(dx, dz) < 0) {
+          bx = dx; bz = dz; by = h; break outer;
+        }
       }
     }
   }
   player.x = bx + 0.5; player.z = bz + 0.5;
-  player.y = surfaceY(bx, bz) + 1.05;
+  player.y = by + 1.05;
   player.vx = player.vy = player.vz = 0;
   player.yaw = hash2(seed, 3, 9) * Math.PI * 2;
   player.pitch = -0.12;
@@ -1082,6 +1176,8 @@ function moveAxis(axis, amount) {
 }
 
 function physicsStep(dt) {
+  // never simulate while the ground under the player hasn't streamed in yet
+  if (!chunkAt(player.x, player.z)) { updateParticles(dt); return; }
   const inp = gatherInput();
   const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
   // forward on XZ plane, right perpendicular
@@ -1131,9 +1227,7 @@ function physicsStep(dt) {
   moveAxis(1, player.vy * dt);
   if (player.fly) player.onGround = false;
 
-  // keep inside world bounds horizontally
-  player.x = clamp(player.x, 0.31, WX - 0.31);
-  player.z = clamp(player.z, 0.31, WZ - 0.31);
+  // X/Z are unbounded (infinite world); only recover from falling out below
   if (player.y < -12) { player.y = WY + 4; player.vy = 0; } // fell out: drop back in
 
   // footsteps
@@ -1293,13 +1387,39 @@ class AudioEngine {
 const audio = new AudioEngine();
 
 /* ---------------- §15 SAVE / LOAD ---------------- */
-let saveTimer = -1;
+let saveTimer = -1, saveLimitNotified = false;
+const EDIT_BYTE_LIMIT = 3500000; // ~3.5MB of serialized edits in localStorage
 function scheduleSave() { saveTimer = 0.8; }
-function saveAll() {
-  store.set("seed", String(seed));
+
+function serializeEdits() {
   const obj = {};
   for (const [k, v] of edits) obj[k] = v;
-  store.set("edits", JSON.stringify(obj));
+  return JSON.stringify(obj);
+}
+function dropOldestEdits(n) {
+  for (const k of edits.keys()) {
+    if (n-- <= 0) break;
+    edits.delete(k);
+    const p = k.split(",");
+    const ck = Math.floor(+p[0] / CH) + "," + Math.floor(+p[2] / CH);
+    const m = editIndex.get(ck);
+    if (m) { m.delete(k); if (m.size === 0) editIndex.delete(ck); }
+  }
+}
+function saveAll() {
+  store.set("seed", String(seed));
+  let json = serializeEdits();
+  if (json.length > EDIT_BYTE_LIMIT) {
+    while (json.length > EDIT_BYTE_LIMIT && edits.size > 0) {
+      dropOldestEdits(Math.max(64, Math.ceil(edits.size * 0.1))); // keep newest edits
+      json = serializeEdits();
+    }
+    if (!saveLimitNotified) {
+      saveLimitNotified = true;
+      toast("SAVE LIMIT REACHED — OLDEST EDITS DROPPED");
+    }
+  }
+  store.set("edits", json);
   store.set("player", JSON.stringify({
     x: +player.x.toFixed(3), y: +player.y.toFixed(3), z: +player.z.toFixed(3),
     yaw: +player.yaw.toFixed(3), pitch: +player.pitch.toFixed(3),
@@ -1316,12 +1436,16 @@ function loadAll() {
     seed = (Math.random() * 0x7fffffff) | 0;
   }
   edits = new Map();
+  editIndex.clear();
   if (!fresh) {
     try {
       const raw = store.get("edits");
       if (raw) {
         const obj = JSON.parse(raw);
-        for (const k in obj) edits.set(k, obj[k] | 0);
+        for (const k in obj) {
+          const p = k.split(",");
+          if (p.length === 3) recordEdit(+p[0], +p[1], +p[2], obj[k] | 0);
+        }
       }
     } catch (e) { /* corrupted save: ignore */ }
   }
@@ -1332,10 +1456,10 @@ function loadPlayer() {
     const raw = store.get("player");
     if (!raw) return false;
     const p = JSON.parse(raw);
-    if (typeof p.x !== "number") return false;
-    player.x = clamp(p.x, 1, WX - 1);
+    if (typeof p.x !== "number" || !isFinite(p.x) || !isFinite(p.y) || !isFinite(p.z)) return false;
+    player.x = p.x;                       // X/Z unbounded in the infinite world
     player.y = clamp(p.y, 0, WY + 6);
-    player.z = clamp(p.z, 1, WZ - 1);
+    player.z = p.z;
     player.yaw = p.yaw || 0; player.pitch = clamp(p.pitch || 0, -1.55, 1.55);
     player.fly = !!p.fly;
     player.sel = clamp(p.sel | 0, 0, HOTBAR.length - 1);
@@ -1346,19 +1470,22 @@ function loadPlayer() {
 function newWorld(newSeed) {
   seed = newSeed;
   edits = new Map();
+  editIndex.clear();
+  saveLimitNotified = false;
   store.del("edits");
   store.del("player");
-  genWorld();
+  for (const c of Array.from(chunkMap.values())) unloadChunk(c);
   spawnPlayer();
-  for (const c of chunks) c.dirty = true;
-  rebuildAllChunks();
+  primeWorld();
   saveAll();
   updateSeedLines();
   toast("NEW WORLD  " + seedText());
 }
 
-function rebuildAllChunks() {
-  for (const c of chunks) if (c.dirty) buildChunk(c);
+/* synchronously stream + mesh the area around the player (boot / reset) */
+function primeWorld() {
+  streamChunks(RING.length);
+  rebuildDirty(RING.length);
 }
 
 function seedText() { return ("000000" + (seed >>> 0).toString(36).toUpperCase()).slice(-7); }
@@ -1386,14 +1513,14 @@ function renderHowTo() {
   const coarse = touchMode || (window.matchMedia && matchMedia("(pointer: coarse)").matches);
   elHowto.innerHTML = coarse ? (
     "<b>HOW TO PLAY / 操作说明</b><br>" +
-    "目标：自由探索、挖掘与建造 — explore, mine and build freely<br>" +
+    "无限世界，向任何方向探索、挖掘与建造 — infinite world: explore, mine and build in any direction<br>" +
     "<b>左侧摇杆</b> 移动 · <b>拖动右侧</b> 转视角 — left stick moves &middot; drag right to look<br>" +
     "点按方块来挖掘 / 放置 — tap a block to dig / place<br>" +
     "<b>DIG/PLACE</b> 切换模式 · 底栏选方块 — toggle mode &middot; pick blocks in hotbar<br>" +
     "<b>JUMP</b> 跳跃 · <b>FLY</b> 飞行 — jump / fly buttons"
   ) : (
     "<b>HOW TO PLAY / 操作说明</b><br>" +
-    "目标：自由探索、挖掘与建造 — explore, mine and build freely<br>" +
+    "无限世界，向任何方向探索、挖掘与建造 — infinite world: explore, mine and build in any direction<br>" +
     "点击锁定鼠标 · <b>WASD</b> 移动 · <b>SPACE</b> 跳跃 — click to lock pointer &middot; move &middot; jump<br>" +
     "<b>左键</b> 挖掘 · <b>右键</b> 放置 · <b>1-9 / 滚轮</b> 选方块 — LMB break &middot; RMB place &middot; select block<br>" +
     "<b>F</b> 或双击空格飞行 · <b>R</b> 重置世界 — F / double-space to fly &middot; R new world<br>" +
@@ -1776,7 +1903,8 @@ function render() {
 
   const cullDist = fogF + 14;
   const visible = [];
-  for (const c of chunks) {
+  for (const c of chunkMap.values()) {
+    if (!c.vboO) continue; // terrain exists but not meshed yet
     const x0 = c.cx * CH, z0 = c.cz * CH;
     const ccx = x0 + CH / 2, ccz = z0 + CH / 2;
     const d = Math.hypot(ccx - eye[0], ccz - eye[2]);
@@ -1868,7 +1996,8 @@ function frame(tms) {
     }
   }
 
-  rebuildDirty(4);
+  streamChunks(CONFIG.genPerFrame);
+  rebuildDirty(3);
   render();
 
   /* timers & HUD */
@@ -1905,15 +2034,27 @@ function frame(tms) {
 }
 let autoSaveT = 0;
 
+/* ---------------- §20 TEST HOOKS ---------------- */
+/* deterministic internals exposed for the headless (Node) test harness */
+if (typeof globalThis !== "undefined") {
+  globalThis.__VF__ = {
+    CH, WY, LOAD_R, UNLOAD_R, chunkMap, editIndex,
+    genChunk, genChunkData, unloadChunk, streamChunks, rebuildDirty,
+    setBlock, getBlock, heightAt, treeRootAt, spawnPlayer, player,
+    setSeed: (s) => { seed = s | 0; },
+    getSeed: () => seed,
+    getEdits: () => edits,
+    saveAll, loadAll,
+  };
+}
+
 /* ---------------- §20 BOOT ---------------- */
 function boot() {
   if (!gl) return;
   initGL();
   const fresh = loadAll();
-  genWorld();
-  applyEdits();
-  rebuildAllChunks();
   if (fresh || !loadPlayer()) spawnPlayer();
+  primeWorld();
   if (fresh) saveAll();
   buildHotbar();
   updateSeedLines();
