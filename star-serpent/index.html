@@ -117,6 +117,9 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 
+/* coarse-pointer (touch) devices get touch instructions */
+const touchUI = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
 /* cell center in css px */
 const cx = (gx) => boardX + (gx + 0.5) * cell;
 const cy = (gy) => boardY + (gy + 0.5) * cell;
@@ -804,9 +807,22 @@ function drawTitle() {
   text("tap / press to start", cw / 2, ch * 0.55, 20, "#ffffff", "center", 14);
   ctx.globalAlpha = 1;
   text("BEST  " + best, cw / 2, ch * 0.55 + 40, 16, "#ffd35a", "center", 10);
-  text("move the mouse to steer — eat orbs, chase comets,", cw / 2, ch * 0.72, 13, "rgba(190,190,230,0.75)", "center");
-  text("edges wrap — only your tail can end you", cw / 2, ch * 0.72 + 20, 13, "rgba(190,190,230,0.75)", "center");
-  text("P pause   M mute", cw / 2, ch * 0.72 + 44, 12, "rgba(150,150,190,0.6)", "center");
+  // HOW TO PLAY / 操作说明 panel
+  const helpY = ch * 0.68;
+  text("操作说明 · HOW TO PLAY", cw / 2, helpY, 12, "rgba(150,150,190,0.6)", "center");
+  const help = touchUI ? [
+    "手指拖动转向，蛇追随指尖 — drag to steer the serpent",
+    "吃能量球成长，抢限时彗星 — eat orbs, catch bonus comets",
+    "边界循环，别咬到自己的尾巴 — edges wrap, avoid your tail",
+  ] : [
+    "移动鼠标转向，蛇追随光标 — move the mouse to steer",
+    "方向键 / WASD 亦可控制 — arrows / WASD also work",
+    "吃能量球成长，抢限时彗星 — eat orbs, catch bonus comets",
+    "边界循环，别咬到自己的尾巴 — edges wrap, avoid your tail",
+    "P 暂停 · M 静音 — pause / mute",
+  ];
+  for (let i = 0; i < help.length; i++)
+    text(help[i], cw / 2, helpY + 20 + i * 19, 13, "rgba(190,190,230,0.75)", "center");
 }
 
 function drawDead() {
@@ -835,6 +851,7 @@ function drawPause() {
   ctx.fillRect(0, 0, cw, ch);
   text("PAUSED", cw / 2, ch * 0.42, 40, "#9f8aff", "center", 20);
   text("P / Esc to resume", cw / 2, ch * 0.42 + 44, 16, "rgba(190,190,230,0.8)", "center");
+  text("鼠标 / 方向键转向 · M 静音 — mouse / arrows to steer · M mute", cw / 2, ch * 0.42 + 72, 13, "rgba(190,190,230,0.75)", "center");
 }
 
 function render() {

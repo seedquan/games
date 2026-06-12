@@ -82,6 +82,9 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+/* coarse-pointer (touch) devices get touch instructions */
+const touchUI = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
 const viewW = () => cw / viewScale;
 const viewH = () => ch / viewScale;
 
@@ -993,10 +996,6 @@ function drawHUD(now) {
     ctx.font = `900 ${Math.min(64, cw * 0.11)}px system-ui, sans-serif`;
     ctx.fillText("ORBIT DRIFT", cw / 2, ch * 0.32);
     ctx.shadowBlur = 0;
-    ctx.fillStyle = "rgba(170,225,255,0.9)";
-    ctx.font = "600 16px system-ui, sans-serif";
-    ctx.fillText("one button · release from orbit · capture is automatic", cw / 2, ch * 0.32 + 36);
-    ctx.fillText("hop the wells · grab stars · outrun the collapse", cw / 2, ch * 0.32 + 60);
     ctx.globalAlpha = pulse;
     ctx.fillStyle = "#ffffff";
     ctx.font = "800 24px system-ui, sans-serif";
@@ -1007,9 +1006,26 @@ function drawHUD(now) {
       ctx.font = "700 17px system-ui, sans-serif";
       ctx.fillText("BEST " + game.best, cw / 2, ch * 0.62 + 34);
     }
-    ctx.fillStyle = "rgba(150,170,200,0.5)";
+    // HOW TO PLAY / 操作说明 panel
+    const help = touchUI ? [
+      "点触屏幕：脱离轨道 — tap to release",
+      "引力井自动捕获 — capture is automatic",
+      "目标：不断向上跳跃，别被虚空追上 — climb, outrun the void",
+      "收集星星得分 — grab stars for points",
+    ] : [
+      "点击 / 空格：脱离轨道 — tap / space to release",
+      "引力井自动捕获 — capture is automatic",
+      "目标：不断向上跳跃，别被虚空追上 — climb, outrun the void",
+      "收集星星得分 — grab stars for points",
+      "P 暂停 · M 静音 — pause / mute",
+    ];
+    let hy = ch * 0.62 + 70;
+    ctx.fillStyle = "rgba(150,170,200,0.6)";
+    ctx.font = "700 12px system-ui, sans-serif";
+    ctx.fillText("操作说明 · HOW TO PLAY", cw / 2, hy);
+    ctx.fillStyle = "rgba(190,190,230,0.75)";
     ctx.font = "500 13px system-ui, sans-serif";
-    ctx.fillText("P pause · M mute", cw / 2, ch - 24);
+    for (const line of help) { hy += 21; ctx.fillText(line, cw / 2, hy); }
   }
 
   if (game.state === "pause") {
@@ -1021,6 +1037,9 @@ function drawHUD(now) {
     ctx.fillStyle = "rgba(170,225,255,0.8)";
     ctx.font = "600 15px system-ui, sans-serif";
     ctx.fillText("tap or press P to resume", cw / 2, ch / 2 + 32);
+    ctx.fillStyle = "rgba(190,190,230,0.75)";
+    ctx.font = "500 13px system-ui, sans-serif";
+    ctx.fillText("点击 / 空格：脱离轨道 · M 静音 — tap / space to release · M mute", cw / 2, ch / 2 + 58);
   }
 
   if (game.state === "over" && game.overT > 0.7) {

@@ -335,7 +335,7 @@ let levelIdx = 0;
 let score = 0, coinsGot = 0, lives = CONFIG.startLives;
 let highScore = parseInt(store.get("high") || "0", 10) || 0;
 let gameTime = 0;
-let touchMode = false;
+let touchMode = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
 let world = null;
 const cam = { x: 0, y: 0 };
 const shake = { t: 0, mag: 0 };
@@ -1514,8 +1514,22 @@ function drawTitle() {
   const blink = Math.sin(gameTime * 4) > -0.4;
   if (blink) glowText(touchMode ? "TAP TO START" : "PRESS SPACE TO START", cw / 2, cy + ts * 1.6, 20, "#ffe066", "center", 12);
   glowText("HIGH SCORE  " + String(highScore).padStart(6, "0"), cw / 2, cy + ts * 2.3, 15, "#ff4dd2", "center", 8);
-  glowText("← → / A D move    SPACE / W jump (hold = higher)", cw / 2, ch - 64, 13, "#8888aa", "center", 0);
-  glowText("stomp foes · bump ? blocks · grab the beacon    P pause · M mute", cw / 2, ch - 42, 13, "#8888aa", "center", 0);
+  // HOW TO PLAY / 操作说明 panel
+  const help = touchMode ? [
+    "屏幕按钮：← → 移动 · JUMP 跳跃 — on-screen buttons: move / jump",
+    "长按跳跃键跳得更高 — hold jump for higher jumps",
+    "踩扁敌人 · 顶 ? 砖块 — stomp foes, bump ? blocks",
+    "目标：抵达终点光柱 — reach the goal beacon",
+  ] : [
+    "← → / A D：移动 — move",
+    "空格 / W / ↑：跳跃，长按跳更高 — jump, hold = higher",
+    "踩扁敌人 · 顶 ? 砖块 — stomp foes, bump ? blocks",
+    "目标：抵达终点光柱 — reach the goal beacon",
+    "P 暂停 · M 静音 — pause / mute",
+  ];
+  let hy = ch - 28 - help.length * 19;
+  glowText("操作说明 · HOW TO PLAY", cw / 2, hy, 12, "rgba(150,150,190,0.6)", "center", 0);
+  for (const line of help) { hy += 19; glowText(line, cw / 2, hy, 13, "rgba(190,190,230,0.75)", "center", 0); }
 }
 
 function drawClear() {
@@ -1555,6 +1569,8 @@ function drawPaused() {
   dimScreen(0.55);
   glowText("PAUSED", cw / 2, ch * 0.42, 44, "#19e6ff", "center", 18);
   glowText(touchMode ? "tap to resume" : "press P or ESC to resume", cw / 2, ch * 0.52, 15, "#9aa7ff", "center", 6);
+  glowText(touchMode ? "按钮：← → 移动 · JUMP 跳跃 · M 静音 — buttons move / jump · M mute"
+    : "← → 移动 · 空格跳跃 · M 静音 — move / jump / mute", cw / 2, ch * 0.52 + 26, 13, "rgba(190,190,230,0.75)", "center", 0);
 }
 
 /* ---------------- §N MAIN LOOP ---------------- */

@@ -94,6 +94,9 @@ function resize() {
 window.addEventListener("resize", resize);
 resize();
 
+/* coarse-pointer (touch) devices get touch instructions */
+const touchUI = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
 /* screen px -> world x */
 const toWorldX = (px) => (px - ox) / scale;
 
@@ -903,8 +906,20 @@ function drawTitle() {
   neonText("TAP / PRESS TO START", C.W / 2, C.H * 0.62, 20, "#ffe14d", 14);
   ctx.globalAlpha = 1;
   neonText("HIGH SCORE  " + G.hi, C.W / 2, C.H * 0.7, 16, "#5dff7e", 10);
-  neonText("move: mouse / touch / A-D    launch: tap / space", C.W / 2, C.H * 0.82, 12, "rgba(160,180,220,0.75)", 4);
-  neonText("P pause    M mute", C.W / 2, C.H * 0.855, 12, "rgba(160,180,220,0.75)", 4);
+  // HOW TO PLAY / 操作说明 panel
+  neonText("操作说明 · HOW TO PLAY", C.W / 2, C.H * 0.765, 12, "rgba(160,180,220,0.6)", 4);
+  const help = touchUI ? [
+    "拖动：移动挡板 — drag to move the paddle",
+    "点触：发射小球 — tap to launch the ball",
+    "接住强化道具 · 共 3 条命 — catch power-ups, 3 lives",
+  ] : [
+    "鼠标 / ← → / A-D：移动挡板 — mouse / arrows to move",
+    "空格 / 点击：发射小球 — space / click to launch",
+    "接住强化道具 · 共 3 条命 — catch power-ups, 3 lives",
+    "P 暂停 · M 静音 — pause / mute",
+  ];
+  for (let i = 0; i < help.length; i++)
+    neonText(help[i], C.W / 2, C.H * 0.795 + i * 24, 13, "rgba(190,190,230,0.75)", 4);
 }
 
 function drawGameOver() {
@@ -942,6 +957,7 @@ function drawPause() {
   drawCenterPanel([
     ["PAUSED", 40, "#7ef3ff", 0, 20],
     ["P / Esc to resume", 15, "rgba(200,220,255,0.75)", 50, 4],
+    ["鼠标 / A-D 移动 · 空格发射 · M 静音 — move / launch / mute", 13, "rgba(190,190,230,0.75)", 84, 4],
   ]);
 }
 
