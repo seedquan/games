@@ -68,8 +68,9 @@
              progress; each player has own HP/energy/dash/weapon and picks
              their own boon.  HP=0 = DOWNED; a partner revives by standing
              close ~3s; both down = game over.  Style meter shared.
-   Hub ARMORY rack: 6 weapon forms (BLADE / LANCE / MAUL /
-             TWIN FANG / ARC CASTER / GRAVITON MACE).
+   Hub ARMORY rack: 9 weapon forms (BLADE / LANCE / MAUL /
+             TWIN FANG / ARC CASTER / GRAVITON MACE /
+             GLAIVE / CHAIN WHIP / PRISM SABER).
    Pause menu: EFFECTS toggle (F while paused) cycles bloom/scanlines/shake
              intensity (full / reduced / off), persisted; plus FULLSCREEN and
              AUTO-FULLSCREEN items (gamepad d-pad navigates, × confirms).
@@ -371,10 +372,39 @@ class AudioEngine {
     } else if (kind === "maul") {
       this.noise(t, 0.2, 0.18, "lowpass", 1800, 300);
       this.tone("sawtooth", 240, 80, t, 0.16, 0.1, false);
+    } else if (kind === "whip") {
+      // chain whip: a long thin crack — rising whistle then a sharp snap
+      this.noise(t, 0.16, 0.1, "bandpass", 1400, 3600);
+      this.tone("sawtooth", 300, 1100, t, 0.07, 0.05, false);
+      this.noise(t + 0.08, 0.05, 0.14, "highpass", 5000, 8000);
+    } else if (kind === "prism") {
+      // prism saber: crystalline slash with a bright harmonic shimmer
+      this.noise(t, 0.1, 0.12, "bandpass", 3000, 1400);
+      this.tone("square", 880, 1760, t, 0.08, 0.05, true);
+      this.tone("sine", 1320, 1320, t + 0.02, 0.09, 0.04, true);
     } else {
       this.noise(t, 0.13, 0.16, "bandpass", 2600, 700);
       this.tone("sawtooth", 520, 180, t, 0.09, 0.07, false);
     }
+  }
+  glaiveThrow() { // spinning blade hurled — whirring metal
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.14, 0.12, "bandpass", 2200, 1200);
+    this.tone("sawtooth", 420, 720, t, 0.12, 0.05, false);
+  }
+  glaiveCatch() { // blade returns to hand — short metallic chink
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 1400, 700, t, 0.05, 0.05, true);
+    this.noise(t, 0.05, 0.08, "highpass", 5000, 6000);
+  }
+  prismBeam() { // forward energy lance — bright ascending zap
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 700, 1900, t, 0.1, 0.06, true);
+    this.tone("sine", 1600, 2400, t, 0.08, 0.04, true);
+    this.noise(t, 0.08, 0.06, "highpass", 4000, 7000);
   }
   weaponSwap() {
     if (!this.ok()) return;
@@ -744,6 +774,12 @@ const WEAPONS = [
   { id: "arc",   name: "ARC CASTER", zh: "电弧", col: "#7fe9ff", glyph: "ϟ", rangeMul: 1.45, arcMul: 1.45, dmgMul: 0.85, cdMul: 1.18, durMul: 1.1,  critBase: 0 },
   // GRAVITON MACE: slow heavy swing -> mini singularity pulls then implodes
   { id: "grav",  name: "GRAVITON MACE", zh: "引力锤", col: "#b98cff", glyph: "✪", rangeMul: 1.0, arcMul: 1.1, dmgMul: 1.15, cdMul: 1.75, durMul: 1.5, critBase: 0 },
+  // GLAIVE: thrown spinning blade flies out along aim and returns, hitting on both legs; melee locked while in flight
+  { id: "glaive", name: "GLAIVE", zh: "回旋刃", col: "#7fffd0", glyph: "✶", rangeMul: 1.0,  arcMul: 0.9, dmgMul: 0.78, cdMul: 1.25, durMul: 0.85, critBase: 0.04 },
+  // CHAIN WHIP: longest reach, narrow arc, yanks struck foes toward the player
+  { id: "whip",  name: "CHAIN WHIP",    zh: "锁链鞭", col: "#ffcf5e", glyph: "⌇", rangeMul: 2.1,  arcMul: 0.42, dmgMul: 0.82, cdMul: 1.15, durMul: 1.0,  critBase: 0 },
+  // PRISM SABER: short slash plus a forward piercing energy beam tick; strong ahead, weak to the sides
+  { id: "prism", name: "PRISM SABER",   zh: "棱光刃", col: "#9d7bff", glyph: "↟", rangeMul: 0.88, arcMul: 0.78, dmgMul: 0.9,  cdMul: 0.95, durMul: 0.95, critBase: 0.05 },
 ];
 let curWeapon = store.get("weapon") || "blade";
 if (!WEAPONS.some((w) => w.id === curWeapon)) curWeapon = "blade";
@@ -825,6 +861,12 @@ const BOONS = [
   { id: "overld", name: "OVERLOAD",   desc: "Arc Caster chain jumps +2 targets",          col: "#aef3ff", glyph: "↯", max: 2, weapon: "arc" },
   { id: "horizon",name: "EVENT HORIZON", desc: "Graviton pull radius +50%, slows pulled foes", col: "#b98cff", glyph: "◯", max: 2, weapon: "grav" },
   { id: "collapse",name: "COLLAPSE",  desc: "Graviton implosion damage scales with foes pulled", col: "#caa6ff", glyph: "✸", max: 2, weapon: "grav" },
+  { id: "ricochet",name: "RICOCHET",  desc: "Glaive bounces between up to +2 nearby foes", col: "#7fffd0", glyph: "⤴", max: 2, weapon: "glaive" },
+  { id: "velret", name: "RETURN VELOCITY", desc: "Glaive's return leg crits; catching it grants +move speed", col: "#aeffe8", glyph: "⇆", max: 2, weapon: "glaive" },
+  { id: "hookshot",name: "HOOKSHOT",  desc: "Whip-pulled foes take bonus damage and are briefly stunned", col: "#ffcf5e", glyph: "✦", max: 2, weapon: "whip" },
+  { id: "flechette",name: "FLECHETTE", desc: "Whip tip emits a shockwave at max reach", col: "#ffe09a", glyph: "✺", max: 2, weapon: "whip" },
+  { id: "refract",name: "REFRACTION", desc: "Prism beam splits into a forward V", col: "#9d7bff", glyph: "ψ", max: 2, weapon: "prism" },
+  { id: "ocharge",name: "OVERCHARGE+", desc: "Consecutive prism hits charge a bigger beam", col: "#bda6ff", glyph: "⇑", max: 2, weapon: "prism" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -881,6 +923,7 @@ let bossWarnT = 0;
 /* hazards & weapon-feel state */
 let hazards = [], barrels = [], quakes = [], slashGhosts = [];
 let singularities = [];                // graviton mace mini black holes
+let glaives = [], glaivePool = [];     // GLAIVE thrown blades (live) + free-list pool
 let lights = [];                       // dynamic point lights (rebuilt each frame)
 let motes = [];                        // drifting ambient dust/ember particles
 let slowmoT = 0;                       // execution slow-mo pulse (decays in REAL time)
@@ -1362,6 +1405,9 @@ function newPlayer(idx) {
     slashT: 0, slashCD: 0, slashSide: 1, slashAng: 0,
     slashDur: CONFIG.slashDur, comboN: 0, comboT: 0,
     frenzyN: 0, frenzyT: 0,            // TWIN FANG attack-speed ramp
+    glaiveOut: false, glaiveSpeed: 0,  // GLAIVE: true while a thrown blade is in flight (melee locked)
+    prismN: 0, prismT: 0,              // PRISM SABER OVERCHARGE+ consecutive-hit charge
+    velBuffT: 0,                       // RETURN VELOCITY catch speed buff timer
     boltCD: 0,
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
@@ -2112,9 +2158,17 @@ function updateHazards(dt) {
   slashGhosts = slashGhosts.filter((g) => g.t > 0);
 }
 
+/* recycle any in-flight glaives to the pool and clear per-player flight locks */
+function clearGlaives() {
+  for (const g of glaives) { g.hitSet.length = 0; glaivePool.push(g); }
+  glaives.length = 0;
+  for (const p of players) if (p) { p.glaiveOut = false; }
+}
+
 function genRoom() {
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; mortars = []; novas = []; pedestals = []; boss = null;
+  clearGlaives();
   hazards = []; barrels = []; quakes = []; slashGhosts = [];
   styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
@@ -2409,6 +2463,7 @@ function enterHub() {
   mortars = []; novas = []; pedestals = []; shopRoom = false; pendingRoom = null;
   hazards = []; barrels = []; quakes = []; slashGhosts = []; runTrack = [];
   singularities = []; lights = []; motes = []; ffx.rings = []; ffx.shocks = []; ffx.traumaV = 0;
+  clearGlaives();
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
@@ -2548,6 +2603,12 @@ function trySlash(p) {
   if (p.slashCD > 0 || p.dashT > 0) return;
   if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p); // keyboard-only: snap aim to nearest enemy
   const W = weaponDefP(p);
+  // GLAIVE: while a thrown blade is in flight the wielder has no melee — wait for the return
+  if (W.id === "glaive") {
+    if (p.glaiveOut) return;
+    throwGlaive(p, W);
+    return;
+  }
   if (p.comboT <= 0) p.comboN = 0;
   p.comboN = p.comboN % 3 + 1;
   p.comboT = 1.5;
@@ -2556,6 +2617,8 @@ function trySlash(p) {
   const fang = W.id === "fang";
   const arcW = W.id === "arc";
   const grav = W.id === "grav";
+  const whip = W.id === "whip";
+  const prism = W.id === "prism";
   const flurry = fang && p.comboN === 3; // TWIN FANG: every 3rd hit is a rapid flurry
   // FRENZY ramps attack speed on consecutive hits (twin fang only)
   let cdMul = W.cdMul;
@@ -2581,7 +2644,7 @@ function trySlash(p) {
   const arc = lunge ? meleeArcNow() * 0.6 : meleeArcNow();
   // twin fang per-hit is low; the flurry distributes its dmg across rapid sub-slashes
   const dmg = meleeDamage() * (lunge ? 1.3 : 1) * (flurry ? 0.6 : 1);
-  const kb = maul ? 400 * (1 + 0.5 * boonPow("jugg")) : (fang ? 150 : 260); // JUGGERNAUT; fang barely knocks back
+  const kb = maul ? 400 * (1 + 0.5 * boonPow("jugg")) : (fang ? 150 : (whip ? 0 : 260)); // JUGGERNAUT; fang barely knocks back; whip yanks (handled per-hit)
   // swing trail ribbon (weapon-tinted; style chosen at render time)
   slashGhosts.push({ x: p.x, y: p.y, ang: p.slashAng, side: p.slashSide, arc, range, t: 0.32, tm: 0.32, col: W.col, lunge, weapon: W.id, flurry });
   if (slashGhosts.length > 14) slashGhosts.shift();
@@ -2650,6 +2713,17 @@ function trySlash(p) {
       if (lunge && boonLv("skewer") && e.hp > 0) {
         e.kbx = (p.x - e.x) * 6; e.kby = (p.y - e.y) * 6;
       }
+      // CHAIN WHIP: yank struck foes toward the wielder (heavy enemies barely budge — bosses/tanks resist)
+      if (whip && e.hp > 0) {
+        const resist = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.4 : 1);
+        // pull toward a point near the player so they cluster (great with freeze/AoE)
+        e.kbx += (p.x - e.x) * 7 * resist;
+        e.kby += (p.y - e.y) * 7 * resist;
+        if (boonLv("hookshot")) {
+          hitEnemy(e, dmg * 0.45 * boonPow("hookshot"), 0, 0, false, false); // HOOKSHOT bonus damage
+          if (e.hp > 0) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.2 : 0.45); // brief stun (reuses shock-stun)
+        }
+      }
       if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE
       // TWIN FANG: frenzy ramp + EXSANGUINATE bleed-on-crit
       if (fang) {
@@ -2712,6 +2786,41 @@ function trySlash(p) {
     }
     audio.arcZap();
   }
+  // PRISM SABER signature: the slash emits a forward piercing energy beam (a second damage tick in a line ahead).
+  // OVERCHARGE+ grows the beam with consecutive hits; REFRACTION fans it into a V.
+  if (prism) {
+    // OVERCHARGE+ charge ramps with consecutive slashes (decays via prismT in the player update)
+    p.prismN = Math.min(6, (p.prismN || 0) + 1); p.prismT = 1.4;
+    const charge = boonLv("ocharge") ? Math.min(1, 0.18 * boonPow("ocharge") * p.prismN) : 0;
+    const beamLen = range * (1.45 + charge * 0.8);
+    const beamW = (16 + charge * 18); // half-width of the in-line hit band
+    const beamDmg = dmg * (0.65 + charge * 0.6); // second tick; balanced vs power budget
+    const angs = boonLv("refract") ? [0, -0.32, 0.32] : [0]; // REFRACTION: V-split
+    const piercedAny = [];
+    for (const off of angs) {
+      const ba = p.slashAng + off;
+      const ex = p.x + Math.cos(ba) * beamLen, ey = p.y + Math.sin(ba) * beamLen;
+      beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.16, col: W.col });
+      sparkLine(p.x, p.y, ex, ey, W.col, 6);
+      ffx.spawnLight((p.x + ex) / 2, (p.y + ey) / 2, 50, W.col, 0.4);
+      for (const e of enemies) {
+        if (e.hp <= 0 || piercedAny.includes(e)) continue;
+        // point-to-segment distance from the enemy to the beam line
+        const dx = ex - p.x, dy = ey - p.y;
+        const len2 = dx * dx + dy * dy || 1;
+        let t = ((e.x - p.x) * dx + (e.y - p.y) * dy) / len2;
+        t = clamp(t, 0, 1);
+        const px = p.x + dx * t, py = p.y + dy * t;
+        if (dist(px, py, e.x, e.y) > beamW + e.r) continue;
+        const crit = critRoll();
+        hitEnemy(e, beamDmg, Math.cos(ba) * 90, Math.sin(ba) * 90, crit, true); // pierces (no break)
+        if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        piercedAny.push(e);
+        hitAny = true;
+      }
+    }
+    audio.prismBeam();
+  }
   // volatile barrels can be struck by melee
   for (const b of barrels) {
     if (b.dead || b.fuse >= 0) continue;
@@ -2731,8 +2840,112 @@ function trySlash(p) {
       quakes.push({ x: p.x, y: p.y, r: range * 0.85, t: 1.4, tm: 1.4, tick: 0.25, dps: (5 + depth) * dmgMul() * boonPow("ashock") });
     }
   }
+  // CHAIN WHIP FLECHETTE: the tip cracks a small shockwave at max reach
+  if (whip && boonLv("flechette")) {
+    const tx = p.x + Math.cos(p.slashAng) * range, ty = p.y + Math.sin(p.slashAng) * range;
+    const fr = 56 + 14 * boonPow("flechette");
+    novas.push({ x: tx, y: ty, t: 0.3, tm: 0.3, maxR: fr, col: W.col });
+    ffx.spawnLight(tx, ty, fr, W.col, 0.6);
+    burst(tx, ty, W.col, 10, 200, 0.35, 2.5);
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      if (dist(tx, ty, e.x, e.y) < fr + e.r) {
+        hitEnemy(e, dmg * 0.5 * boonPow("flechette"), (e.x - tx) * 2, (e.y - ty) * 2, false, true);
+        if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        hitAny = true;
+      }
+    }
+  }
   if (flurry) { audio.fangFlurry(); if (hitAny) ffx.trauma(0.18); }
   if (hitAny) shake(2.5, 0.1);
+}
+
+/* GLAIVE: hurl a spinning blade out along the aim; it flies out, then returns to the wielder,
+   damaging foes on BOTH legs (each enemy can be hit once per leg). Pooled to avoid per-throw allocs. */
+function throwGlaive(p, W) {
+  p.slashCD = CONFIG.meleeCD * W.cdMul;
+  p.slashAng = p.aim;
+  p.recoilT = 0.18;
+  p.glaiveOut = true;
+  audio.glaiveThrow();
+  const reach = meleeRangeNow() * 3.1; // ranged-ish: travels well past normal melee
+  const speed = 760;
+  const dmg = meleeDamage();
+  let g = glaivePool.pop();
+  if (!g) g = { x: 0, y: 0, ang: 0, dist: 0, reach: 0, speed: 0, dmg: 0, leg: 0, spin: 0,
+                col: "#7fffd0", owner: null, hitSet: [], bounces: 0, t: 0 };
+  g.x = p.x; g.y = p.y; g.ang = p.slashAng; g.dist = 0; g.reach = reach;
+  g.speed = speed; g.dmg = dmg; g.leg = 0 /* 0 = outbound, 1 = returning */; g.spin = 0;
+  g.col = W.col; g.owner = p; g.hitSet.length = 0; g.bounces = 0; g.t = 0;
+  glaives.push(g);
+  ffx.spawnLight(p.x, p.y, 50, W.col, 0.5);
+  burst(p.x + Math.cos(p.slashAng) * 16, p.y + Math.sin(p.slashAng) * 16, W.col, 6, 160, 0.25, 2.5);
+}
+
+/* glaive flight: outbound to reach, then homes back to its owner; hits each foe once per leg. */
+function updateGlaives(dt) {
+  for (const g of glaives) {
+    g.t += dt; g.spin += dt * 26;
+    const p = g.owner;
+    if (g.leg === 0) {
+      // outbound straight along throw angle
+      g.x += Math.cos(g.ang) * g.speed * dt;
+      g.y += Math.sin(g.ang) * g.speed * dt;
+      g.dist += g.speed * dt;
+      if (g.dist >= g.reach) { g.leg = 1; g.hitSet.length = 0; } // returning leg can re-hit
+    } else {
+      // home back toward the (possibly moved) owner
+      if (p) {
+        const a = angTo(g.x, g.y, p.x, p.y);
+        g.x += Math.cos(a) * g.speed * dt;
+        g.y += Math.sin(a) * g.speed * dt;
+        if (dist(g.x, g.y, p.x, p.y) < p.r + 12) { catchGlaive(g); continue; }
+      } else { catchGlaive(g); continue; }
+    }
+    // damage pass (one hit per enemy per leg)
+    ctxP = p;
+    for (const e of enemies) {
+      if (e.hp <= 0 || g.hitSet.includes(e)) continue;
+      if (dist(g.x, g.y, e.x, e.y) > e.r + 12) continue;
+      const returning = g.leg === 1;
+      let crit = critRoll();
+      if (returning && boonLv("velret")) crit = true; // RETURN VELOCITY: returning hits crit
+      const a = g.leg === 0 ? g.ang : angTo(g.x, g.y, e.x, e.y);
+      hitEnemy(e, g.dmg, Math.cos(a) * 180, Math.sin(a) * 180, crit, true);
+      if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+      g.hitSet.push(e);
+      // RICOCHET: glaive can bounce toward another nearby foe (redirect the outbound leg)
+      if (boonLv("ricochet") && g.bounces < boonPow("ricochet") * 2) {
+        let tgt = null, bd = 220;
+        for (const o of enemies) {
+          if (o.hp <= 0 || g.hitSet.includes(o)) continue;
+          const dd = dist(g.x, g.y, o.x, o.y);
+          if (dd < bd) { bd = dd; tgt = o; }
+        }
+        if (tgt) { g.ang = angTo(g.x, g.y, tgt.x, tgt.y); g.bounces++; g.dist = Math.max(0, g.dist - 60); }
+      }
+    }
+    // collide with arena bounds -> start returning early
+    if (g.leg === 0 && (g.x < CONFIG.wall || g.x > CONFIG.arenaW - CONFIG.wall ||
+        g.y < CONFIG.wall || g.y > CONFIG.arenaH - CONFIG.wall)) { g.leg = 1; g.hitSet.length = 0; }
+    // trail spark
+    if (Math.random() < 0.5) addPart({ x: g.x, y: g.y, vx: rand(-20, 20), vy: rand(-20, 20), t: 0.25, tm: 0.25, col: g.col, r: rand(1, 2.4), drag: 1.5 });
+  }
+}
+
+/* glaive caught: free melee again, apply RETURN VELOCITY speed buff, recycle to the pool */
+function catchGlaive(g) {
+  const p = g.owner;
+  if (p) {
+    p.glaiveOut = false;
+    if (boonLv("velret")) p.velBuffT = Math.max(p.velBuffT || 0, 1.4 * boonPow("velret"));
+    ffx.spawnLight(p.x, p.y, 44, g.col, 0.4);
+  }
+  audio.glaiveCatch();
+  const i = glaives.indexOf(g);
+  if (i >= 0) glaives.splice(i, 1);
+  g.hitSet.length = 0; g.owner = null;
+  if (glaivePool.length < 24) glaivePool.push(g);
 }
 
 function tryBolt(p) {
@@ -2859,6 +3072,9 @@ function updatePlayer(p, dt) {
   p.comboT = Math.max(0, p.comboT - dt);
   p.frenzyT = Math.max(0, p.frenzyT - dt);
   if (p.frenzyT <= 0) p.frenzyN = 0;
+  p.prismT = Math.max(0, p.prismT - dt);
+  if (p.prismT <= 0) p.prismN = 0;
+  p.velBuffT = Math.max(0, (p.velBuffT || 0) - dt);
   p.boltCD = Math.max(0, p.boltCD - dt);
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
@@ -2885,7 +3101,7 @@ function updatePlayer(p, dt) {
   ctxP = p;
 
   // movement
-  const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12));
+  const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12)) * (p.velBuffT > 0 ? 1.25 : 1);
   if (p.dashT > 0) {
     p.dashT -= dt;
     p.vx = p.dashDX * CONFIG.dashSpeed;
@@ -3833,6 +4049,9 @@ function step(dt) {
   }
   singularities = singularities.filter((s) => s.t > 0);
 
+  // glaive thrown blades (pooled): fly out & return, hitting on both legs
+  updateGlaives(dt);
+
   // beams
   for (const bm of beams) bm.t -= dt;
   beams = beams.filter((bm) => bm.t > 0);
@@ -3945,6 +4164,7 @@ function drawLighting() {
       if (p.slashT > 0) { const W = weaponDefP(p); add(p.x + Math.cos(p.slashAng) * 30, p.y + Math.sin(p.slashAng) * 30, 70, W.col, 0.4); }
     }
   }
+  for (const g of glaives) add(g.x, g.y, 50, g.col, 0.34);
   for (const b of pbolts) add(b.x, b.y, 46, "#ff66ee", 0.32);
   for (const b of ebolts) add(b.x, b.y, 40, b.col, 0.26);
   for (const z of zones) add(z.x, z.y, 64, "#ffaa44", 0.3);
@@ -5146,6 +5366,34 @@ function drawHeldWeapon(W, hx, hy, recoil, fl) {
     ctx.beginPath(); ctx.arc(11, 0, 4, -1.1, 1.1); ctx.stroke();
     ctx.fillStyle = "#eaffff";
     ctx.beginPath(); ctx.arc(11, 0, 1.8, 0, TAU); ctx.fill();
+  } else if (W.id === "glaive") {
+    // glaive: a crescent throwing blade held flat
+    ctx.lineWidth = 2.5; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.arc(10 + recoil * 4, 0, 6, -2.2, 2.2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-2, 0); ctx.lineTo(6 + recoil * 4, 0); ctx.stroke(); // grip spoke
+    ctx.fillStyle = "#eafff6";
+    ctx.beginPath(); ctx.arc(10 + recoil * 4, 0, 1.6, 0, TAU); ctx.fill();
+  } else if (W.id === "whip") {
+    // chain whip: short haft trailing a dashed chain with a barbed tip
+    ctx.lineWidth = 2.5; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(7, 0); ctx.stroke();
+    ctx.setLineDash([2, 3]);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(7, 0); ctx.lineTo(20 + recoil * 8, 3 + recoil * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); // barb
+    ctx.moveTo(20 + recoil * 8, 3 + recoil * 2);
+    ctx.lineTo(24 + recoil * 8, 1 + recoil * 2); ctx.lineTo(22 + recoil * 8, 6 + recoil * 2);
+    ctx.closePath(); ctx.fill();
+  } else if (W.id === "prism") {
+    // prism saber: a faceted twin-edged crystal blade with an inner light core
+    ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-2, 0); ctx.lineTo(14 + recoil * 6, 0); ctx.stroke();
+    ctx.fillStyle = "#efeaff";
+    ctx.beginPath();
+    ctx.moveTo(14 + recoil * 6, 0); ctx.lineTo(9 + recoil * 6, -2.5); ctx.lineTo(9 + recoil * 6, 2.5);
+    ctx.closePath(); ctx.fill();
+    ctx.fillRect(-3, -1.5, 4, 3); // hilt
   } else { // grav — gravity flail: short haft + orb on a chain
     ctx.lineWidth = 2; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(8, 0); ctx.stroke();
@@ -5257,7 +5505,7 @@ function drawAndroid(p) {
   ctx.lineTo(handX - 2, handY);
   ctx.stroke();
   ctx.lineCap = "butt";
-  drawHeldWeapon(W, handX, handY, recoil, blink);
+  if (!p.glaiveOut) drawHeldWeapon(W, handX, handY, recoil, blink); // glaive: hide held blade while it's in flight
 
   ctx.restore();
 
@@ -5453,6 +5701,29 @@ function drawPlayerTag(p) {
   ctx.restore();
 }
 
+/* in-flight glaives: a spinning crescent blade with a motion-tinted afterglow */
+function drawGlaives() {
+  const detail = spriteDetail();
+  for (const g of glaives) {
+    bloomCircle(g.x, g.y, 22, g.col, 0.4);
+    ctx.save();
+    ctx.translate(g.x, g.y);
+    ctx.rotate(g.spin);
+    glow(g.col, 12);
+    ctx.strokeStyle = g.col;
+    ctx.lineWidth = 3; ctx.lineCap = "round";
+    // crescent blade: two opposed arcs
+    ctx.beginPath(); ctx.arc(0, 0, 10, -2.3, 2.3); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 10, Math.PI - 2.3, Math.PI + 2.3); ctx.stroke();
+    if (detail) {
+      ctx.fillStyle = "#eafff6";
+      ctx.beginPath(); ctx.arc(0, 0, 2.2, 0, TAU); ctx.fill();
+    }
+    noglow();
+    ctx.restore();
+  }
+}
+
 function drawBolts() {
   for (const b of pbolts) {
     bloomCircle(b.x, b.y, b.r * 4, "#ff66ee", 0.4);
@@ -5572,21 +5843,21 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — HEAT CONTRACT" : "PRESS E — HEAT CONTRACT", t.heatX, t.heatY - 48);
   }
-  // ARMORY weapon rack (武器架): cycle weapon forms — 6 forms in a 3x2 grid
+  // ARMORY weapon rack (武器架): cycle weapon forms — 9 forms in a 3x3 grid
   const Wsel = weaponDef();
   glow(Wsel.col, 16);
   ctx.fillStyle = "#121a2c";
-  rrect(t.rackX - 50, t.rackY - 30, 100, 56, 8); ctx.fill();
+  rrect(t.rackX - 50, t.rackY - 34, 100, 80, 8); ctx.fill();
   ctx.strokeStyle = Wsel.col;
   ctx.lineWidth = 2.5;
-  rrect(t.rackX - 50, t.rackY - 30, 100, 56, 8); ctx.stroke();
+  rrect(t.rackX - 50, t.rackY - 34, 100, 80, 8); ctx.stroke();
   noglow();
   const cols = 3;
   for (let i = 0; i < WEAPONS.length; i++) { // grid slots, current highlighted
     const w2 = WEAPONS[i];
     const sel = w2.id === curWeapon;
     const cx = t.rackX + ((i % cols) - 1) * 30;
-    const cy = t.rackY - 16 + Math.floor(i / cols) * 22;
+    const cy = t.rackY - 20 + Math.floor(i / cols) * 21;
     if (sel) glow(w2.col, 12);
     ctx.fillStyle = sel ? w2.col : "rgba(150,170,220,0.4)";
     ctx.font = "bold " + (sel ? 17 : 12) + "px 'Courier New', monospace";
@@ -5595,18 +5866,18 @@ function drawHubObjects() {
   }
   ctx.fillStyle = Wsel.col;
   ctx.font = "bold 10px 'Courier New', monospace";
-  ctx.fillText("ARMORY·" + Wsel.name, t.rackX, t.rackY + 18);
+  ctx.fillText("ARMORY·" + Wsel.name, t.rackX, t.rackY + 39);
   const rPulse = 0.5 + Math.sin(timeNow * 3 + 3) * 0.3;
   ctx.strokeStyle = "rgba(255,210,122," + rPulse * 0.6 + ")";
   ctx.beginPath(); ctx.arc(t.rackX, t.rackY, t.rackR, 0, TAU); ctx.stroke();
   ctx.fillStyle = "rgba(255,210,122,0.7)";
   ctx.font = "bold 11px 'Courier New', monospace";
-  ctx.fillText("武器架 " + Wsel.zh, t.rackX, t.rackY + t.rackR * 0.62 + 8);
+  ctx.fillText("武器架 " + Wsel.zh, t.rackX, t.rackY + t.rackR * 1.06 + 8);
   if (numPlayers > 1) { // show P2's separate armory pick
     const W2 = WEAPONS.find((w) => w.id === p2Weapon) || WEAPONS[0];
     ctx.fillStyle = PLAYER_SKINS[1].col;
     ctx.font = "bold 10px 'Courier New', monospace";
-    ctx.fillText("P2 " + W2.glyph + " " + W2.name, t.rackX, t.rackY + t.rackR * 0.62 + 22);
+    ctx.fillText("P2 " + W2.glyph + " " + W2.name, t.rackX, t.rackY + t.rackR * 1.06 + 22);
   }
   if (player && dist(player.x, player.y, t.rackX, t.rackY) < t.rackR + 30) {
     ctx.fillStyle = Wsel.col;
@@ -6067,7 +6338,7 @@ function drawTitle() {
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
-    "枢纽武器架：6 种武器形态与战绩终端 — hub ARMORY: 6 weapon forms · STATS terminal",
+    "枢纽武器架：9 种武器形态与战绩终端 — hub ARMORY: 9 weapon forms · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -6079,7 +6350,7 @@ function drawTitle() {
     "J 近战斩击 · 右Ctrl 发射光弹 — J slash / Right-Ctrl bolt (LMB/RMB too)",
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
-    "枢纽武器架：6 种武器形态与战绩终端 — hub ARMORY: 6 weapon forms · STATS terminal",
+    "枢纽武器架：9 种武器形态与战绩终端 — hub ARMORY: 9 weapon forms · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -6564,6 +6835,7 @@ function render() {
   drawSpawnTelegraphs();
   for (const e of enemies) drawEnemy(e);
   drawPlayer();
+  drawGlaives();
   drawBolts();
   drawBeamsParts();
   drawFxRings();
