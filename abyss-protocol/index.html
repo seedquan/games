@@ -45,6 +45,17 @@
              slashes/bolts auto-aim at the nearest enemy.
    Touch:    left half joystick, tap right half = slash,
              on-screen DASH / BOLT / FREEZE buttons.
+   Gamepad:  (PS4/PS5/Xbox standard mapping, navigator.getGamepads)
+             left stick move · right stick aim/fire dir (overrides auto-aim)
+             □ slash · R2 (or R1) bolt · × dash · △ (or L1) freeze
+             d-pad/left stick navigate menus · × confirm · ○ cancel
+             Options/Start = pause/start.  ~0.22 radial deadzone.
+   Co-op:    title/pause 1P/2P (单人/双人).  P1 = keyboard+mouse or pad1;
+             P2 = pad2 (if present) else keyboard (arrows move · . slash ·
+             / bolt · Enter dash · , freeze, auto-aim).  Shared cores & run
+             progress; each player has own HP/energy/dash/weapon and picks
+             their own boon.  HP=0 = DOWNED; a partner revives by standing
+             close ~3s; both down = game over.  Style meter shared.
    Hub ARMORY rack: 6 weapon forms (BLADE / LANCE / MAUL /
              TWIN FANG / ARC CASTER / GRAVITON MACE).
    Pause menu: EFFECTS toggle (F) cycles bloom/scanlines/shake
@@ -636,7 +647,18 @@ function cycleWeapon() {
   const i = WEAPONS.findIndex((w) => w.id === curWeapon);
   selectWeapon(WEAPONS[(i + 1) % WEAPONS.length].id);
   const W = weaponDef();
-  toast("WEAPON: " + W.name + " — " + W.zh, W.col);
+  if (players[0]) players[0].weapon = curWeapon; // live-apply to hub P1
+  toast((numPlayers > 1 ? "P1 " : "") + "WEAPON: " + W.name + " — " + W.zh, W.col);
+  audio.weaponSwap();
+}
+/* P2's own armory selection (separate from P1; persisted as p2weapon) */
+function cycleWeaponP2() {
+  const i = WEAPONS.findIndex((w) => w.id === p2Weapon);
+  p2Weapon = WEAPONS[(i + 1) % WEAPONS.length].id;
+  store.set("p2weapon", p2Weapon);
+  if (players[1]) players[1].weapon = p2Weapon;
+  const W = WEAPONS.find((w) => w.id === p2Weapon) || WEAPONS[0];
+  toast("P2 WEAPON: " + W.name + " — " + W.zh, W.col);
   audio.weaponSwap();
 }
 
@@ -715,7 +737,16 @@ function rollRarity() {
 let state = "title";   // title | hub | play | boon | shop | heat | summary
 let paused = false;
 let depth = 0, kills = 0, runCores = 0, roomsCleared = 0;
-let player = null;
+let player = null;          // legacy reference: always === players[0] (P1)
+let players = [];           // co-op: 1 or 2 local players (players[0] is P1)
+let ctxP = null;            // "current acting player" context for weapon/boon/damage helpers
+function setPlayerCount(n) { numPlayers = clamp(n | 0, 1, 2); store.set("players", String(numPlayers)); }
+let numPlayers = clamp(parseInt(store.get("players") || "1", 10) || 1, 1, 2);
+/* per-player visual identity (P1 cyan, P2 amber/magenta) */
+const PLAYER_SKINS = [
+  { tag: "P1", col: "#5ee6ff", colDash: "#aaf6ff", lowCol: "#ff5566" },
+  { tag: "P2", col: "#ffb14e", colDash: "#ffe0a0", lowCol: "#ff5566" },
+];
 let enemies = [], pbolts = [], ebolts = [], parts = [], dnums = [], beams = [];
 let pillars = [], doors = [], pickups = [], spawnQ = [], zones = [], toasts = [];
 let waves = [], waveIdx = 0, roomClear = false, boss = null;
@@ -727,9 +758,13 @@ let challengeT = 0, challengeFailed = false, fountainUsed = false;
 let lastFountainDepth = 0, lastSpecialDepth = 0;
 let eliteRoom = false, eliteSpawned = false;
 let bossName = "", bossBarMax = 0, lastBossKind = "";
-let rerollsLeft = 0, boonReturnToPlay = false;
-let boonChoices = [], boonFromStart = false;
-let uiRects = [];
+let rerollsLeft = 0;
+let boonChoices = [];
+/* co-op boon selection: queue of player indices still to pick, the per-pick context */
+let boonQueue = [], boonPickIdx = 0, boonAfter = null, boonMax = 3;
+let uiRects = [], menuHighlight = 0;
+let p2Weapon = store.get("p2weapon") || "lance";
+if (!WEAPONS.some((w) => w.id === p2Weapon)) p2Weapon = "lance";
 let touchUI = window.matchMedia && matchMedia("(pointer: coarse)").matches;
 let timeNow = 0;
 let bossWarnT = 0;
@@ -770,17 +805,27 @@ const nowMs = () => performance.now();
 let lastMouseT = nowMs();
 function mouseIdle() { return nowMs() - lastMouseT > 1500; }
 /* keyboard auto-aim: nearest enemy, else last movement direction */
-function kbAutoAim() {
-  if (!player) return;
-  const ne = nearestEnemy(player.x, player.y);
-  if (ne) player.aim = angTo(player.x, player.y, ne.x, ne.y);
-  else player.aim = Math.atan2(lastDir.y, lastDir.x);
+function kbAutoAim(p) {
+  p = p || player;
+  if (!p) return;
+  const ne = nearestEnemy(p.x, p.y);
+  if (ne) p.aim = angTo(p.x, p.y, ne.x, ne.y);
+  else p.aim = Math.atan2(p.lastDir.y, p.lastDir.x);
 }
 
 function anyStart() {
   audio.unlock();
   if (state === "title") { enterHub(); return true; }
   if (state === "summary") { enterHub(); return true; }
+  return false;
+}
+/* title-screen pointer hit-test: consumes a tap on the 1P/2P toggle (returns true). */
+function titleClick(x, y) {
+  for (const r of uiRects) {
+    if (r.act === "pcount" && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+      setPlayerCount(r.n); audio.uiSnd(); return true;
+    }
+  }
   return false;
 }
 
@@ -792,7 +837,12 @@ window.addEventListener("keydown", (e) => {
   if (isRCtrl) { e.preventDefault(); keys["ctrlRight"] = true; }
   audio.unlock();
   if (k === "m") { audio.toggleMute(); return; }
-  if (state === "title" || state === "summary") { anyStart(); return; }
+  if (state === "title") {
+    if (k === "1") { setPlayerCount(1); audio.uiSnd(); return; }
+    if (k === "2") { setPlayerCount(2); audio.uiSnd(); return; }
+    anyStart(); return;
+  }
+  if (state === "summary") { anyStart(); return; }
   if (k === "p" || k === "Escape") {
     if (state === "shop") { closeShop(); return; }
     if (state === "heat") { closeHeat(); return; }
@@ -829,9 +879,13 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   keys[k] = true;
-  if (k === " ") dashBuf = 0.15;
-  if (k === "j") slashBuf = 0.12;
-  if (k === "k" || k === "q") freezeBuf = 0.18;
+  // P1 (keyboard) buffered actions
+  const p1 = players[0];
+  if (p1) {
+    if (k === " ") p1.dashBuf = 0.15;
+    if (k === "j") p1.slashBuf = 0.12;
+    if (k === "k" || k === "q") p1.freezeBuf = 0.18;
+  }
   if (state === "hub" && (k === "e" || k === "Enter")) {
     if (player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) { openShop(); return; }
     if (player && dist(player.x, player.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) { openHeat(); return; }
@@ -854,11 +908,13 @@ canvas.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.c
 canvas.addEventListener("mousedown", (e) => {
   audio.unlock();
   mouse.x = e.clientX; mouse.y = e.clientY; lastMouseT = nowMs();
-  if (state === "title" || state === "summary") { anyStart(); return; }
+  if (state === "title") { if (titleClick(e.clientX, e.clientY)) return; anyStart(); return; }
+  if (state === "summary") { anyStart(); return; }
   if (paused) {
     for (const r of uiRects) {
-      if (r.act === "fxtoggle" && e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) {
-        ffx.cycleLevel(); return;
+      if (e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) {
+        if (r.act === "fxtoggle") { ffx.cycleLevel(); return; }
+        if (r.act === "pcount") { setPlayerCount(r.n); if (state === "hub") spawnPlayers(); audio.uiSnd(); return; }
       }
     }
     paused = false; return;
@@ -878,7 +934,7 @@ canvas.addEventListener("mousedown", (e) => {
     if (state === "hub" && player && dist(player.x, player.y, HUB.statX, HUB.statY) < HUB.statR + 30) {
       openStats(); mouse.left = false; return;
     }
-    slashBuf = 0.12;
+    if (players[0]) players[0].slashBuf = 0.12;
   }
   if (e.button === 2) mouse.right = true;
 });
@@ -899,11 +955,15 @@ canvas.addEventListener("touchstart", (e) => {
   audio.unlock();
   for (const t of e.changedTouches) {
     const x = t.clientX, y = t.clientY;
-    if (state === "title" || state === "summary") { anyStart(); continue; }
+    if (state === "title") { if (titleClick(x, y)) continue; anyStart(); continue; }
+    if (state === "summary") { anyStart(); continue; }
     if (paused) {
       let hit = false;
       for (const r of uiRects) {
-        if (r.act === "fxtoggle" && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { ffx.cycleLevel(); hit = true; break; }
+        if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+          if (r.act === "fxtoggle") { ffx.cycleLevel(); hit = true; break; }
+          if (r.act === "pcount") { setPlayerCount(r.n); if (state === "hub") spawnPlayers(); audio.uiSnd(); hit = true; break; }
+        }
       }
       if (!hit) paused = false;
       continue;
@@ -911,14 +971,14 @@ canvas.addEventListener("touchstart", (e) => {
     if (state === "boon" || state === "shop" || state === "heat" || state === "stats") { uiClick(x, y); continue; }
     const db = dashBtnPos(), bb = boltBtnPos();
     if (dist(x, y, db.x, db.y) < db.r + 10) {
-      touches[t.identifier] = { role: "dash" }; dashBuf = 0.15; continue;
+      touches[t.identifier] = { role: "dash" }; if (players[0]) players[0].dashBuf = 0.15; continue;
     }
     if (dist(x, y, bb.x, bb.y) < bb.r + 10) {
       touches[t.identifier] = { role: "bolt" }; boltHeld = true; continue;
     }
     const fb = freezeBtnPos();
     if (dist(x, y, fb.x, fb.y) < fb.r + 10) {
-      touches[t.identifier] = { role: "freeze" }; freezeBuf = 0.18; continue;
+      touches[t.identifier] = { role: "freeze" }; if (players[0]) players[0].freezeBuf = 0.18; continue;
     }
     if (x < cw * 0.45 && joy.id === -1) {
       joy.id = t.identifier; joy.bx = x; joy.by = y; joy.dx = 0; joy.dy = 0;
@@ -944,7 +1004,7 @@ canvas.addEventListener("touchstart", (e) => {
       const near = nearestEnemy(player.x, player.y, 420);
       if (near) player.aim = angTo(player.x, player.y, near.x, near.y);
       else player.aim = angTo(player.x, player.y, tx, ty);
-      slashBuf = 0.12;
+      if (players[0]) players[0].slashBuf = 0.12;
     }
   }
 }, { passive: false });
@@ -974,6 +1034,105 @@ function touchEnd(e) {
 }
 canvas.addEventListener("touchend", touchEnd, { passive: false });
 canvas.addEventListener("touchcancel", touchEnd, { passive: false });
+
+/* ---------------- §H2 GAMEPAD (PS4 / DualShock 4 · standard mapping) ---------------- */
+/* Standard-mapping button indices (PS4/PS5/Xbox):
+   0 = ×/A (dash), 1 = ○/B (cancel), 2 = □/X (slash), 3 = △/Y (freeze),
+   4 = L1, 5 = R1, 6 = L2, 7 = R2 (bolt), 8 = Share/Back, 9 = Options/Start (pause),
+   12-15 = D-pad up/down/left/right.
+   Axes: 0,1 = left stick; 2,3 = right stick. */
+const GP_DEADZONE = 0.22;
+const GP = {
+  connected: [false, false],         // per-slot connection flag
+  // per-pad held + edge state for menu/action edge detection
+  pads: [],                          // {b:[], bPrev:[], lx,ly,rx,ry}
+  navCD: 0,                          // menu navigation repeat cooldown
+};
+function gpInit(i) {
+  return { b: [], bPrev: [], lx: 0, ly: 0, rx: 0, ry: 0, active: false };
+}
+GP.pads[0] = gpInit(0); GP.pads[1] = gpInit(1);
+function gpDead(v) { return Math.abs(v) < GP_DEADZONE ? 0 : v; }
+/* radial deadzone on a stick pair, returns {x,y,mag} (mag scaled 0..1 past deadzone) */
+function gpStick(x, y) {
+  const m = Math.hypot(x, y);
+  if (m < GP_DEADZONE) return { x: 0, y: 0, mag: 0 };
+  const scaled = Math.min(1, (m - GP_DEADZONE) / (1 - GP_DEADZONE));
+  return { x: x / m * scaled, y: y / m * scaled, mag: scaled };
+}
+function gpButton(pad, i) { return !!(pad && pad.b[i]); }
+function gpPressed(pad, i) { return !!(pad && pad.b[i] && !pad.bPrev[i]); } // rising edge
+function gpAnyPressed(pad) {
+  if (!pad) return false;
+  for (let i = 0; i < pad.b.length; i++) if (pad.b[i] && !pad.bPrev[i]) return true;
+  return false;
+}
+let _gpToastT = 0;
+window.addEventListener("gamepadconnected", (e) => {
+  const idx = e.gamepad.index < 2 ? e.gamepad.index : 0;
+  GP.connected[idx] = true;
+  toast("手柄已连接 P" + (idx + 1) + " — Gamepad connected", "#5ee6ff");
+  audio.unlock && audio.unlock();
+});
+window.addEventListener("gamepaddisconnected", (e) => {
+  const idx = e.gamepad.index < 2 ? e.gamepad.index : 0;
+  GP.connected[idx] = false;
+  toast("手柄断开 P" + (idx + 1) + " — Gamepad disconnected", "#ff7755");
+});
+/* poll the Gamepad API once per render frame; updates GP.pads held/edge/stick state */
+function pollGamepads() {
+  const list = (navigator.getGamepads && navigator.getGamepads()) || [];
+  for (let slot = 0; slot < 2; slot++) {
+    const pad = GP.pads[slot];
+    // shift current -> prev for edge detection
+    pad.bPrev = pad.b;
+    const g = list[slot];
+    if (!g) { pad.b = []; pad.active = false; pad.lx = pad.ly = pad.rx = pad.ry = 0; GP.connected[slot] = false; continue; }
+    GP.connected[slot] = true;
+    pad.active = true;
+    const nb = [];
+    for (let i = 0; i < g.buttons.length; i++) nb[i] = g.buttons[i] && g.buttons[i].pressed;
+    pad.b = nb;
+    const ax = g.axes || [];
+    pad.lx = gpDead(ax[0] || 0); pad.ly = gpDead(ax[1] || 0);
+    pad.rx = gpDead(ax[2] || 0); pad.ry = gpDead(ax[3] || 0);
+  }
+}
+function anyGamepad() { return GP.connected[0] || GP.connected[1]; }
+/* which physical pad drives a given player slot:
+   - if 2 pads: pad0 -> P1, pad1 -> P2
+   - if 1 pad: it drives P1 (P2 falls back to keyboard set) */
+function padForPlayer(idx) {
+  if (numPlayers > 1) {
+    // 2P: pad slot maps directly to player slot (pad0->P1, pad1->P2)
+    return GP.connected[idx] ? GP.pads[idx] : null;
+  }
+  // solo: the first connected pad drives P1
+  if (idx !== 0) return null;
+  if (GP.connected[0]) return GP.pads[0];
+  if (GP.connected[1]) return GP.pads[1];
+  return null;
+}
+/* gamepad menu navigation: returns -1/0/+1 step from d-pad or left stick, rate-limited */
+function gpMenuStep(dt) {
+  GP.navCD = Math.max(0, GP.navCD - dt);
+  let nav = 0, vert = 0;
+  for (const pad of GP.pads) {
+    if (!pad || !pad.active) continue;
+    if (gpButton(pad, 14) || pad.lx < -0.5) nav = -1;
+    else if (gpButton(pad, 15) || pad.lx > 0.5) nav = 1;
+    if (gpButton(pad, 12) || pad.ly < -0.5) vert = -1;
+    else if (gpButton(pad, 13) || pad.ly > 0.5) vert = 1;
+  }
+  return { nav, vert };
+}
+/* any pad confirm (× / cross / button 0) edge — also doubles as "start" */
+function gpConfirm() {
+  for (const pad of GP.pads) if (gpPressed(pad, 0)) return true;
+  return false;
+}
+function gpCancel() { for (const pad of GP.pads) if (gpPressed(pad, 1)) return true; return false; }
+function gpStartPressed() { for (const pad of GP.pads) if (gpPressed(pad, 9) || gpPressed(pad, 0)) return true; return false; }
 
 /* ---------------- §I FX HELPERS ---------------- */
 function addPart(p) {
@@ -1070,10 +1229,15 @@ function rebuildFxGrads() { fxLightGrad = null; }
 function spriteDetail() { return ffx.level === "full" && !touchUI; }
 
 /* ---------------- §J PLAYER ---------------- */
-function newPlayer() {
+function newPlayer(idx) {
+  idx = idx | 0;
   const maxHp = CONFIG.playerHP + meta.hp * 15;
   const dashes = 1 + Math.min(meta.dash || 0, 4); // dash charges capped; extra levels = recharge speed
+  const skin = PLAYER_SKINS[idx] || PLAYER_SKINS[0];
+  // per-player weapon: P1 uses curWeapon (the armory selection), P2 its own remembered pick
+  const wep = idx === 0 ? curWeapon : p2Weapon;
   return {
+    idx, tag: skin.tag, col: skin.col, colDash: skin.colDash, weapon: wep,
     x: CONFIG.arenaW / 2, y: CONFIG.arenaH - 90,
     vx: 0, vy: 0, r: CONFIG.playerR, aim: -Math.PI / 2,
     hp: maxHp, maxHp,
@@ -1089,68 +1253,103 @@ function newPlayer() {
     freezeCD: 0, freezeCDMax: 0, buyCD: 0,
     meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
     boons: {}, boonPow: {}, boonBest: {},
+    downed: false, reviveT: 0,         // co-op down/revive state
+    slashBuf: 0, dashBuf: 0, freezeBuf: 0, lastDir: { x: 1, y: 0 }, // per-player buffered inputs
   };
 }
-function boonLv(id) { return (player && player.boons[id]) || 0; }
+/* per-player weapon def (falls back to the context/legacy player) */
+function weaponDefP(p) { p = p || ctxP || player; const id = (p && p.weapon) || curWeapon; return WEAPONS.find((w) => w.id === id) || WEAPONS[0]; }
+function boonLv(id) { const p = ctxP || player; return (p && p.boons[id]) || 0; }
 /* rarity-scaled boon power: sum of rarity multipliers across picks of this boon */
-function boonPow(id) { return (player && player.boonPow && player.boonPow[id]) || 0; }
+function boonPow(id) { const p = ctxP || player; return (p && p.boonPow && p.boonPow[id]) || 0; }
 function dmgMul() { return 1 + meta.dmg * 0.10; }
 function dashRegenMul() { return 1 + 0.05 * Math.max(0, (meta.dash || 0) - 4); }
-function meleeDamage() { return CONFIG.meleeDmg * weaponDef().dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * player.meleeMul; }
+function meleeDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weaponDefP(p).dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * p.meleeMul; }
 function boltDamage() {
+  const p = ctxP || player;
   const splitX = Math.max(0, boonPow("split") - boonLv("split")); // tri-cannon rarity bonus
-  return CONFIG.boltDmg * dmgMul() * (1 + boonPow("over") * 0.35) * (1 + splitX * 0.06) * player.boltMul;
+  return CONFIG.boltDmg * dmgMul() * (1 + boonPow("over") * 0.35) * (1 + splitX * 0.06) * p.boltMul;
 }
-function critRoll() { return Math.random() < Math.min(0.85, (weaponDef().critBase || 0) + boonPow("crit") * 0.15); }
-function meleeRangeNow() { return (CONFIG.meleeRange + Math.min(64, boonPow("arc") * 12)) * weaponDef().rangeMul; }
+function critRoll() { return Math.random() < Math.min(0.85, (weaponDefP().critBase || 0) + boonPow("crit") * 0.15); }
+function meleeRangeNow() { return (CONFIG.meleeRange + Math.min(64, boonPow("arc") * 12)) * weaponDefP().rangeMul; }
 function meleeArcNow() {
-  if (curWeapon === "maul") return TAU; // maul: full 360° slam
-  return CONFIG.meleeArc * Math.min(2.4, 1 + boonPow("arc") * 0.35) * weaponDef().arcMul;
+  if (weaponDefP().id === "maul") return TAU; // maul: full 360° slam
+  return CONFIG.meleeArc * Math.min(2.4, 1 + boonPow("arc") * 0.35) * weaponDefP().arcMul;
 }
 
-function applyBoon(id, rar) {
+function applyBoon(id, rar, who) {
   rar = rar || 0;
+  const p = who || ctxP || player;
   const R = RARITIES[rar];
-  player.boons[id] = (player.boons[id] || 0) + 1;
-  player.boonPow[id] = (player.boonPow[id] || 0) + R.mul;
-  player.boonBest[id] = Math.max(player.boonBest[id] || 0, rar);
+  p.boons[id] = (p.boons[id] || 0) + 1;
+  p.boonPow[id] = (p.boonPow[id] || 0) + R.mul;
+  p.boonBest[id] = Math.max(p.boonBest[id] || 0, rar);
   const b = boonById(id);
-  toast((rar > 0 ? R.name + " " : "") + b.name + (player.boons[id] > 1 ? " " + "II III".split(" ")[player.boons[id] - 2] : ""), rar > 0 ? R.col : b.col);
+  toast((numPlayers > 1 ? p.tag + " " : "") + (rar > 0 ? R.name + " " : "") + b.name + (p.boons[id] > 1 ? " " + "II III".split(" ")[p.boons[id] - 2] : ""), rar > 0 ? R.col : b.col);
   if (id === "wind") { /* passive */ }
   audio.boon();
-  burst(player.x, player.y, R.col, 26, 220, 0.7, 3);
+  burst(p.x, p.y, R.col, 26, 220, 0.7, 3);
   // rarity-colored pickup flourish: expanding ring(s) + light burst
-  ffx.ring(player.x, player.y, 60 + rar * 16, R.col, 0.6, 4 + rar);
-  if (rar >= 2) ffx.ring(player.x, player.y, 90 + rar * 20, R.col, 0.7, 3);
-  ffx.spawnLight(player.x, player.y, 120, R.col, 0.7);
-  if (rar >= 3) ffx.pulse(player.x, player.y, 6); // legendary flash
+  ffx.ring(p.x, p.y, 60 + rar * 16, R.col, 0.6, 4 + rar);
+  if (rar >= 2) ffx.ring(p.x, p.y, 90 + rar * 20, R.col, 0.7, 3);
+  ffx.spawnLight(p.x, p.y, 120, R.col, 0.7);
+  if (rar >= 3) ffx.pulse(p.x, p.y, 6); // legendary flash
 }
-/* weapon-exclusive boons appear only for the wielded weapon form */
-function boonPool() {
-  return BOONS.filter((b) => boonLv(b.id) < b.max && (!b.weapon || b.weapon === curWeapon));
+/* weapon-exclusive boons appear only for the wielded weapon form (of the selecting player) */
+function boonPool(who) {
+  const wep = (who && who.weapon) || curWeapon;
+  const lv = (id) => (who ? (who.boons[id] || 0) : boonLv(id));
+  return BOONS.filter((b) => lv(b.id) < b.max && (!b.weapon || b.weapon === wep));
 }
-function rollBoons() {
-  const avail = boonPool();
+function rollBoons(who, max) {
+  const avail = boonPool(who);
   const out = [];
   const pool = avail.slice();
-  while (out.length < 3 && pool.length) {
+  const lim = max || 3;
+  while (out.length < lim && pool.length) {
     const i = Math.floor(Math.random() * pool.length);
     out.push({ b: pool.splice(i, 1)[0], rar: rollRarity() });
   }
   return out;
 }
+/* Co-op boon rule: each player chooses their OWN boon from a separate offer,
+   applied per-player. Players pick in turn (P1 then P2). Solo = single pick. */
+function beginBoonSelection(afterFn, max) {
+  boonAfter = afterFn || nextRoom;
+  menuHighlight = 0;
+  boonQueue = players.filter((p) => p && !p.downed).map((p) => p.idx);
+  if (boonQueue.length === 0) boonQueue = [0];
+  advanceBoonPick(max);
+}
+function advanceBoonPick(max) {
+  if (boonQueue.length === 0) { finishBoonSelection(); return; }
+  boonPickIdx = boonQueue[0];
+  const who = players[boonPickIdx] || players[0];
+  boonChoices = rollBoons(who, max);
+  menuHighlight = 0;
+  if (boonChoices.length === 0) { boonQueue.shift(); advanceBoonPick(max); return; }
+  state = "boon";
+}
+function finishBoonSelection() {
+  boonChoices = [];
+  const fn = boonAfter; boonAfter = null;
+  if (fn) fn();
+}
 function pickBoon(i) {
   if (i < 0 || i >= boonChoices.length) return;
-  applyBoon(boonChoices[i].b.id, boonChoices[i].rar);
+  const who = players[boonPickIdx] || players[0];
+  applyBoon(boonChoices[i].b.id, boonChoices[i].rar, who);
   boonChoices = [];
-  if (boonReturnToPlay) { boonReturnToPlay = false; state = "play"; return; } // bought at shop
-  if (boonFromStart) { boonFromStart = false; nextRoom(); }
-  else nextRoom();
+  if (boonQueue.length) boonQueue.shift();
+  if (boonQueue.length) { advanceBoonPick(boonMax); return; }
+  finishBoonSelection();
 }
 function rerollBoons() {
   if (rerollsLeft <= 0) return;
   rerollsLeft--;
-  boonChoices = rollBoons();
+  const who = players[boonPickIdx] || players[0];
+  boonChoices = rollBoons(who, boonMax);
+  menuHighlight = 0;
   audio.uiSnd();
 }
 
@@ -1278,7 +1477,8 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (e.hp <= 0) return;
   let mul = isCrit ? 2.5 : 1;
   if (e.frozenT > 0) { // shatter: frozen targets take bonus damage
-    mul *= 1.3 + 0.4 * boonPow("shatter") + (player ? player.frozenBonus : 0);
+    const sp = ctxP || player;
+    mul *= 1.3 + 0.4 * boonPow("shatter") + (sp ? sp.frozenBonus : 0);
     burst(e.x, e.y, "#cfeeff", 10, 230, 0.45, 3);
     audio.shatter();
   }
@@ -1298,7 +1498,8 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (melee) {
     freezeT = Math.max(freezeT, CONFIG.hitStop);
     if (boonLv("steal")) {
-      player.hp = Math.min(player.maxHp, player.hp + Math.max(1, Math.round(boonPow("steal"))));
+      const sp = ctxP || player;
+      sp.hp = Math.min(sp.maxHp, sp.hp + Math.max(1, Math.round(boonPow("steal"))));
     }
   }
   if (e.hp <= 0) killEnemy(e);
@@ -1391,9 +1592,7 @@ function explodeBomber(e) {
   burst(e.x, e.y, "#ffe0aa", 12, 260, 0.35, 3);
   shake(7, 0.3);
   audio.enemyDie(true);
-  if (player && player.hp > 0 && dist(e.x, e.y, player.x, player.y) < R + player.r) {
-    damagePlayer(15 * eDmgMul(), angTo(e.x, e.y, player.x, player.y), null);
-  }
+  damagePlayersInRadius(e.x, e.y, R, 15 * eDmgMul(), null);
   const ex = e.x, ey = e.y;
   killEnemy(e);
   for (const o of enemies) {
@@ -1416,11 +1615,12 @@ function styleKill() {
     styleRank = r;
     stylePop = 0.45;
     if (r === 3) audio.styleChime(); else audio.styleUp(r);
-    // rank-up flash centered on the player
-    if (player) {
-      ffx.ring(player.x, player.y, 70 + r * 18, STYLE_RANKS[r].col, 0.5, 4);
-      ffx.spawnLight(player.x, player.y, 120, STYLE_RANKS[r].col, 0.6);
-      if (r === 3) ffx.pulse(player.x, player.y, 7);
+    // rank-up flash centered on the killing player
+    const sp = ctxP || player;
+    if (sp) {
+      ffx.ring(sp.x, sp.y, 70 + r * 18, STYLE_RANKS[r].col, 0.5, 4);
+      ffx.spawnLight(sp.x, sp.y, 120, STYLE_RANKS[r].col, 0.6);
+      if (r === 3) ffx.pulse(sp.x, sp.y, 7);
     }
   }
   if (styleRank > styleBestRoom) styleBestRoom = styleRank;
@@ -1455,11 +1655,12 @@ function killEnemy(e) {
     if (alive === 0) slowmoT = 0.5;
   }
   if (boonLv("reset")) {
-    player.dashCharges = Math.min(player.dashMax, player.dashCharges + 1);
-    player.dashCD = 0;
+    const kp = ctxP || player;
+    kp.dashCharges = Math.min(kp.dashMax, kp.dashCharges + 1);
+    kp.dashCD = 0;
     // rarity bonus: above-common KILL DRIVE also refunds a little energy
     const xPow = Math.max(0, boonPow("reset") - 1);
-    if (xPow > 0) player.energy = Math.min(player.maxEnergy, player.energy + 6 * xPow);
+    if (xPow > 0) kp.energy = Math.min(kp.maxEnergy, kp.energy + 6 * xPow);
   }
   // core drops (splitter fragments drop a share each)
   let n = e.type === "boss" ? (e.gen ? randi(3, 5) : randi(14, 18)) : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
@@ -1473,32 +1674,50 @@ function killEnemy(e) {
   if (e === boss) boss = null;
 }
 
-function damagePlayer(d, ang, attacker) {
-  if (!player || player.hp <= 0) return;
-  if (player.ifr > 0 || player.hurtT > 0) return;
+/* damagePlayer: victim is an explicit player (defaults to legacy players[0]).
+   The boon context (thorns) reads the victim's boons. */
+function damagePlayer(d, ang, attacker, victim) {
+  const p = victim || player;
+  if (!p || p.hp <= 0 || p.downed) return;
+  if (p.ifr > 0 || p.hurtT > 0) return;
+  const prevCtx = ctxP; ctxP = p;
   if (boonLv("thorn") && attacker && attacker.hp > 0) {
     hitEnemy(attacker, Math.round(9 * boonPow("thorn")), Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
   }
-  player.hp -= d;
-  player.hurtT = CONFIG.hurtIfr;
-  player.vx += Math.cos(ang) * 220;
-  player.vy += Math.sin(ang) * 220;
+  ctxP = prevCtx;
+  p.hp -= d;
+  p.hurtT = CONFIG.hurtIfr;
+  p.vx += Math.cos(ang) * 220;
+  p.vy += Math.sin(ang) * 220;
   redFlash = 0.35;
   shake(7, 0.3);
-  burst(player.x, player.y, "#ff4455", 16, 240, 0.5, 3);
-  dnum(player.x, player.y - 18, String(Math.round(d)), "#ff5566", false);
+  burst(p.x, p.y, "#ff4455", 16, 240, 0.5, 3);
+  dnum(p.x, p.y - 18, String(Math.round(d)), "#ff5566", false);
   audio.hurt();
-  if (player.hp <= 0) {
-    player.hp = 0;
-    playerDie();
+  if (p.hp <= 0) {
+    p.hp = 0;
+    playerDie(p);
   }
 }
 
-function playerDie() {
-  burst(player.x, player.y, "#5ee6ff", 60, 380, 1.2, 4);
-  burst(player.x, player.y, "#ffffff", 24, 280, 0.6, 3);
+function playerDie(p) {
+  p = p || player;
+  burst(p.x, p.y, p.col || "#5ee6ff", 60, 380, 1.2, 4);
+  burst(p.x, p.y, "#ffffff", 24, 280, 0.6, 3);
   audio.death();
   shake(14, 0.7);
+  // CO-OP: a single player going down becomes "downed" and can be revived.
+  // Only a true game-over (run end) when solo dies or BOTH co-op players are down.
+  if (players.length > 1) {
+    p.downed = true; p.reviveT = 0; p.vx = 0; p.vy = 0;
+    toast(p.tag + " 倒下 — DOWNED · revive nearby", "#ff5566");
+    if (allDowned()) endRun();
+    return;
+  }
+  endRun();
+}
+
+function endRun() {
   if (depth > best) { best = depth; }
   if (depth > stats.deepest) stats.deepest = depth;
   saveMeta();
@@ -1507,21 +1726,23 @@ function playerDie() {
 }
 
 /* ---------------- §L BULLETS / ZONES ---------------- */
-function firePlayerBolt() {
+function firePlayerBolt(p) {
+  p = p || ctxP || player;
+  ctxP = p;
   const n = 1 + boonLv("split") * 2;
   const spread = 0.2;
   for (let i = 0; i < n; i++) {
     const off = n === 1 ? 0 : (i - (n - 1) / 2) * spread;
-    const a = player.aim + off;
+    const a = p.aim + off;
     pbolts.push({
-      x: player.x + Math.cos(a) * 16, y: player.y + Math.sin(a) * 16,
+      x: p.x + Math.cos(a) * 16, y: p.y + Math.sin(a) * 16,
       vx: Math.cos(a) * CONFIG.boltSpeed, vy: Math.sin(a) * CONFIG.boltSpeed,
-      r: 5, t: 1.6, pierce: Math.round(boonPow("pierce") * 2), hitSet: [],
+      r: 5, t: 1.6, pierce: Math.round(boonPow("pierce") * 2), hitSet: [], owner: p,
     });
   }
   audio.bolt();
-  player.recoilT = Math.max(player.recoilT, 0.12); // arm kick on bolt fire
-  burst(player.x + Math.cos(player.aim) * 18, player.y + Math.sin(player.aim) * 18, "#ff66ee", 5, 120, 0.2, 2);
+  p.recoilT = Math.max(p.recoilT, 0.12); // arm kick on bolt fire
+  burst(p.x + Math.cos(p.aim) * 18, p.y + Math.sin(p.aim) * 18, "#ff66ee", 5, 120, 0.2, 2);
 }
 
 function fireEbolt(x, y, a, spd, dmg, col, r) {
@@ -1699,9 +1920,7 @@ function explodeBarrel(b) {
   ffx.spawnLight(b.x, b.y, R + 30, "#ffb050", 0.9);
   ffx.pulse(b.x, b.y, 8); // barrel chain distortion pulse
   audio.barrelBoom();
-  if (player && player.hp > 0 && dist(b.x, b.y, player.x, player.y) < R + player.r) {
-    damagePlayer(14 * eDmgMul(), angTo(b.x, b.y, player.x, player.y), null);
-  }
+  damagePlayersInRadius(b.x, b.y, R, 14 * eDmgMul(), null);
   for (const e of enemies) {
     if (e.hp <= 0 || dist(b.x, b.y, e.x, e.y) >= R + e.r) continue;
     const a = angTo(b.x, b.y, e.x, e.y);
@@ -1719,9 +1938,11 @@ function updateHazards(dt) {
     if (h.t >= h.period) h.t -= h.period;
     if (h.kind === "spike") {
       if (!spikeActive(h)) continue;
-      if (player && player.hp > 0 &&
-          Math.abs(player.x - h.x) < h.s + player.r * 0.4 && Math.abs(player.y - h.y) < h.s + player.r * 0.4) {
-        damagePlayer(10 * eDmgMul(), angTo(h.x, h.y, player.x + rand(-1, 1), player.y + rand(-1, 1)), null);
+      for (const p of players) {
+        if (p.downed || p.hp <= 0) continue;
+        if (Math.abs(p.x - h.x) < h.s + p.r * 0.4 && Math.abs(p.y - h.y) < h.s + p.r * 0.4) {
+          damagePlayer(10 * eDmgMul(), angTo(h.x, h.y, p.x + rand(-1, 1), p.y + rand(-1, 1)), null, p);
+        }
       }
       for (const e of enemies) {
         if (e.hp <= 0 || e.spawnT > 0 || (e.hazCD || 0) > 0) continue;
@@ -1733,11 +1954,12 @@ function updateHazards(dt) {
       }
     } else if (h.kind === "fence") {
       if (!fenceOn(h)) continue;
-      if (player && player.hp > 0) {
-        const sd = segDist(player.x, player.y, h.x1, h.y1, h.x2, h.y2);
-        if (sd.d < 7 + player.r) {
-          damagePlayer(9 * eDmgMul(), angTo(sd.cx, sd.cy, player.x, player.y), null);
-          pushFromSeg(player, sd, 7 + player.r);
+      for (const p of players) {
+        if (p.downed || p.hp <= 0) continue;
+        const sd = segDist(p.x, p.y, h.x1, h.y1, h.x2, h.y2);
+        if (sd.d < 7 + p.r) {
+          damagePlayer(9 * eDmgMul(), angTo(sd.cx, sd.cy, p.x, p.y), null, p);
+          pushFromSeg(p, sd, 7 + p.r);
         }
       }
       for (const e of enemies) {
@@ -1781,12 +2003,12 @@ function genRoom() {
   coreFloatN = 0; coreFloatT = 0;
   roomClear = false; waveIdx = 0; shopRoom = false;
   challengeT = 0; challengeFailed = false; fountainUsed = false;
+  for (const p of players) p.fountainUsed = false;
   eliteRoom = false; eliteSpawned = false;
   roomType = pendingRoom || (isBossDepth(depth) ? "boss" : "normal");
   pendingRoom = null;
   runTrack[depth] = roomType;
-  player.x = CONFIG.arenaW / 2; player.y = CONFIG.arenaH - 90;
-  player.vx = 0; player.vy = 0;
+  placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH - 90);
   roomFade = 1;
   if (roomType === "shop") {
     // Charon-style shop room: combat-free, pedestals priced in cores
@@ -1905,11 +2127,11 @@ function openDoors(quiet) {
 function enterDoor(d) {
   const r = d.reward;
   if (r === "hp") {
-    player.maxHp += 12; player.hp = Math.min(player.maxHp, player.hp + 24);
+    for (const p of players) { p.maxHp += 12; p.hp = Math.min(p.maxHp, p.hp + 24); }
     toast("+12 MAX HP", "#ff6677"); audio.boon();
     nextRoom();
   } else if (r === "energy") {
-    player.maxEnergy += 14; player.energy = player.maxEnergy;
+    for (const p of players) { p.maxEnergy += 14; p.energy = p.maxEnergy; }
     toast("+14 MAX ENERGY", "#ff66ee"); audio.boon();
     nextRoom();
   } else if (r === "cores") {
@@ -1921,9 +2143,8 @@ function enterDoor(d) {
     pendingRoom = r;
     nextRoom();
   } else {
-    boonChoices = rollBoons();
-    if (boonChoices.length) state = "boon";
-    else nextRoom();
+    boonMax = 3;
+    beginBoonSelection(nextRoom, 3);
   }
 }
 
@@ -1969,16 +2190,17 @@ function makeTreasureStock() {
   }));
 }
 
-function pedestalUnder() {
-  if (!player) return null;
+function pedestalUnder(who) {
+  who = who || player;
+  if (!who) return null;
   for (const pd of pedestals) {
-    if (!pd.sold && dist(player.x, player.y, pd.x, pd.y) < 36) return pd;
+    if (!pd.sold && dist(who.x, who.y, pd.x, pd.y) < 36) return pd;
   }
   return null;
 }
 
-function tryBuyPedestal(pd) {
-  const p = player;
+function tryBuyPedestal(pd, who) {
+  const p = who || player;
   if (p.buyCD > 0) return;
   p.buyCD = 0.35;
   if (pd.price > 0 && cores < pd.price) { audio.deny(); toast("NOT ENOUGH CORES", "#ff5566"); return; }
@@ -1986,19 +2208,25 @@ function tryBuyPedestal(pd) {
   saveMeta(); // sync spend with persistent store
   pd.sold = true;
   if (roomType === "treasure") for (const pd2 of pedestals) pd2.sold = true; // one free pick only
-  applyShopItem(pd.item);
+  applyShopItem(pd.item, p);
   audio.buy();
   burst(pd.x, pd.y, pd.item.col, 22, 220, 0.6, 3);
   toast(pd.item.name, pd.item.col);
 }
 
-function applyShopItem(it) {
-  const p = player;
+function applyShopItem(it, who) {
+  const p = who || ctxP || player;
   if (it.id === "heal") p.hp = Math.min(p.maxHp, p.hp + Math.round(p.maxHp * 0.4));
   else if (it.id === "maxhp") { p.maxHp += 20; p.hp += 20; }
   else if (it.id === "boon" || it.id === "tboon") {
-    boonChoices = rollBoons().slice(0, 1);
-    if (boonChoices.length) { boonReturnToPlay = true; state = "boon"; }
+    // boon purchase: only the buyer chooses (one boon), then resume play
+    boonAfter = () => { state = "play"; };
+    boonQueue = [p.idx];
+    boonPickIdx = p.idx;
+    boonMax = 1;
+    boonChoices = rollBoons(p, 1);
+    menuHighlight = 0;
+    if (boonChoices.length) { state = "boon"; } else { boonAfter = null; boonQueue = []; }
   }
   else if (it.id === "dash") { p.dashMax++; p.dashCharges++; }
   else if (it.id === "fcd") p.freezeCDMul *= 0.75;
@@ -2010,12 +2238,55 @@ function applyShopItem(it) {
 }
 
 /* ---------------- §N HUB / RUN FLOW ---------------- */
+/* (re)build the players[] array for the current numPlayers; players[0] stays P1 (=== player) */
+function spawnPlayers() {
+  players = [];
+  for (let i = 0; i < numPlayers; i++) players.push(newPlayer(i));
+  player = players[0];
+  ctxP = players[0];
+  placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH * 0.62);
+}
+/* arrange players around a spawn anchor so they don't fully overlap */
+function placePlayers(cx, cy) {
+  if (players.length <= 1) {
+    if (players[0]) { players[0].x = cx; players[0].y = cy; players[0].vx = 0; players[0].vy = 0; }
+    return;
+  }
+  const off = 34;
+  players.forEach((p, i) => {
+    p.x = cx + (i === 0 ? -off : off);
+    p.y = cy;
+    p.vx = 0; p.vy = 0;
+  });
+}
+/* any alive (not downed, hp>0) player nearest to (x,y); used by enemy targeting */
+function nearestPlayer(x, y, includeDowned) {
+  let best = null, bd = Infinity;
+  for (const p of players) {
+    if (!p) continue;
+    if (!includeDowned && (p.downed || p.hp <= 0)) continue;
+    const d = dist(x, y, p.x, p.y);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+/* enemy aggro target: nearest non-downed player, else any player (so AI never stalls) */
+function targetFor(e) { return nearestPlayer(e.x, e.y, false) || nearestPlayer(e.x, e.y, true) || player; }
+function allDowned() { return players.length > 0 && players.every((p) => p.downed || p.hp <= 0); }
+function anyLowHp() { for (const p of players) if (p && p.hp > 0 && !p.downed && p.hp < p.maxHp * 0.25) return true; return false; }
+/* damage every alive player whose body overlaps a circle (radius R + their r) */
+function damagePlayersInRadius(x, y, R, dmg, attacker) {
+  for (const p of players) {
+    if (p.downed || p.hp <= 0) continue;
+    if (dist(x, y, p.x, p.y) < R + p.r) damagePlayer(dmg, angTo(x, y, p.x, p.y), attacker, p);
+  }
+}
+
 function enterHub() {
   state = "hub";
   paused = false;
   depth = 0; kills = 0; runCores = 0; roomsCleared = 0;
-  player = newPlayer();
-  player.x = CONFIG.arenaW / 2; player.y = CONFIG.arenaH * 0.62;
+  spawnPlayers();
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; pillars = []; boss = null; toasts = [];
   mortars = []; novas = []; pedestals = []; shopRoom = false; pendingRoom = null;
@@ -2034,7 +2305,7 @@ function enterHub() {
 function startRun() {
   kills = 0; runCores = 0; roomsCleared = 0; depth = 0;
   lastShopDepth = 0; lastFountainDepth = 0; lastSpecialDepth = 0;
-  pendingRoom = null; boonReturnToPlay = false;
+  pendingRoom = null;
   runTrack = []; slowmoT = 0;
   stats.runs++;
   stats.weapon[curWeapon] = (stats.weapon[curWeapon] | 0) + 1;
@@ -2044,26 +2315,24 @@ function startRun() {
   runHeat = Object.assign({}, heat);
   runHeatPts = heatTotal(runHeat);
   coreFrac = 0;
-  player = newPlayer(); // fresh boons each run
+  spawnPlayers(); // fresh boons each run
   if (runHeat.lowhp) { // FRAGILE FRAME: -25% max HP
-    player.maxHp = Math.max(20, Math.round(player.maxHp * 0.75));
-    player.hp = player.maxHp;
+    for (const p of players) { p.maxHp = Math.max(20, Math.round(p.maxHp * 0.75)); p.hp = p.maxHp; }
   }
   if (runHeatPts > 0) toast("HEAT " + runHeatPts + " — 契约生效 · cores +" + runHeatPts * 25 + "%", "#ff7755");
+  if (numPlayers > 1) toast("CO-OP — P1 " + (WEAPONS.find((w) => w.id === players[0].weapon) || {}).name + " · P2 " + (WEAPONS.find((w) => w.id === players[1].weapon) || {}).name, "#ffb14e");
   if (meta.boon > 0) {
-    boonChoices = rollBoons();
-    boonFromStart = true;
-    state = "boon";
+    beginBoonSelection(nextRoom, 3);
   } else {
     nextRoom();
   }
 }
 
-function openShop() { state = "shop"; audio.uiSnd(); }
+function openShop() { state = "shop"; menuHighlight = 0; audio.uiSnd(); }
 function closeShop() { state = "hub"; audio.uiSnd(); }
-function openStats() { state = "stats"; audio.uiSnd(); }
+function openStats() { state = "stats"; menuHighlight = 0; audio.uiSnd(); }
 function closeStats() { state = "hub"; audio.uiSnd(); }
-function openHeat() { state = "heat"; audio.uiSnd(); }
+function openHeat() { state = "heat"; menuHighlight = 0; audio.uiSnd(); }
 function closeHeat() { state = "hub"; audio.uiSnd(); }
 function toggleHeat(i) {
   const m = HEAT_MODS[i];
@@ -2082,8 +2351,8 @@ function buyMeta(u) {
   audio.buy();
   toast(u.name + " LV " + (lv + 1), "#ffcc44");
   // live-apply to hub player
-  if (u.id === "hp") { player.maxHp += 15; player.hp += 15; }
-  if (u.id === "dash" && meta.dash <= 4) { player.dashMax++; player.dashCharges++; }
+  if (u.id === "hp") for (const p of players) { p.maxHp += 15; p.hp += 15; }
+  if (u.id === "dash" && meta.dash <= 4) for (const p of players) { p.dashMax++; p.dashCharges++; }
 }
 
 /* ---------------- §O COLLISION ---------------- */
@@ -2111,27 +2380,56 @@ function pointInPillar(x, y, r) {
 }
 
 /* ---------------- §P UPDATE: PLAYER ---------------- */
-function moveInput() {
+/* P2 keyboard scheme (used only in 2P when P2 has no gamepad in slot 1):
+   move = Arrow keys, slash = ".", bolt = "/", dash = Enter, freeze = ","  (P2 auto-aims) */
+function p2UsesKeyboard() { return numPlayers > 1 && !GP.connected[1]; }
+/* P1 uses arrows too in solo/1-pad; in 2P-keyboard mode, arrows belong to P2 only */
+function p1ArrowsActive() { return !p2UsesKeyboard(); }
+
+/* movement vector for a specific player from its assigned device(s) */
+function moveInputFor(p) {
   let mx = 0, my = 0;
-  if (keys["w"] || keys["ArrowUp"]) my -= 1;
-  if (keys["s"] || keys["ArrowDown"]) my += 1;
-  if (keys["a"] || keys["ArrowLeft"]) mx -= 1;
-  if (keys["d"] || keys["ArrowRight"]) mx += 1;
-  if (joy.id !== -1) { mx += joy.dx; my += joy.dy; }
+  const pad = padForPlayer(p.idx);
+  if (p.idx === 0) {
+    // P1: WASD always; arrows only when P2 isn't using the keyboard; touch joystick; pad left stick
+    if (keys["w"]) my -= 1;
+    if (keys["s"]) my += 1;
+    if (keys["a"]) mx -= 1;
+    if (keys["d"]) mx += 1;
+    if (p1ArrowsActive()) {
+      if (keys["ArrowUp"]) my -= 1;
+      if (keys["ArrowDown"]) my += 1;
+      if (keys["ArrowLeft"]) mx -= 1;
+      if (keys["ArrowRight"]) mx += 1;
+    }
+    if (joy.id !== -1) { mx += joy.dx; my += joy.dy; }
+  } else if (p2UsesKeyboard()) {
+    if (keys["ArrowUp"]) my -= 1;
+    if (keys["ArrowDown"]) my += 1;
+    if (keys["ArrowLeft"]) mx -= 1;
+    if (keys["ArrowRight"]) mx += 1;
+  }
+  if (pad) {
+    const s = gpStick(pad.lx, pad.ly);
+    mx += s.x; my += s.y;
+  }
   const m = Math.hypot(mx, my);
   if (m > 1) { mx /= m; my /= m; }
   return { x: mx, y: my };
 }
+/* legacy alias: solo/global movement (players[0]) — kept for any stray callers */
+function moveInput() { return moveInputFor(ctxP || player); }
 
-function trySlash() {
-  const p = player;
+function trySlash(p) {
+  p = p || ctxP || player;
+  ctxP = p;
   if ((shopRoom || roomType === "treasure") && state === "play") { // slash doubles as interact/take
-    const pd = pedestalUnder();
-    if (pd) { tryBuyPedestal(pd); return; }
+    const pd = pedestalUnder(p);
+    if (pd) { tryBuyPedestal(pd, p); return; }
   }
   if (p.slashCD > 0 || p.dashT > 0) return;
-  if (!touchUI && mouseIdle()) kbAutoAim(); // keyboard-only: snap aim to nearest enemy
-  const W = weaponDef();
+  if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p); // keyboard-only: snap aim to nearest enemy
+  const W = weaponDefP(p);
   if (p.comboT <= 0) p.comboN = 0;
   p.comboN = p.comboN % 3 + 1;
   p.comboT = 1.5;
@@ -2319,25 +2617,27 @@ function trySlash() {
   if (hitAny) shake(2.5, 0.1);
 }
 
-function tryBolt() {
-  const p = player;
+function tryBolt(p) {
+  p = p || ctxP || player;
+  ctxP = p;
   if (p.boltCD > 0) return;
   if (p.energy < CONFIG.boltCost) { return; }
   p.energy -= CONFIG.boltCost;
   p.boltCD = 0.26;
-  if (touchUI && !mouseActive) {
+  if (p.idx === 0 && touchUI && !mouseActive && !p.padBound) {
     const near = nearestEnemy(p.x, p.y, 520);
     if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
-  } else if (mouseIdle()) {
-    kbAutoAim(); // keyboard-only bolt: auto-aim
+  } else if (p.idx === 0 && !p.padBound && mouseIdle()) {
+    kbAutoAim(p); // keyboard-only bolt: auto-aim
   }
-  firePlayerBolt();
+  firePlayerBolt(p);
 }
 
-function tryFreeze() {
-  const p = player;
+function tryFreeze(p) {
+  p = p || ctxP || player;
+  ctxP = p;
   if (!p || p.hp <= 0 || p.freezeCD > 0) return;
-  freezeBuf = 0;
+  p.freezeBuf = 0;
   const cd = CONFIG.freezeCD * p.freezeCDMul * Math.max(0.3, Math.pow(0.75, boonPow("cryo")));
   p.freezeCD = cd; p.freezeCDMax = cd;
   novas.push({ x: p.x, y: p.y, t: 0.5, tm: 0.5, maxR: CONFIG.freezeR });
@@ -2357,11 +2657,12 @@ function tryFreeze() {
   }
 }
 
-function tryDash() {
-  const p = player;
+function tryDash(p) {
+  p = p || ctxP || player;
+  ctxP = p;
   if (p.dashT > 0) return;
   if (p.dashCharges <= 0) return;
-  const mv = moveInput();
+  const mv = moveInputFor(p);
   let dx = mv.x, dy = mv.y;
   if (Math.hypot(dx, dy) < 0.2) { dx = Math.cos(p.aim); dy = Math.sin(p.aim); }
   const m = Math.hypot(dx, dy);
@@ -2371,23 +2672,68 @@ function tryDash() {
   p.dashCharges--;
   if (p.dashCD <= 0) p.dashCD = CONFIG.dashCD;
   audio.dash();
-  burst(p.x, p.y, "#5ee6ff", 10, 160, 0.35, 2.5);
-  ffx.ring(p.x, p.y, 40, "#5ee6ff", 0.3, 3);
-  ffx.spawnLight(p.x, p.y, 70, "#aaf6ff", 0.5);
+  burst(p.x, p.y, p.col, 10, 160, 0.35, 2.5);
+  ffx.ring(p.x, p.y, 40, p.col, 0.3, 3);
+  ffx.spawnLight(p.x, p.y, 70, p.colDash, 0.5);
 }
 
 let mouseActive = false;
 canvas.addEventListener("mousemove", () => { mouseActive = true; });
 
-function updatePlayer(dt) {
-  const p = player;
-  // aim (mouse aim only while the mouse is "recent" — keyboard auto-aim otherwise)
-  if ((!touchUI || mouseActive) && !mouseIdle()) {
-    p.aim = angTo(p.x, p.y, s2wX(mouse.x), s2wY(mouse.y));
-  } else if (joy.id !== -1 && Math.hypot(joy.dx, joy.dy) > 0.25) {
+/* gather raw control intents for a player from its assigned device(s) for this frame.
+   slash/dash/freeze are edge buffers (set by handlers / gamepad edges); bolt is "held". */
+function readPlayerControls(p) {
+  const pad = padForPlayer(p.idx);
+  p.padBound = !!pad;
+  const c = { aimHas: false, aimAng: 0, aimIsDir: false, bolt: false, interact: false };
+  if (p.idx === 0) {
+    // P1 mouse aim (only while recent and not pad-bound)
+    if (!pad && (!touchUI || mouseActive) && !mouseIdle()) {
+      c.aimHas = true; c.aimAng = angTo(p.x, p.y, s2wX(mouse.x), s2wY(mouse.y));
+    }
+    // P1 keyboard/touch fire
+    if (mouse.left || keys["j"]) p.slashBuf = Math.max(p.slashBuf, 0.05);
+    if (mouse.right || keys["Shift"] || keys["ctrlRight"] || keys["e"] || boltHeld) c.bolt = true;
+    if (keys["k"] || keys["q"]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
+    if (keys[" "]) p.dashBuf = Math.max(p.dashBuf, 0.05);
+  }
+  // gamepad bindings (twin-stick PS4 layout):
+  // left stick move (handled in moveInputFor), right stick aim, □(2) slash, R2(7)/R1(5) bolt,
+  // ×(0) dash, △(3)/L1(4) freeze, ×(0) also confirms interactions
+  if (pad) {
+    const rs = gpStick(pad.rx, pad.ry);
+    if (rs.mag > 0) { c.aimHas = true; c.aimAng = Math.atan2(rs.y, rs.x); c.aimIsDir = true; }
+    if (gpPressed(pad, 2)) p.slashBuf = 0.12;
+    if (gpButton(pad, 7) || gpButton(pad, 5)) c.bolt = true; // R2 / R1 held = bolt
+    if (gpPressed(pad, 0)) { p.dashBuf = 0.15; c.interact = true; }
+    if (gpPressed(pad, 3) || gpPressed(pad, 4)) p.freezeBuf = 0.18;
+  }
+  // P2 keyboard scheme
+  if (p.idx === 1 && p2UsesKeyboard()) {
+    if (keys["."]) p.slashBuf = Math.max(p.slashBuf, 0.05);
+    if (keys["/"]) c.bolt = true;
+    if (keys[","]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
+    if (keys["Enter"]) p.dashBuf = Math.max(p.dashBuf, 0.05);
+  }
+  return c;
+}
+
+function updatePlayer(p, dt) {
+  ctxP = p;
+  if (p.downed) { updateDowned(p, dt); return; }
+  const c = readPlayerControls(p);
+  // aim resolution
+  if (c.aimHas) {
+    p.aim = c.aimAng;
+  } else if (p.idx === 0 && !p.padBound && joy.id !== -1 && Math.hypot(joy.dx, joy.dy) > 0.25) {
     const near = nearestEnemy(p.x, p.y, 380);
     if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
     else p.aim = Math.atan2(joy.dy, joy.dx);
+  } else if (p.idx === 1 && p2UsesKeyboard()) {
+    // P2 keyboard: auto-aim toward nearest foe, else movement dir
+    const near = nearestEnemy(p.x, p.y, 420);
+    if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
+    else p.aim = Math.atan2(p.lastDir.y, p.lastDir.x);
   }
   // timers
   p.slashCD = Math.max(0, p.slashCD - dt);
@@ -2400,9 +2746,9 @@ function updatePlayer(dt) {
   p.hurtT = Math.max(0, p.hurtT - dt);
   p.freezeCD = Math.max(0, p.freezeCD - dt);
   p.buyCD = Math.max(0, p.buyCD - dt);
-  slashBuf = Math.max(0, slashBuf - dt);
-  dashBuf = Math.max(0, dashBuf - dt);
-  freezeBuf = Math.max(0, freezeBuf - dt);
+  p.slashBuf = Math.max(0, p.slashBuf - dt);
+  p.dashBuf = Math.max(0, p.dashBuf - dt);
+  p.freezeBuf = Math.max(0, p.freezeBuf - dt);
   if (p.dashCharges < p.dashMax) {
     p.dashCD -= dt * dashRegenMul();
     if (p.dashCD <= 0) {
@@ -2414,12 +2760,11 @@ function updatePlayer(dt) {
   p.energy = Math.min(p.maxEnergy, p.energy + CONFIG.energyRegen * (1 + boonPow("over") * 0.4) * dt);
 
   // actions
-  if (slashBuf > 0) { trySlash(); if (p.slashT > 0) slashBuf = 0; }
-  if ((mouse.left || keys["j"]) && p.slashCD <= 0) trySlash();
-  if ((mouse.right || keys["Shift"] || keys["ctrlRight"] || keys["e"] || boltHeld) && state === "play") tryBolt();
-  if (boltHeld && state === "hub") tryBolt();
-  if (freezeBuf > 0) tryFreeze();
-  if (dashBuf > 0) { const had = p.dashT; tryDash(); if (p.dashT > 0 && !had) dashBuf = 0; }
+  if (p.slashBuf > 0) { trySlash(p); if (p.slashT > 0) p.slashBuf = 0; }
+  if (c.bolt && (state === "play" || state === "hub")) tryBolt(p);
+  if (p.freezeBuf > 0) tryFreeze(p);
+  if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
+  ctxP = p;
 
   // movement
   const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12));
@@ -2442,16 +2787,17 @@ function updatePlayer(dt) {
       }
     }
   } else {
-    const mv = moveInput();
+    const mv = moveInputFor(p);
     const tx = mv.x * spd, ty = mv.y * spd;
     const acc = CONFIG.playerAccel * dt;
     p.vx += clamp(tx - p.vx, -acc, acc);
     p.vy += clamp(ty - p.vy, -acc, acc);
-    if (Math.hypot(mv.x, mv.y) > 0.1) lastDir = { x: mv.x, y: mv.y };
+    if (Math.hypot(mv.x, mv.y) > 0.1) p.lastDir = { x: mv.x, y: mv.y };
   }
   p.x += p.vx * dt; p.y += p.vy * dt;
   collidePillars(p);
   collideArena(p);
+  separatePlayers(p);
   for (const tr of p.trail) tr.t -= dt;
   p.trail = p.trail.filter((tr) => tr.t > 0);
 
@@ -2470,16 +2816,18 @@ function updatePlayer(dt) {
     if (p.x > HUB.exitX - HUB.exitW / 2 && p.x < HUB.exitX + HUB.exitW / 2 && p.y < HUB.exitY + HUB.exitH + p.r) {
       startRun();
     }
+    // gamepad confirm at hub terminals (the touch/keyboard path uses key/mouse handlers)
+    if (c.interact) hubInteract(p);
   }
-  // fountain rest stop: approach the spring to heal 30% (once)
-  if (state === "play" && roomType === "fountain" && !fountainUsed &&
+  // fountain rest stop: approach the spring to heal 30% (once, per player)
+  if (state === "play" && roomType === "fountain" && !p.fountainUsed &&
       dist(p.x, p.y, CONFIG.arenaW / 2, CONFIG.arenaH * 0.5) < 52) {
-    fountainUsed = true;
+    p.fountainUsed = true;
     const h = Math.round(p.maxHp * 0.3);
     p.hp = Math.min(p.maxHp, p.hp + h);
     dnum(p.x, p.y - 20, "+" + h, "#66ffe0", true);
     burst(CONFIG.arenaW / 2, CONFIG.arenaH * 0.5, "#66ffe0", 30, 220, 0.8, 3);
-    toast("SYSTEMS RESTORED +30%", "#66ffe0");
+    toast(p.tag + " SYSTEMS RESTORED +30%", "#66ffe0");
     audio.buy();
   }
   // doors
@@ -2491,7 +2839,7 @@ function updatePlayer(dt) {
       }
     }
   }
-  // pickups
+  // pickups (cores/currency shared; HP picks heal the gathering player)
   for (const pk of pickups) {
     const dd = dist(p.x, p.y, pk.x, pk.y);
     if (dd < 90) { // magnet
@@ -2504,11 +2852,64 @@ function updatePlayer(dt) {
         if (g > 0) { coreFloatN += g; if (coreFloatT <= 0) coreFloatT = 0.3; } // aggregated "+N ⬡" float
         audio.pickupSnd();
       }
-      else { player.hp = Math.min(player.maxHp, player.hp + 8); dnum(p.x, p.y - 16, "+8", "#66ff99", false); audio.pickupSnd(); }
+      else { p.hp = Math.min(p.maxHp, p.hp + 8); dnum(p.x, p.y - 16, "+8", "#66ff99", false); audio.pickupSnd(); }
       pk.t = -1;
       burst(pk.x, pk.y, pk.kind === "core" ? "#ffcc44" : "#66ff99", 6, 120, 0.3, 2);
     }
   }
+}
+
+/* gentle soft separation so two co-op androids don't fully stack */
+function separatePlayers(p) {
+  if (players.length < 2) return;
+  for (const o of players) {
+    if (o === p || o.downed) continue;
+    const d = dist(p.x, p.y, o.x, o.y), min = p.r + o.r;
+    if (d < min && d > 0.001) {
+      const nx = (p.x - o.x) / d, ny = (p.y - o.y) / d, push = (min - d) * 0.5;
+      p.x += nx * push; p.y += ny * push;
+    }
+  }
+}
+
+/* hub terminal interaction for a gamepad-driven player (mirrors the key/mouse path) */
+function hubInteract(p) {
+  if (dist(p.x, p.y, HUB.termX, HUB.termY) < HUB.termR + 30) { openShop(); return; }
+  if (dist(p.x, p.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) { openHeat(); return; }
+  if (dist(p.x, p.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30) { p.idx === 1 ? cycleWeaponP2() : cycleWeapon(); return; }
+  if (dist(p.x, p.y, HUB.statX, HUB.statY) < HUB.statR + 30) { openStats(); return; }
+}
+
+/* downed player: lies still, no actions; the partner revives by standing close ~3s */
+const REVIVE_TIME = 3;
+function updateDowned(p, dt) {
+  p.vx *= Math.pow(0.02, dt); p.vy *= Math.pow(0.02, dt);
+  p.x += p.vx * dt; p.y += p.vy * dt;
+  collidePillars(p); collideArena(p);
+  p.ifr = Math.max(0, p.ifr - dt);
+  // a non-downed partner standing nearby fills the revive ring
+  let reviver = null;
+  for (const o of players) {
+    if (o === p || o.downed || o.hp <= 0) continue;
+    if (dist(o.x, o.y, p.x, p.y) < p.r + o.r + 26) { reviver = o; break; }
+  }
+  if (reviver) {
+    p.reviveT += dt;
+    if (Math.random() < dt * 8) ffx.spawnLight(p.x, p.y, 50, "#66ff99", 0.4);
+    if (p.reviveT >= REVIVE_TIME) reviveP(p);
+  } else {
+    p.reviveT = Math.max(0, p.reviveT - dt * 0.6); // decays if left alone
+  }
+}
+function reviveP(p) {
+  p.downed = false; p.reviveT = 0;
+  p.hp = Math.max(1, Math.round(p.maxHp * 0.4));
+  p.ifr = Math.max(p.ifr, 1.2);
+  p.vx = 0; p.vy = 0;
+  burst(p.x, p.y, "#66ff99", 28, 240, 0.7, 3);
+  ffx.ring(p.x, p.y, 70, "#66ff99", 0.6, 5);
+  toast(p.tag + " 复活 — REVIVED", "#66ff99");
+  audio.boon();
 }
 
 /* ---------------- §Q UPDATE: ENEMIES ---------------- */
@@ -2520,9 +2921,13 @@ function seekVec(e, tx, ty) {
 function enemyContact(e, dmg, dt) {
   e.contactCD = Math.max(0, e.contactCD - dt);
   if (e.contactCD > 0) return;
-  if (dist(e.x, e.y, player.x, player.y) < e.r + player.r) {
-    damagePlayer(dmg * eDmgMul() * (e.elite ? 1.35 : 1), angTo(e.x, e.y, player.x, player.y), e);
-    e.contactCD = 0.5;
+  for (const p of players) {
+    if (p.downed || p.hp <= 0) continue;
+    if (dist(e.x, e.y, p.x, p.y) < e.r + p.r) {
+      damagePlayer(dmg * eDmgMul() * (e.elite ? 1.35 : 1), angTo(e.x, e.y, p.x, p.y), e, p);
+      e.contactCD = 0.5;
+      break;
+    }
   }
 }
 
@@ -2572,7 +2977,8 @@ function updateEnemy(e, dt) {
   e.x += e.kbx * dt; e.y += e.kby * dt;
   e.kbx *= Math.pow(0.0001, dt); e.kby *= Math.pow(0.0001, dt);
   if ((e.gravSlow || 0) > 0) e.gravSlow = Math.max(0, e.gravSlow - dt); // EVENT HORIZON slow lingers
-  const p = player;
+  const p = targetFor(e) || player; // co-op: aggro the nearest living player
+  e._tgt = p;
   const d = dist(e.x, e.y, p.x, p.y);
 
   if (e.type === "chaser") {
@@ -2792,7 +3198,7 @@ function updateEnemy(e, dt) {
 
 function updateBoss(e, dt, d) {
   e.rot += dt * (e.state === "radial" ? 6 : 1.2);
-  const p = player;
+  const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const cdm = (e.hard ? 0.75 : 1) * (e.enraged ? 0.65 : 1); // hard variant / enrage: faster pattern cycling
   e.cd = Math.max(0, e.cd - dt);
@@ -2866,7 +3272,7 @@ function updateBoss(e, dt, d) {
 
 /* --- VOIDCALLER: teleports, spawns adds, radial bursts --- */
 function updateBossSummoner(e, dt, d) {
-  const p = player;
+  const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1) * (e.enraged ? 0.65 : 1);
   e.rot += dt * 2.2;
@@ -2943,7 +3349,7 @@ function updateBossSummoner(e, dt, d) {
 
 /* --- LANCE-7: long-range lance shots with laser-sight + mortar AoE circles --- */
 function updateBossArtillery(e, dt, d) {
-  const p = player;
+  const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1) * (e.enraged ? 0.65 : 1);
   e.rot += dt;
@@ -3003,7 +3409,7 @@ function updateBossArtillery(e, dt, d) {
 /* --- MITOSIS PRIME: big brute; splits at 50% HP, fragments split once more --- */
 function updateBossSplitter(e, dt, d) {
   if (e.gen < 2 && e.hp <= e.maxHp * 0.5) { splitBoss(e); return; }
-  const p = player;
+  const p = e._tgt || targetFor(e) || player;
   const cdm = (e.hard ? 0.75 : 1) * (e.enraged ? 0.65 : 1);
   e.rot += dt * 0.8;
   e.cd = Math.max(0, e.cd - dt);
@@ -3060,7 +3466,7 @@ function step(dt) {
   // adaptive audio: combat intensity layer + low-HP heartbeat
   audio.updateDynamics(dt,
     state === "play" && !roomClear && (enemies.length > 0 || spawnQ.length > 0),
-    !!(player && player.hp > 0 && player.hp < player.maxHp * 0.25));
+    anyLowHp());
   if (freezeT > 0) { freezeT -= dt; return; }
   shakeT = Math.max(0, shakeT - dt);
   if (shakeT <= 0) shakeA = 0;
@@ -3075,7 +3481,11 @@ function step(dt) {
     updateParts(dt);
     return;
   }
-  if (player && player.hp > 0) updatePlayer(dt);
+  // update every player (downed players still tick for revive). Solo path unchanged.
+  for (const p of players) {
+    if (p && (p.hp > 0 || p.downed)) updatePlayer(p, dt);
+  }
+  ctxP = players[0] || null;
 
   // style meter chain decay
   if (styleT > 0) {
@@ -3126,10 +3536,14 @@ function step(dt) {
     } else {
       roomClear = true;
       roomsCleared++;
-      if (boonLv("wind")) {
-        const h = Math.round(12 * boonPow("wind"));
-        player.hp = Math.min(player.maxHp, player.hp + h);
-        dnum(player.x, player.y - 20, "+" + h, "#66ff99", false);
+      for (const p of players) { // SECOND WIND: per-player heal on room clear
+        if (p.downed || p.hp <= 0) continue;
+        const lv = p.boonPow && p.boonPow.wind ? p.boonPow.wind : 0;
+        if (lv > 0) {
+          const h = Math.round(12 * lv);
+          p.hp = Math.min(p.maxHp, p.hp + h);
+          dnum(p.x, p.y - 20, "+" + h, "#66ff99", false);
+        }
       }
       if (roomType === "challenge") {
         // timed gauntlet payout: double cores if cleared inside the limit
@@ -3163,6 +3577,7 @@ function step(dt) {
 
   // player bolts
   for (const b of pbolts) {
+    ctxP = b.owner || player; // boon/crit context = the firing player
     b.x += b.vx * dt; b.y += b.vy * dt;
     b.t -= dt;
     addPart({ x: b.x, y: b.y, vx: 0, vy: 0, t: 0.15, tm: 0.15, col: "#ff66ee", r: 2, drag: 0 });
@@ -3207,10 +3622,16 @@ function step(dt) {
     const A = CONFIG;
     if (b.x < A.wall || b.x > A.arenaW - A.wall || b.y < A.wall || b.y > A.arenaH - A.wall) b.t = -1;
     if (pointInPillar(b.x, b.y, b.r)) { burst(b.x, b.y, b.col, 4, 90, 0.2, 2); b.t = -1; }
-    if (b.t > 0 && player.hp > 0 && dist(b.x, b.y, player.x, player.y) < b.r + player.r) {
-      if (player.ifr <= 0 && player.hurtT <= 0) {
-        damagePlayer(b.dmg, Math.atan2(b.vy, b.vx), null);
-        b.t = -1;
+    if (b.t > 0) {
+      for (const p of players) {
+        if (p.downed || p.hp <= 0) continue;
+        if (dist(b.x, b.y, p.x, p.y) < b.r + p.r) {
+          if (p.ifr <= 0 && p.hurtT <= 0) {
+            damagePlayer(b.dmg, Math.atan2(b.vy, b.vx), null, p);
+            b.t = -1;
+            break;
+          }
+        }
       }
     }
   }
@@ -3238,9 +3659,7 @@ function step(dt) {
       burst(m.x, m.y, m.col || "#ff8833", 26, 320, 0.55, 3.5);
       shake(6, 0.25);
       audio.enemyDie(true);
-      if (player.hp > 0 && dist(m.x, m.y, player.x, player.y) < m.r + player.r) {
-        damagePlayer(m.dmg * eDmgMul(), angTo(m.x, m.y, player.x, player.y), null);
-      }
+      damagePlayersInRadius(m.x, m.y, m.r, m.dmg * eDmgMul(), null);
       for (const bl of barrels) { // mortar impacts cook off barrels
         if (!bl.dead && bl.fuse < 0 && dist(m.x, m.y, bl.x, bl.y) < m.r + bl.r) igniteBarrel(bl, 0.1);
       }
@@ -3400,11 +3819,13 @@ function drawLighting() {
   if (ffx.level === "off") return;
   const cap = ffx.lightCap;
   const add = (x, y, r, col, a) => { if (lights.length < cap) lights.push({ x, y, r, col, a }); };
-  // player core glow
-  if (player && player.hp > 0 && (state === "play" || state === "hub")) {
-    const W = weaponDef();
-    add(player.x, player.y, 90, player.dashT > 0 ? "#aaf6ff" : "#5ee6ff", player.dashT > 0 ? 0.5 : 0.32);
-    if (player.slashT > 0) add(player.x + Math.cos(player.slashAng) * 30, player.y + Math.sin(player.slashAng) * 30, 70, W.col, 0.4);
+  // player core glow (per player; weapon-tinted slash glow)
+  if (state === "play" || state === "hub") {
+    for (const p of players) {
+      if (!p || p.hp <= 0) continue;
+      add(p.x, p.y, 90, p.dashT > 0 ? p.colDash : p.col, p.dashT > 0 ? 0.5 : (p.downed ? 0.18 : 0.32));
+      if (p.slashT > 0) { const W = weaponDefP(p); add(p.x + Math.cos(p.slashAng) * 30, p.y + Math.sin(p.slashAng) * 30, 70, W.col, 0.4); }
+    }
   }
   for (const b of pbolts) add(b.x, b.y, 46, "#ff66ee", 0.32);
   for (const b of ebolts) add(b.x, b.y, 40, b.col, 0.26);
@@ -3766,12 +4187,12 @@ function drawHazards() {
 
 function drawPedestals() {
   if (!shopRoom && roomType !== "treasure") return;
-  const p = player;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   for (const pd of pedestals) {
     const it = pd.item;
     const afford = pd.price <= 0 || cores >= pd.price;
-    const near = p && p.hp > 0 && dist(p.x, p.y, pd.x, pd.y) < 36;
+    let near = false;
+    for (const p of players) { if (p && p.hp > 0 && !p.downed && dist(p.x, p.y, pd.x, pd.y) < 36) { near = true; break; } }
     const bob = Math.sin(timeNow * 2.4 + pd.x) * 4;
     ctx.save();
     if (pd.sold) ctx.globalAlpha = 0.3;
@@ -3828,7 +4249,7 @@ function drawSpawnTelegraphs() {
 /* Bosses: larger multi-part bodies, each with an animated part synced to its
    attack pattern. Telegraph poses (wind-ups) are made deliberately obvious. */
 function drawBossBody(e, fl, col, dark, detail) {
-  const aimP = player ? angTo(e.x, e.y, player.x, player.y) : 0;
+  const aimP = e._tgt ? angTo(e.x, e.y, e._tgt.x, e._tgt.y) : (player ? angTo(e.x, e.y, player.x, player.y) : 0);
   ctx.save();
   ctx.translate(e.x, e.y);
   if (e.kind === "summoner") {
@@ -3918,7 +4339,7 @@ function drawBossBody(e, fl, col, dark, detail) {
     const pinch = (e.state === "wind") ? (1 - clamp(e.t / 0.55, 0, 1)) : 0;
     const sq = 1 + pinch * 0.25, sqp = 1 - pinch * 0.18; // stretch on wind-up
     ctx.save();
-    if (pinch > 0) ctx.rotate(player ? angTo(e.x, e.y, player.x, player.y) : 0);
+    if (pinch > 0) ctx.rotate(e._tgt ? angTo(e.x, e.y, e._tgt.x, e._tgt.y) : (player ? angTo(e.x, e.y, player.x, player.y) : 0));
     ctx.scale(sq, sqp);
     glow(col, 12);
     ctx.fillStyle = col;
@@ -4128,7 +4549,7 @@ function drawEnemy(e) {
   ctx.strokeStyle = col;
   const detail = spriteDetail();
   const dark = "#1a0a14";   // shared inset/socket tone for the hostile palette
-  const aimP = (player ? angTo(e.x, e.y, player.x, player.y) : 0);
+  const aimP = (e._tgt ? angTo(e.x, e.y, e._tgt.x, e._tgt.y) : (player ? angTo(e.x, e.y, player.x, player.y) : 0));
 
   if (e.type === "chaser") {
     // CHASER — bladed biped raptor: crouches & coils on the wind-up, lunges flat.
@@ -4626,12 +5047,12 @@ function drawHeldWeapon(W, hx, hy, recoil, fl) {
    weapon), legs/thrusters. Animated: idle bob, walk swing, dash thruster flare,
    attack recoil/lunge, hit flinch, low-HP smoking/flicker. Faces aimDraw smoothly. */
 function drawAndroid(p) {
-  const W = weaponDef();
+  const W = weaponDefP(p);
   const detail = spriteDetail();
   const r = p.r;
   const dashing = p.dashT > 0;
   const lowHp = p.hp / p.maxHp < 0.3;
-  const bodyCol = dashing ? "#aaf6ff" : "#5ee6ff";
+  const bodyCol = dashing ? (p.colDash || "#aaf6ff") : (p.col || "#5ee6ff");
   const blink = p.hurtT > 0 && Math.floor(timeNow * 18) % 2 === 0;
   // recoil pushes the whole body back a touch and kicks the weapon arm forward
   const recoil = p.recoilT > 0 ? Math.sin((p.recoilT / 0.18) * Math.PI) : 0;
@@ -4737,9 +5158,7 @@ function drawAndroid(p) {
 }
 
 function drawPlayer() {
-  const p = player;
-  if (!p || p.hp <= 0) return;
-  // weapon-colored swing trails: smooth tapered ribbon arcs, tinted per weapon
+  // weapon-colored swing trails: smooth tapered ribbon arcs, tinted per weapon (shared)
   for (const g of slashGhosts) {
     const a = g.t / g.tm;
     ctx.save();
@@ -4805,6 +5224,15 @@ function drawPlayer() {
     noglow();
     ctx.restore();
   }
+  // per-player body, trail, swipe, tag and revive ring
+  for (const p of players) {
+    if (!p) continue;
+    if (p.hp <= 0 && !p.downed) continue;
+    drawOnePlayer(p);
+  }
+}
+
+function drawOnePlayer(p) {
   // dash trail ghosts (afterimage of the android torso)
   for (const tr of p.trail) {
     const a = tr.t / 0.3;
@@ -4812,18 +5240,21 @@ function drawPlayer() {
     ctx.globalAlpha = a * 0.35;
     ctx.translate(tr.x, tr.y);
     ctx.rotate(tr.a);
-    ctx.fillStyle = "#5ee6ff";
-    glow("#5ee6ff", 8);
+    ctx.fillStyle = p.col;
+    glow(p.col, 8);
     ctx.beginPath(); ctx.ellipse(-p.r * 0.1, 0, p.r * 0.95, p.r * 0.72, 0, 0, TAU); ctx.fill();
     noglow();
     ctx.restore();
   }
-  bloomCircle(p.x, p.y, p.dashT > 0 ? 34 : 24, p.dashT > 0 ? "#aaf6ff" : "#5ee6ff", 0.5);
+  if (p.downed) { drawDowned(p); return; }
+  bloomCircle(p.x, p.y, p.dashT > 0 ? 34 : 24, p.dashT > 0 ? p.colDash : p.col, 0.5);
   drawAndroid(p);
+  if (numPlayers > 1) drawPlayerTag(p);
 
   // slash swipe (weapon-formed: blade arc / lance thrust / maul full slam)
   if (p.slashT > 0) {
-    const W = weaponDef();
+    ctxP = p; // range/arc helpers read the drawing player's boons/weapon
+    const W = weaponDefP(p);
     const prog = 1 - p.slashT / (p.slashDur || CONFIG.slashDur);
     const range = meleeRangeNow();
     ctx.save();
@@ -4861,6 +5292,47 @@ function drawPlayer() {
     noglow();
     ctx.restore();
   }
+}
+
+/* downed android: dim, slumped, with a revive progress ring filling as the partner helps */
+function drawDowned(p) {
+  ctx.save();
+  ctx.globalAlpha = 0.5 + 0.2 * Math.sin(timeNow * 5);
+  glow("#ff5566", 10);
+  ctx.fillStyle = "#3a1820";
+  ctx.beginPath(); ctx.ellipse(p.x, p.y, p.r * 1.05, p.r * 0.6, 0, 0, TAU); ctx.fill();
+  ctx.fillStyle = "#ff6677";
+  ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.3, 0, TAU); ctx.fill();
+  noglow();
+  ctx.restore();
+  // revive ring
+  const frac = clamp(p.reviveT / REVIVE_TIME, 0, 1);
+  ctx.save();
+  ctx.strokeStyle = "rgba(255,255,255,0.25)"; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 12, 0, TAU); ctx.stroke();
+  if (frac > 0) {
+    glow("#66ff99", 8);
+    ctx.strokeStyle = "#66ff99"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 12, -Math.PI / 2, -Math.PI / 2 + TAU * frac); ctx.stroke();
+    noglow();
+  }
+  ctx.fillStyle = "#ff8899";
+  ctx.font = "bold 10px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(p.tag + " DOWN", p.x, p.y - p.r - 20);
+  ctx.restore();
+}
+
+/* small P1/P2 identity tag floating above each co-op android */
+function drawPlayerTag(p) {
+  ctx.save();
+  ctx.fillStyle = p.col;
+  glow(p.col, 5);
+  ctx.font = "bold 10px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(p.tag, p.x, p.y - p.r - 12);
+  noglow();
+  ctx.restore();
 }
 
 function drawBolts() {
@@ -5012,6 +5484,12 @@ function drawHubObjects() {
   ctx.fillStyle = "rgba(255,210,122,0.7)";
   ctx.font = "bold 11px 'Courier New', monospace";
   ctx.fillText("武器架 " + Wsel.zh, t.rackX, t.rackY + t.rackR * 0.62 + 8);
+  if (numPlayers > 1) { // show P2's separate armory pick
+    const W2 = WEAPONS.find((w) => w.id === p2Weapon) || WEAPONS[0];
+    ctx.fillStyle = PLAYER_SKINS[1].col;
+    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.fillText("P2 " + W2.glyph + " " + W2.name, t.rackX, t.rackY + t.rackR * 0.62 + 22);
+  }
   if (player && dist(player.x, player.y, t.rackX, t.rackY) < t.rackR + 30) {
     ctx.fillStyle = Wsel.col;
     ctx.font = "13px 'Courier New', monospace";
@@ -5055,7 +5533,7 @@ function drawHubObjects() {
 
 function drawFountain() {
   const fx = CONFIG.arenaW / 2, fy = CONFIG.arenaH * 0.5;
-  const used = fountainUsed;
+  const used = players.length > 0 && players.every((p) => p.fountainUsed);
   ctx.save();
   // basin
   glow("#66ffe0", used ? 6 : 18);
@@ -5140,26 +5618,38 @@ function drawDepthTrack(u) {
   ctx.restore();
 }
 
-function drawHUD() {
-  const u = us();
-  const p = player;
-  if (!p) return;
-  ctx.save();
-  ctx.textBaseline = "middle";
-  const bx = 16, by = ch - 64 * u;
+/* one player's HP / energy / dash / freeze / weapon panel.
+   side = "left" (P1, anchored at bx) or "right" (P2, mirrored from screen right). */
+function drawPlayerBars(p, u, by, side) {
   const bw = 190 * u, bh = 13 * u;
+  const right = side === "right";
+  const bx = right ? cw - 16 - bw : 16;
+  const downed = p.downed;
+  // tag label for co-op
+  if (numPlayers > 1) {
+    ctx.fillStyle = p.col;
+    ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+    ctx.textAlign = right ? "right" : "left";
+    ctx.fillText(p.tag + (downed ? " — DOWN" : ""), right ? bx + bw : bx, by - 9 * u);
+  }
   // HP
   ctx.fillStyle = "rgba(0,0,0,0.55)";
   rrect(bx, by, bw, bh, 4); ctx.fill();
   const hpFrac = clamp(p.hp / p.maxHp, 0, 1);
+  const hpCol = downed ? "rgba(120,40,55,0.8)" : (hpFrac > 0.35 ? "#ff5566" : (Math.floor(timeNow * 6) % 2 ? "#ff8899" : "#ff2244"));
   glow("#ff5566", 8);
-  ctx.fillStyle = hpFrac > 0.35 ? "#ff5566" : (Math.floor(timeNow * 6) % 2 ? "#ff8899" : "#ff2244");
+  ctx.fillStyle = hpCol;
   rrect(bx, by, bw * hpFrac, bh, 4); ctx.fill();
   noglow();
+  // downed revive progress overlay on the HP bar
+  if (downed) {
+    ctx.fillStyle = "#66ff99";
+    rrect(bx, by, bw * clamp(p.reviveT / REVIVE_TIME, 0, 1), bh, 4); ctx.fill();
+  }
   ctx.fillStyle = "#fff";
   ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
   ctx.textAlign = "left";
-  ctx.fillText(Math.ceil(p.hp) + " / " + p.maxHp, bx + 6, by + bh / 2 + 1);
+  ctx.fillText(downed ? "DOWNED" : (Math.ceil(p.hp) + " / " + p.maxHp), bx + 6, by + bh / 2 + 1);
   // Energy
   const ey = by + bh + 6 * u;
   ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -5172,15 +5662,15 @@ function drawHUD() {
   const py = ey + bh * 0.7 + 9 * u;
   for (let i = 0; i < p.dashMax; i++) {
     const filled = i < p.dashCharges;
-    ctx.fillStyle = filled ? "#5ee6ff" : "rgba(94,230,255,0.18)";
-    if (filled) glow("#5ee6ff", 6);
+    ctx.fillStyle = filled ? p.col : "rgba(94,230,255,0.18)";
+    if (filled) glow(p.col, 6);
     ctx.beginPath(); ctx.arc(bx + 7 + i * 18 * u, py, 5 * u, 0, TAU); ctx.fill();
     noglow();
   }
   // partial recharge arc
   if (p.dashCharges < p.dashMax && p.dashCD > 0) {
     const i = p.dashCharges;
-    ctx.strokeStyle = "#5ee6ff";
+    ctx.strokeStyle = p.col;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(bx + 7 + i * 18 * u, py, 5 * u, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashCD / CONFIG.dashCD));
@@ -5208,22 +5698,35 @@ function drawHUD() {
       ctx.beginPath();
       ctx.arc(fx, fy, 11 * u, -Math.PI / 2, -Math.PI / 2 + TAU * frac);
       ctx.stroke();
-    } else if (!touchUI) {
+    } else if (!touchUI && p.idx === 0 && numPlayers === 1) {
       ctx.font = 8 * u + "px 'Courier New', monospace";
       ctx.fillStyle = "rgba(170,230,255,0.6)";
       ctx.fillText("K", fx, fy + 15 * u);
     }
   }
-  // weapon form readout
+  // weapon form readout (P1 to the right of bars, P2 to the left of its mirrored bars)
   {
-    const W = weaponDef();
-    ctx.textAlign = "left";
+    const W = weaponDefP(p);
     glow(W.col, 5);
     ctx.fillStyle = W.col;
     ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
-    ctx.fillText(W.glyph + " " + W.name, bx + bw + 12, by + bh / 2 + 1);
+    if (right) { ctx.textAlign = "right"; ctx.fillText(W.glyph + " " + W.name, bx - 12, by + bh / 2 + 1); }
+    else { ctx.textAlign = "left"; ctx.fillText(W.glyph + " " + W.name, bx + bw + 12, by + bh / 2 + 1); }
     noglow();
   }
+}
+
+function drawHUD() {
+  const u = us();
+  const p = player;
+  if (!p) return;
+  ctx.save();
+  ctx.textBaseline = "middle";
+  const bx = 16, by = ch - 64 * u;
+  const bw = 190 * u, bh = 13 * u;
+  // P1 bars (left). In 2P, P2 bars mirror on the right.
+  drawPlayerBars(p, u, by, "left");
+  if (players[1]) drawPlayerBars(players[1], u, by, "right");
   // style meter badge (kill-chain rank with decay bar)
   if (state === "play" && styleRank >= 0 && styleT > 0) {
     const R = STYLE_RANKS[styleRank];
@@ -5410,6 +5913,7 @@ function dimScreen(a) {
 
 function drawTitle() {
   dimScreen(0.55);
+  uiRects = [];
   const u = us();
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   const t = timeNow;
@@ -5434,7 +5938,9 @@ function drawTitle() {
   }
   ctx.fillStyle = "rgba(255,204,68,0.9)";
   ctx.font = 13 * u + "px 'Courier New', monospace";
-  if (best > 0) ctx.fillText("BEST DEPTH: " + best + "   ◆ " + fmtNum(cores) + " cores", cw / 2, ch * 0.7);
+  if (best > 0) ctx.fillText("BEST DEPTH: " + best + "   ◆ " + fmtNum(cores) + " cores", cw / 2, ch * 0.665);
+  // 1P / 2P selector (单人 / 双人) — click/tap or [1]/[2] or gamepad □ to toggle
+  drawPlayerCountToggle(u, ch * 0.715);
   // HOW TO PLAY / 操作说明 — device-aware bilingual panel
   ctx.font = 12 * u + "px 'Courier New', monospace";
   const help = touchUI ? [
@@ -5460,12 +5966,50 @@ function drawTitle() {
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
     "P/Esc 暂停 · M 静音 — pause / mute",
   ];
-  let hy = ch * 0.73;
+  // append gamepad + co-op help blocks when relevant
+  if (anyGamepad()) help.push(GAMEPAD_HELP);
+  if (numPlayers > 1) for (const l of COOP_HELP) help.push(l);
+  let hy = ch * 0.78;
   for (let i = 0; i < help.length; i++) {
-    ctx.fillStyle = i === 0 ? "rgba(94,230,255,0.6)" : "rgba(190,190,230,0.75)";
+    ctx.fillStyle = i === 0 ? "rgba(94,230,255,0.6)" : (help[i] === GAMEPAD_HELP ? "rgba(94,230,255,0.7)" : "rgba(190,190,230,0.75)");
     ctx.fillText(help[i], cw / 2, hy);
-    hy += 17 * u;
+    hy += 16 * u;
   }
+}
+
+const GAMEPAD_HELP = "手柄：左摇杆移动 · 右摇杆瞄准 · □近战 · R2发射 · ×冲刺 · △冰冻 — gamepad: sticks move/aim, □ slash, R2 bolt, × dash, △ freeze";
+const COOP_HELP = [
+  "双人：P1 键鼠/手柄1 · P2 手柄2 或方向键 — 2P: P1 keyboard+mouse/pad1 · P2 pad2 or arrows",
+  "P2 键盘：方向键移动 · . 近战 · / 发射 · Enter 冲刺 · , 冰冻 — P2 keys: arrows · . slash · / bolt · Enter dash · , freeze",
+  "倒下后队友靠近 3 秒可复活；双双倒下则游戏结束 — revive a downed ally by standing close ~3s; both down = game over",
+];
+
+/* title-screen 1P/2P selector; registers a uiRect for click/tap toggling */
+function drawPlayerCountToggle(u, y) {
+  const bw = 240 * u, bh = 30 * u, bx = cw / 2 - bw / 2;
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(10,14,34,0.8)";
+  rrect(bx, y - bh / 2, bw, bh, 6); ctx.fill();
+  ctx.strokeStyle = "#5ee6ff"; ctx.lineWidth = 2;
+  rrect(bx, y - bh / 2, bw, bh, 6); ctx.stroke();
+  // two halves
+  const half = bw / 2;
+  const labels = ["1P 单人", "2P 双人"];
+  for (let i = 0; i < 2; i++) {
+    const sel = (numPlayers - 1) === i;
+    const hx = bx + i * half;
+    if (sel) {
+      ctx.fillStyle = i === 0 ? "rgba(94,230,255,0.25)" : "rgba(255,177,78,0.25)";
+      rrect(hx + 2, y - bh / 2 + 2, half - 4, bh - 4, 5); ctx.fill();
+    }
+    ctx.fillStyle = sel ? (i === 0 ? "#5ee6ff" : "#ffb14e") : "rgba(190,200,230,0.6)";
+    ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+    ctx.fillText(labels[i], hx + half / 2, y);
+  }
+  ctx.restore();
+  uiRects.push({ x: bx, y: y - bh / 2, w: half, h: bh, act: "pcount", n: 1 });
+  uiRects.push({ x: bx + half, y: y - bh / 2, w: half, h: bh, act: "pcount", n: 2 });
 }
 
 function drawSummary() {
@@ -5515,10 +6059,12 @@ function drawBoonScreen() {
   uiRects = [];
   const u = us();
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  glow("#5ee6ff", 16);
-  ctx.fillStyle = "#5ee6ff";
+  const who = players[boonPickIdx] || players[0];
+  const hcol = numPlayers > 1 && who ? who.col : "#5ee6ff";
+  glow(hcol, 16);
+  ctx.fillStyle = hcol;
   ctx.font = "bold " + 26 * u + "px 'Courier New', monospace";
-  ctx.fillText("SELECT PROTOCOL UPGRADE", cw / 2, ch * 0.16);
+  ctx.fillText((numPlayers > 1 && who ? who.tag + " — " : "") + "SELECT PROTOCOL UPGRADE", cw / 2, ch * 0.16);
   noglow();
   const n = boonChoices.length;
   const cwid = Math.min(230 * u, (cw - 60) / n - 14);
@@ -5531,7 +6077,7 @@ function drawBoonScreen() {
     const b = choice.b;
     const R = RARITIES[choice.rar || 0];
     const lv = boonLv(b.id);
-    const hover = mouse.x >= x && mouse.x <= x + cwid && mouse.y >= y && mouse.y <= y + chei;
+    const hover = (mouse.x >= x && mouse.x <= x + cwid && mouse.y >= y && mouse.y <= y + chei) || (anyGamepad() && menuHighlight === i);
     ctx.save();
     glow(R.col, hover ? 26 : (choice.rar > 0 ? 16 : 12));
     ctx.fillStyle = "rgba(10,12,34,0.95)";
@@ -5619,7 +6165,7 @@ function drawShopScreen() {
     const cost = metaCost(m, lv); // unlimited levels, geometric cost
     const afford = cores >= cost;
     const x = (cw - w) / 2;
-    const hover = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh;
+    const hover = (mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh) || (anyGamepad() && menuHighlight === i);
     ctx.save();
     glow(afford ? "#ffcc44" : "#445", hover ? 18 : 8);
     ctx.fillStyle = "rgba(10,12,34,0.95)";
@@ -5676,7 +6222,7 @@ function drawHeatScreen() {
     const m = HEAT_MODS[i];
     const lv = heat[m.id] || 0;
     const x = (cw - w) / 2;
-    const hover = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh;
+    const hover = (mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh) || (anyGamepad() && menuHighlight === i);
     ctx.save();
     glow(lv > 0 ? "#ff7755" : "#445", hover ? 16 : 7);
     ctx.fillStyle = "rgba(10,12,34,0.95)";
@@ -5801,6 +6347,16 @@ function drawPause() {
   ctx.fillStyle = "rgba(190,210,255,0.5)";
   ctx.font = 11 * u + "px 'Courier New', monospace";
   ctx.fillText(touchUI ? "tap to cycle (bloom · scanlines · shake)" : "press F to cycle (bloom · scanlines · shake)", cw / 2, by + bh + 14 * u);
+  // gamepad cue when present
+  if (anyGamepad()) {
+    ctx.fillStyle = "rgba(94,230,255,0.65)";
+    ctx.font = 11 * u + "px 'Courier New', monospace";
+    ctx.fillText(GAMEPAD_HELP, cw / 2, by + bh + 32 * u);
+  }
+  // at the hub, allow toggling 1P/2P from the pause menu (only between runs)
+  if (state === "hub") {
+    drawPlayerCountToggle(u, by + bh + 56 * u);
+  }
 }
 
 function uiClick(x, y) {
@@ -5992,12 +6548,71 @@ function render() {
 }
 
 /* ---------------- §V MAIN LOOP ---------------- */
+/* Gamepad menus/state transitions: polled each frame (the Gamepad API gives no
+   button events). Handles title-start, pause toggle, and menu navigation/confirm. */
+function pollGamepadUI(dt) {
+  // start / resume / menu interactions via gamepad edges
+  if (state === "title") {
+    if (gpStartPressed()) { anyStart(); return; }
+    // □ on the title also flips 1P/2P for convenience
+    for (const pad of GP.pads) if (gpPressed(pad, 2)) { setPlayerCount(numPlayers === 1 ? 2 : 1); audio.uiSnd(); }
+    return;
+  }
+  if (state === "summary") { if (gpStartPressed()) anyStart(); return; }
+  // Options/Start toggles pause in play/hub
+  for (const pad of GP.pads) {
+    if (gpPressed(pad, 9)) {
+      if (state === "play" || state === "hub") { paused = !paused; audio.uiSnd(); }
+      else if (state === "shop") closeShop();
+      else if (state === "heat") closeHeat();
+      else if (state === "stats") closeStats();
+      return;
+    }
+  }
+  if (paused) {
+    if (gpConfirm() || gpCancel()) { paused = false; audio.uiSnd(); }
+    return;
+  }
+  // boon / shop / heat menu navigation
+  if (state === "boon" || state === "shop" || state === "heat" || state === "stats") {
+    const stepNav = gpMenuStep(dt);
+    const count = menuItemCount();
+    if ((stepNav.nav || stepNav.vert) && GP.navCD <= 0 && count > 0) {
+      menuHighlight = (menuHighlight + (stepNav.nav || stepNav.vert) + count) % count;
+      GP.navCD = 0.18; audio.uiSnd();
+    }
+    if (gpConfirm()) menuConfirm();
+    if (gpCancel()) menuCancel();
+    return;
+  }
+}
+function menuItemCount() {
+  if (state === "boon") return boonChoices.length;
+  if (state === "shop") return META_UPGRADES.length;
+  if (state === "heat") return HEAT_MODS.length;
+  return 0;
+}
+function menuConfirm() {
+  if (state === "boon") { pickBoon(menuHighlight); menuHighlight = 0; }
+  else if (state === "shop") buyMeta(META_UPGRADES[menuHighlight]);
+  else if (state === "heat") toggleHeat(menuHighlight);
+  else if (state === "stats") closeStats();
+}
+function menuCancel() {
+  if (state === "shop") closeShop();
+  else if (state === "heat") closeHeat();
+  else if (state === "stats") closeStats();
+  // boon must be chosen — no cancel
+}
+
 let lastT = performance.now(), acc = 0;
 function loop(now) {
   requestAnimationFrame(loop);
   let dt = (now - lastT) / 1000;
   lastT = now;
   if (dt > 0.2) dt = 0.2;
+  pollGamepads();      // refresh pad state for this frame
+  pollGamepadUI(dt);   // menu / state transitions via gamepad
   if (!paused) {
     acc += dt * (slowmoT > 0 ? 0.3 : 1); // execution slow-mo: 0.3x timescale
     const S = CONFIG.step;
