@@ -1065,6 +1065,10 @@ const ffx = {
 let fxLightGrad = null;
 function rebuildFxGrads() { fxLightGrad = null; }
 
+/* sprite detail gate: full per-limb animation & sub-shapes only at EFFECTS=full
+   on a precise pointer. reduced/off and touch get simpler, cheaper silhouettes. */
+function spriteDetail() { return ffx.level === "full" && !touchUI; }
+
 /* ---------------- §J PLAYER ---------------- */
 function newPlayer() {
   const maxHp = CONFIG.playerHP + meta.hp * 15;
@@ -1081,6 +1085,7 @@ function newPlayer() {
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
     ifr: 0, hurtT: 0, trail: [], trailT: 0,
+    aimDraw: -Math.PI / 2, walkT: 0, moveAmt: 0, recoilT: 0, // render-anim state
     freezeCD: 0, freezeCDMax: 0, buyCD: 0,
     meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
     boons: {}, boonPow: {}, boonBest: {},
@@ -1433,10 +1438,12 @@ function killEnemy(e) {
   ffx.ring(e.x, e.y, big ? 70 : 36, e.col, big ? 0.5 : 0.32, big ? 6 : 3);
   ffx.spawnLight(e.x, e.y, big ? 120 : 56, e.col, big ? 0.8 : 0.4);
   if (e.type === "boss") { ffx.pulse(e.x, e.y, 9); ffx.ring(e.x, e.y, 140, "#ffffff", 0.6, 5); }
-  else if (e.type === "swarmer") { ffx.spray(e.x, e.y, rand(0, TAU), e.col, 6, 240); }
-  else if (e.type === "phantom") { burst(e.x, e.y, "#bb99ff", 14, 240, 0.5, 2.5); ffx.pulse(e.x, e.y, 4); }
-  else if (e.type === "tank") { ffx.pulse(e.x, e.y, 6); }
-  else if (e.type === "shield") { burst(e.x, e.y, "#88aaff", 16, 260, 0.5, 3); }
+  else if (e.type === "swarmer") { ffx.spray(e.x, e.y, rand(0, TAU), e.col, 6, 240); } // bug pops
+  else if (e.type === "phantom") { burst(e.x, e.y, "#bb99ff", 14, 240, 0.5, 2.5); ffx.pulse(e.x, e.y, 4); } // wraith dissipates
+  else if (e.type === "tank") { ffx.pulse(e.x, e.y, 6); ffx.ring(e.x, e.y, 60, "#ffaa33", 0.4, 5); burst(e.x, e.y, "#7a4410", 14, 200, 0.7, 3.5); } // brute crumbles
+  else if (e.type === "shield") { burst(e.x, e.y, "#88aaff", 16, 260, 0.5, 3); ffx.ring(e.x, e.y, 44, "#aaccff", 0.35, 3); } // shield shatters
+  else if (e.type === "shooter" || e.type === "medic") { ffx.spray(e.x, e.y, rand(0, TAU), e.col, 8, 200); burst(e.x, e.y, "#ffee99", 6, 180, 0.4, 2); } // drone sparks & falls
+  else if (e.type === "bomber") { burst(e.x, e.y, "#ffcc66", 12, 240, 0.5, 3); } // pops
   audio.enemyDie(big);
   freezeT = Math.max(freezeT, e.type === "boss" ? 0.16 : CONFIG.killStop * 1.35);
   shake(big ? 9 : 4, big ? 0.4 : 0.18);
@@ -1513,6 +1520,7 @@ function firePlayerBolt() {
     });
   }
   audio.bolt();
+  player.recoilT = Math.max(player.recoilT, 0.12); // arm kick on bolt fire
   burst(player.x + Math.cos(player.aim) * 18, player.y + Math.sin(player.aim) * 18, "#ff66ee", 5, 120, 0.2, 2);
 }
 
@@ -2141,6 +2149,7 @@ function trySlash() {
   p.slashT = p.slashDur;
   p.slashSide *= -1;
   p.slashAng = p.aim;
+  p.recoilT = 0.18; // weapon-arm lunge/recoil pose window
   audio.slash(W.id);
   if (fang) p.frenzyT = 1.2; // frenzy decay window
   if (lunge) { // dash a short step forward along the thrust
@@ -2445,6 +2454,16 @@ function updatePlayer(dt) {
   collideArena(p);
   for (const tr of p.trail) tr.t -= dt;
   p.trail = p.trail.filter((tr) => tr.t > 0);
+
+  // --- render-animation state (cheap; no allocations) ---
+  // smooth the drawn facing toward the true aim along the shortest arc
+  p.aimDraw += angDiff(p.aimDraw, p.aim) * Math.min(1, dt * 16);
+  // walk cycle advances with actual speed; moveAmt eases the leg/arm swing in/out
+  const spdNow = Math.hypot(p.vx, p.vy);
+  const movingNow = spdNow > 26 || p.dashT > 0;
+  p.moveAmt += ((movingNow ? 1 : 0) - p.moveAmt) * Math.min(1, dt * 12);
+  p.walkT += dt * (8 + spdNow * 0.018);
+  p.recoilT = Math.max(0, p.recoilT - dt);
 
   // hub interactions
   if (state === "hub") {
@@ -3806,12 +3825,187 @@ function drawSpawnTelegraphs() {
   }
 }
 
+/* Bosses: larger multi-part bodies, each with an animated part synced to its
+   attack pattern. Telegraph poses (wind-ups) are made deliberately obvious. */
+function drawBossBody(e, fl, col, dark, detail) {
+  const aimP = player ? angTo(e.x, e.y, player.x, player.y) : 0;
+  ctx.save();
+  ctx.translate(e.x, e.y);
+  if (e.kind === "summoner") {
+    // VOIDCALLER — floating eye ringed by orbiting shards; the eye flares wide and
+    // the shards splay out when it teleports or summons.
+    if (e.state === "tele") ctx.globalAlpha *= clamp(e.t / 0.55, 0.15, 1);
+    const flare = (e.state === "tele") ? (1 - clamp(e.t / 0.55, 0, 1))
+      : (e.state === "summon") ? (1 - clamp(e.t / 0.9, 0, 1)) : 0;
+    const nSh = detail ? 6 : 3;
+    glow(col, 8 + flare * 14);
+    ctx.fillStyle = col;
+    for (let i = 0; i < nSh; i++) {
+      const a = e.rot * 1.6 + (i / nSh) * TAU;
+      const orb = e.r + 16 + flare * 22;            // shards splay out on cast
+      const sx = Math.cos(a) * orb, sy = Math.sin(a) * orb;
+      ctx.save(); ctx.translate(sx, sy); ctx.rotate(a + Math.PI / 2);
+      ctx.beginPath();
+      ctx.moveTo(0, -7); ctx.lineTo(4, 0); ctx.lineTo(0, 7); ctx.lineTo(-4, 0);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    noglow();
+    // rune-triangle mantle
+    ctx.save();
+    ctx.rotate(e.rot * 0.7);
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * TAU - Math.PI / 2;
+      const rr = e.r + 6;
+      if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    // central eye: socket + wide-flaring pupil aimed at the player
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.55, 0, TAU); ctx.fill();
+    glow(col, 8 + flare * 16);
+    ctx.fillStyle = fl ? "#ffffff" : "#e0c0ff";
+    const pr = e.r * (0.22 + flare * 0.3);
+    ctx.beginPath(); ctx.arc(Math.cos(aimP) * e.r * 0.14, Math.sin(aimP) * e.r * 0.14, pr, 0, TAU); ctx.fill();
+    noglow();
+  } else if (e.kind === "artillery") {
+    // LANCE-7 — quad-leg walker with a long articulated cannon that swivels to aim
+    // and BRACES (recoils back, splays legs) right before the lance shot.
+    const aiming = e.state === "aim";
+    const ap = aiming ? (1 - clamp(e.t / 0.95, 0, 1)) : 0; // 0→1 brace progress
+    ctx.lineWidth = 5; ctx.strokeStyle = col; ctx.lineCap = "round";
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * TAU + Math.PI / 4;
+      const splay = (i < 2 ? 1 : -1) * ap * 0.12 + (detail ? Math.sin(e.rot * 2 + i) * 0.06 : 0);
+      const knee = e.r * (0.5 + ap * 0.1);
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * e.r * 0.4, Math.sin(a) * e.r * 0.4);
+      ctx.lineTo(Math.cos(a + splay) * knee, Math.sin(a + splay) * knee);
+      ctx.lineTo(Math.cos(a + splay) * (e.r + 14), Math.sin(a + splay) * (e.r + 14));
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+    // chassis
+    ctx.fillStyle = col;
+    rrect(-e.r * 0.75, -e.r * 0.75, e.r * 1.5, e.r * 1.5, 8); ctx.fill();
+    // long cannon: two-segment arm, recoils back as it braces, snaps on fire
+    const ba = aiming ? Math.atan2(e.dirY, e.dirX) : aimP;
+    ctx.rotate(ba);
+    const recoil = -ap * e.r * 0.22;
+    ctx.fillStyle = "#aa5520";
+    ctx.fillRect(recoil, -8, e.r * 0.8, 16);                 // breech
+    glow(aiming ? "#ffcc66" : col, 6 + ap * 16);
+    ctx.fillStyle = fl ? "#ffffff" : col;
+    ctx.fillRect(e.r * 0.7 + recoil, -6, e.r + 24, 12);      // barrel
+    if (aiming) { // charging muzzle glow
+      ctx.fillStyle = "#fff0c0";
+      ctx.beginPath(); ctx.arc(e.r * 1.7 + recoil + 24, 0, 4 + ap * 6, 0, TAU); ctx.fill();
+    }
+    noglow();
+    ctx.rotate(-ba);
+    // cockpit eye
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.35, 0, TAU); ctx.fill();
+    ctx.fillStyle = fl ? "#ffffff" : "#ffd0a0";
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.16, 0, TAU); ctx.fill();
+  } else if (e.kind === "splitter") {
+    // MITOSIS PRIME — gelatinous body that wobbles; visibly pinches/elongates
+    // (mitosis) on its lunge/slam wind-up. Fragments are smaller copies.
+    const pinch = (e.state === "wind") ? (1 - clamp(e.t / 0.55, 0, 1)) : 0;
+    const sq = 1 + pinch * 0.25, sqp = 1 - pinch * 0.18; // stretch on wind-up
+    ctx.save();
+    if (pinch > 0) ctx.rotate(player ? angTo(e.x, e.y, player.x, player.y) : 0);
+    ctx.scale(sq, sqp);
+    glow(col, 12);
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    const segs = detail ? 16 : 10;
+    for (let i = 0; i <= segs; i++) {
+      const a = (i / segs) * TAU;
+      const rr = e.r * (1 + 0.09 * Math.sin(a * 3 + e.rot * 4) + 0.05 * Math.sin(a * 5 - e.rot * 3));
+      if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fill();
+    noglow();
+    ctx.restore();
+    // membrane
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.55, 0, TAU); ctx.fill();
+    // nuclei — one per remaining split, jiggling; pull apart as it prepares to divide
+    const nNuc = Math.max(1, 3 - e.gen);
+    glow(col, 8);
+    ctx.fillStyle = fl ? "#ffffff" : "#caffd8";
+    for (let i = 0; i < nNuc; i++) {
+      const a = e.rot * 2 + (i / nNuc) * TAU;
+      const sep = e.r * (0.22 + pinch * 0.25);
+      ctx.beginPath(); ctx.arc(Math.cos(a) * sep, Math.sin(a) * sep, e.r * 0.16, 0, TAU); ctx.fill();
+    }
+    noglow();
+  } else {
+    // THE WARDEN — armored core with counter-rotating guard rings; the rings spin up
+    // and the eye glares forward when it aims its dash or fires a radial volley.
+    const charge = (e.state === "aim") ? (1 - clamp(e.t / 0.7, 0, 1))
+      : (e.state === "radial") ? 0.6 : 0;
+    // outer guard ring (segmented), spins faster while charging
+    ctx.save();
+    ctx.rotate(e.rot * (0.5 + charge));
+    ctx.strokeStyle = col; ctx.lineWidth = 4 + charge * 2;
+    glow(col, 6 + charge * 12);
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+      const a0 = (i / 6) * TAU, a1 = a0 + TAU / 9;
+      ctx.moveTo(Math.cos(a0) * (e.r + 12), Math.sin(a0) * (e.r + 12));
+      ctx.arc(0, 0, e.r + 12, a0, a1);
+    }
+    ctx.stroke();
+    noglow();
+    ctx.restore();
+    // inner guard ring counter-rotates
+    if (detail) {
+      ctx.save();
+      ctx.rotate(-e.rot * 0.8);
+      ctx.strokeStyle = "rgba(255,90,130,0.7)"; ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const a0 = (i / 4) * TAU + 0.3, a1 = a0 + TAU / 10;
+        ctx.moveTo(Math.cos(a0) * (e.r + 4), Math.sin(a0) * (e.r + 4));
+        ctx.arc(0, 0, e.r + 4, a0, a1);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    // armored hull + dark face
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.7, 0, TAU); ctx.fill();
+    // single glaring eye tracks the player, flares on charge
+    glow(charge > 0 ? "#ffdd66" : col, 6 + charge * 16);
+    ctx.fillStyle = fl ? "#ffffff" : (charge > 0.4 ? "#ffe0a0" : "#ff88aa");
+    ctx.beginPath();
+    ctx.arc(Math.cos(aimP) * e.r * 0.32, Math.sin(aimP) * e.r * 0.32, e.r * (0.24 + charge * 0.08), 0, TAU);
+    ctx.fill();
+    noglow();
+  }
+  ctx.restore();
+}
+
 function drawEnemy(e) {
   const fl = e.flash > 0;
   const frozen = e.frozenT > 0;
   const col = fl ? "#ffffff" : frozen ? "#bfe8ff" : e.col;
   ctx.save();
   if (e.spawnT > 0) ctx.globalAlpha = 1 - e.spawnT / 0.4;
+  // shock: the whole sprite jitters (frozen targets are locked, so no jitter then)
+  if ((e.shockT || 0) > 0 && !frozen) {
+    const j = 1.4 + Math.min(1.4, e.r * 0.06);
+    ctx.translate(rand(-j, j), rand(-j, j));
+  }
   // phantom cloak: barely-visible shimmer (statuses force visibility)
   if (e.type === "phantom" && e.state === "cloak" && e.frozenT <= 0 && (e.shockT || 0) <= 0 && !fl) {
     ctx.globalAlpha *= 0.12 + 0.05 * Math.sin(timeNow * 6 + e.phase);
@@ -3932,223 +4126,323 @@ function drawEnemy(e) {
   glow(col, fl ? 22 : 13);
   ctx.fillStyle = col;
   ctx.strokeStyle = col;
+  const detail = spriteDetail();
+  const dark = "#1a0a14";   // shared inset/socket tone for the hostile palette
+  const aimP = (player ? angTo(e.x, e.y, player.x, player.y) : 0);
 
   if (e.type === "chaser") {
-    const a = e.state === "lunge" || e.state === "wind" ? Math.atan2(e.dirY, e.dirX) : angTo(e.x, e.y, player.x, player.y);
+    // CHASER — bladed biped raptor: crouches & coils on the wind-up, lunges flat.
+    const a = (e.state === "lunge" || e.state === "wind") ? Math.atan2(e.dirY, e.dirX) : aimP;
+    const wind = e.state === "wind" ? (1 - clamp(e.t / 0.45, 0, 1)) : 0; // 0→1 coil
+    const lunge = e.state === "lunge" ? clamp(e.t / 0.3, 0, 1) : 0;      // 1→0 extend
     ctx.save();
     ctx.translate(e.x, e.y); ctx.rotate(a);
+    const crouch = 1 - wind * 0.28;            // body squashes back as it coils
+    const gait = detail ? Math.sin(timeNow * 14 + e.phase) : 0;
+    // hind legs (open scissor when running, planted & bent when coiled)
+    if (detail) {
+      ctx.strokeStyle = col; ctx.lineWidth = 2.6; ctx.lineCap = "round";
+      for (const sgn of [-1, 1]) {
+        const sw = gait * sgn * (0.5 + wind);
+        ctx.beginPath();
+        ctx.moveTo(-e.r * 0.2, sgn * e.r * 0.5);
+        ctx.lineTo(-e.r * (0.7 + wind * 0.2), sgn * e.r * (0.9 + sw * 0.3));
+        ctx.lineTo(-e.r * (0.4) + sw * 4, sgn * e.r * 1.15);
+        ctx.stroke();
+      }
+      ctx.lineCap = "butt";
+    }
+    // sleek body wedge
     ctx.beginPath();
-    ctx.moveTo(e.r + 4, 0); ctx.lineTo(-e.r * 0.7, e.r * 0.8); ctx.lineTo(-e.r * 0.3, 0); ctx.lineTo(-e.r * 0.7, -e.r * 0.8);
+    ctx.moveTo(e.r * (0.95 + lunge * 0.3) * crouch, 0);
+    ctx.lineTo(-e.r * 0.75 * crouch, e.r * 0.7);
+    ctx.lineTo(-e.r * 0.35 * crouch, 0);
+    ctx.lineTo(-e.r * 0.75 * crouch, -e.r * 0.7);
     ctx.closePath(); ctx.fill();
+    // twin blade-arms snap forward on the lunge, drawn back when coiling
+    const reach = e.r * (0.6 - wind * 0.45 + lunge * 0.7);
+    ctx.strokeStyle = fl ? "#ffffff" : "#ffd0dd"; ctx.lineWidth = 2.4; ctx.lineCap = "round";
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(e.r * 0.2, sgn * e.r * 0.4);
+      ctx.lineTo(e.r * 0.5 + reach, sgn * e.r * (0.25 + lunge * 0.1));
+      ctx.lineTo(e.r * 0.9 + reach, sgn * e.r * 0.05);
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+    // snapping maw eye
+    glow(col, 8);
+    ctx.fillStyle = fl ? "#ffffff" : "#3a0d18";
+    ctx.beginPath(); ctx.arc(e.r * 0.35, 0, e.r * 0.26, 0, TAU); ctx.fill();
+    ctx.fillStyle = fl ? "#ffffff" : (wind > 0.3 ? "#ffee66" : "#ff7088");
+    ctx.beginPath(); ctx.arc(e.r * 0.4, 0, e.r * 0.12, 0, TAU); ctx.fill();
+    noglow();
     ctx.restore();
   } else if (e.type === "shooter") {
+    // SHOOTER — hovering turret-drone: a ring eye that swivels its barrel to aim,
+    // the barrel charges (recedes) then recoils (kicks back) when it fires.
+    const charging = e.state === "charge";
+    const cp = charging ? (1 - clamp(e.t / 0.6, 0, 1)) : 0; // 0→1 as the shot nears
+    const bob = Math.sin(timeNow * 4 + e.phase) * 2;
     ctx.save();
-    ctx.translate(e.x, e.y); ctx.rotate(timeNow * 1.5);
+    ctx.translate(e.x, e.y + bob);
+    // outer eyelid ring (slow spin), housing
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.95, timeNow * 1.5, timeNow * 1.5 + 5.0); ctx.stroke();
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.72, 0, TAU); ctx.fill();
+    // dark iris + glowing pupil tracks the player
+    ctx.fillStyle = fl ? "#ffffff" : dark;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.5, 0, TAU); ctx.fill();
+    const px = Math.cos(aimP) * e.r * 0.18, py = Math.sin(aimP) * e.r * 0.18;
+    glow(charging ? "#ffaa66" : col, 8 + cp * 14);
+    ctx.fillStyle = fl ? "#ffffff" : (charging ? "#ffd27a" : "#e6b3ff");
+    ctx.beginPath(); ctx.arc(px, py, e.r * (0.22 + cp * 0.12), 0, TAU); ctx.fill();
+    noglow();
+    // barrel: charge pulls it in, the muzzle flash kicks it back out
+    const recoil = charging ? -cp * e.r * 0.3 : 0;
+    ctx.rotate(aimP);
+    ctx.fillStyle = fl ? "#ffffff" : col;
+    ctx.fillRect(e.r * 0.5 + recoil, -e.r * 0.22, e.r * 0.7, e.r * 0.44);
+    if (charging) {
+      glow("#ffaa66", 12);
+      ctx.fillStyle = "#fff0d0";
+      ctx.beginPath(); ctx.arc(e.r * 1.2 + recoil, 0, e.r * 0.14 * (0.5 + cp), 0, TAU); ctx.fill();
+      noglow();
+    }
+    ctx.restore();
+  } else if (e.type === "tank") {
+    // TANK — heavy armored walker: plated hex shell, stomping legs, glowing core
+    // that flares & the body rears on the slam wind-up.
+    const slamP = e.state === "slam" ? (1 - clamp(e.t / 0.85, 0, 1)) : 0; // 0→1 charge
+    const stomp = detail ? Math.sin(timeNow * 5 + e.phase) : 0;
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    // stomping legs poke out the sides
+    if (detail) {
+      ctx.fillStyle = "#7a4410";
+      for (const sgn of [-1, 1]) {
+        const lift = (sgn > 0 ? stomp : -stomp) * 3;
+        ctx.fillRect(sgn * e.r * 0.7, -e.r * 0.55 + lift, e.r * 0.4, e.r * 0.45);
+        ctx.fillRect(sgn * e.r * 0.7, e.r * 0.15 - lift, e.r * 0.4, e.r * 0.45);
+      }
+    }
+    ctx.rotate(timeNow * 0.25 + slamP * 0.4);
+    // plated hexagonal shell
     ctx.beginPath();
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * TAU;
-      const rr = i % 2 ? e.r * 0.6 : e.r;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU;
+      const rr = e.r * (1 + slamP * 0.06);
       if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
       else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
     }
     ctx.closePath(); ctx.fill();
-    ctx.restore();
-  } else if (e.type === "tank") {
-    ctx.save();
-    ctx.translate(e.x, e.y);
-    ctx.rotate(timeNow * 0.4);
-    ctx.beginPath();
+    // armor plate seams
+    ctx.strokeStyle = "rgba(20,10,4,0.6)"; ctx.lineWidth = 2;
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * TAU;
-      if (i === 0) ctx.moveTo(Math.cos(a) * e.r, Math.sin(a) * e.r);
-      else ctx.lineTo(Math.cos(a) * e.r, Math.sin(a) * e.r);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * e.r, Math.sin(a) * e.r); ctx.stroke();
     }
-    ctx.closePath(); ctx.fill();
     ctx.restore();
-    ctx.fillStyle = "#070720";
+    // reactor core: dark socket + bright pupil that flares hot on the slam
+    ctx.fillStyle = dark;
     ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.45, 0, TAU); ctx.fill();
-    ctx.fillStyle = col;
-    ctx.beginPath(); ctx.arc(e.x, e.y, e.r * 0.2, 0, TAU); ctx.fill();
+    glow(slamP > 0 ? "#ffdd66" : col, 8 + slamP * 18);
+    ctx.fillStyle = fl ? "#ffffff" : (slamP > 0.4 ? "#fff0a0" : col);
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (0.2 + slamP * 0.16), 0, TAU); ctx.fill();
+    noglow();
   } else if (e.type === "swarmer") {
+    // SWARMER — skittering multi-legged bug: 6 flicking legs + segmented body
     ctx.save();
-    ctx.translate(e.x, e.y); ctx.rotate(e.phase);
-    ctx.beginPath();
-    ctx.moveTo(e.r + 2, 0); ctx.lineTo(0, e.r); ctx.lineTo(-e.r, 0); ctx.lineTo(0, -e.r);
-    ctx.closePath(); ctx.fill();
+    ctx.translate(e.x, e.y);
+    const head = (Math.hypot(e.vx, e.vy) > 5) ? Math.atan2(e.vy, e.vx) : (e.phase + timeNow);
+    ctx.rotate(head);
+    const sk = Math.sin(timeNow * 22 + e.phase); // fast skitter
+    if (detail) {
+      ctx.strokeStyle = col; ctx.lineWidth = 1.6; ctx.lineCap = "round";
+      for (let i = 0; i < 3; i++) {
+        const ly = (i - 1) * e.r * 0.6;
+        const sw = Math.sin(timeNow * 22 + e.phase + i) * e.r * 0.5;
+        for (const sgn of [-1, 1]) {
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.lineTo(e.r * 0.7 * (i - 1) + sw * 0.3, sgn * e.r * 0.7);
+          ctx.lineTo(e.r * 0.7 * (i - 1) + sw, sgn * e.r * 1.3);
+          ctx.stroke();
+        }
+      }
+      ctx.lineCap = "butt";
+    }
+    // body: thorax + head bead
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.ellipse(-e.r * 0.2, 0, e.r * 0.9, e.r * 0.6, 0, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(e.r * 0.55, 0, e.r * 0.45, 0, TAU); ctx.fill();
+    ctx.fillStyle = fl ? "#ffffff" : "#0d2a14";
+    ctx.beginPath(); ctx.arc(e.r * 0.6, 0, e.r * 0.18 + Math.abs(sk) * 1, 0, TAU); ctx.fill();
     ctx.restore();
   } else if (e.type === "bomber") {
-    // squat scuttler with stubby legs and a glowing fuse dome
+    // BOMBER — round pulsing creature: body inflates & the core flashes faster as the fuse burns
     ctx.save();
     ctx.translate(e.x, e.y);
     const fusing = e.state === "fuse";
-    const fuseGlow = fusing ? 0.5 + 0.5 * Math.sin(timeNow * (12 + (1 - clamp(e.t, 0, 1)) * 26)) : 0.25 + 0.1 * Math.sin(timeNow * 4);
-    ctx.lineWidth = 3;
-    for (let i = 0; i < 6; i++) { // legs
-      const a = (i / 6) * TAU + Math.sin(e.phase + i) * 0.18;
+    const fz = fusing ? (1 - clamp(e.t, 0, 1)) : 0; // 0→1 fuse progress
+    const beat = fusing ? Math.sin(timeNow * (12 + fz * 30)) : Math.sin(timeNow * 4 + e.phase);
+    const inflate = 1 + (fusing ? fz * 0.22 + beat * 0.1 * fz : beat * 0.04);
+    const fuseGlow = fusing ? 0.5 + 0.5 * beat : 0.25 + 0.1 * beat;
+    // stubby legs
+    ctx.strokeStyle = "#7a3a18"; ctx.lineWidth = 3; ctx.lineCap = "round";
+    const nLeg = detail ? 6 : 4;
+    for (let i = 0; i < nLeg; i++) {
+      const a = (i / nLeg) * TAU + (detail ? Math.sin(timeNow * 10 + e.phase + i) * 0.18 : 0);
       ctx.beginPath();
       ctx.moveTo(Math.cos(a) * e.r * 0.5, Math.sin(a) * e.r * 0.5);
       ctx.lineTo(Math.cos(a) * (e.r + 5), Math.sin(a) * (e.r + 5));
       ctx.stroke();
     }
-    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
-    // fuse dome pulses hotter as detonation nears
-    glow("#ffe0aa", 10 + fuseGlow * 16);
-    ctx.fillStyle = fl ? "#ffffff" : "rgba(255," + Math.round(190 + fuseGlow * 65) + "," + Math.round(120 + fuseGlow * 100) + ",1)";
-    ctx.beginPath(); ctx.arc(0, 0, e.r * (0.4 + fuseGlow * 0.18), 0, TAU); ctx.fill();
+    ctx.lineCap = "butt";
+    // taut inflating shell
+    ctx.fillStyle = fl || (fusing && beat > 0.6) ? "#ffffff" : col;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * inflate, 0, TAU); ctx.fill();
+    // glowing fuse core, hotter & whiter near detonation
+    glow("#ffe0aa", 10 + fuseGlow * 18);
+    ctx.fillStyle = fl ? "#ffffff" : "rgba(255," + Math.round(190 + fuseGlow * 65) + "," + Math.round(110 + fuseGlow * 120) + ",1)";
+    ctx.beginPath(); ctx.arc(0, 0, e.r * (0.4 + fuseGlow * 0.2), 0, TAU); ctx.fill();
+    noglow();
     ctx.restore();
   } else if (e.type === "shield") {
-    // armored walker with a frontal energy shield arc
+    // SHIELDBEARER — armored sentinel hoisting a wide energy shield on its front facing
     ctx.save();
     ctx.translate(e.x, e.y);
     ctx.rotate(e.shieldA);
-    rrect(-e.r * 0.8, -e.r * 0.7, e.r * 1.5, e.r * 1.4, 5); ctx.fill();
-    ctx.fillStyle = "#070720";
+    const trudge = detail ? Math.sin(timeNow * 6 + e.phase) * 2 : 0;
+    // legs
+    if (detail) {
+      ctx.fillStyle = "#3a4a7a";
+      ctx.fillRect(-e.r * 0.5, e.r * 0.45 + trudge, e.r * 0.4, e.r * 0.5);
+      ctx.fillRect(-e.r * 0.5, -e.r * 0.95 - trudge, e.r * 0.4, e.r * 0.5);
+    }
+    // armored torso
+    ctx.fillStyle = col;
+    rrect(-e.r * 0.85, -e.r * 0.7, e.r * 1.45, e.r * 1.4, 5); ctx.fill();
+    // head core
+    ctx.fillStyle = dark;
     ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.35, 0, TAU); ctx.fill();
     ctx.fillStyle = fl ? "#ffffff" : "#cfe0ff";
     ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.15, 0, TAU); ctx.fill();
-    // the shield itself: bright when active, shattered-dim when exposed/frozen/shocked
+    // the big energy shield — bright & layered when active, fractured-dim when down
     const active = e.frozenT <= 0 && (e.shockT || 0) <= 0 && (e.exposeT || 0) <= 0;
-    glow("#aaccff", active ? 14 : 4);
-    ctx.strokeStyle = active ? "rgba(170,204,255,0.95)" : "rgba(120,140,200,0.35)";
+    glow("#aaccff", active ? 16 : 4);
+    ctx.strokeStyle = active ? "rgba(170,204,255,0.95)" : "rgba(120,140,200,0.32)";
     ctx.lineWidth = active ? 5 : 3;
-    ctx.beginPath(); ctx.arc(0, 0, e.r + 7, -1.15, 1.15); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, e.r + 8, -1.2, 1.2); ctx.stroke();
     if (active) {
       ctx.strokeStyle = "rgba(200,225,255,0.4)";
-      ctx.lineWidth = 9;
-      ctx.beginPath(); ctx.arc(0, 0, e.r + 7, -1.0, 1.0); ctx.stroke();
+      ctx.lineWidth = 10;
+      ctx.beginPath(); ctx.arc(0, 0, e.r + 8, -1.05, 1.05); ctx.stroke();
+      if (detail) { // hex shimmer ribs
+        ctx.strokeStyle = "rgba(220,235,255,0.5)"; ctx.lineWidth = 1.5;
+        for (let i = -2; i <= 2; i++) {
+          const a = i * 0.45;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * (e.r + 2), Math.sin(a) * (e.r + 2));
+          ctx.lineTo(Math.cos(a) * (e.r + 12), Math.sin(a) * (e.r + 12));
+          ctx.stroke();
+        }
+      }
     }
     noglow();
     ctx.restore();
   } else if (e.type === "medic") {
-    // heal beam to its patient (drawn under the drone body)
-    if (e.healTgt && e.healTgt.hp > 0) {
+    // MEDIC DRONE — sleek hovering drone, rotor glow, emitter flares on the heal beam
+    const healing = e.healTgt && e.healTgt.hp > 0;
+    if (healing) {
       ctx.save();
       glow("#66ffcc", 10);
       ctx.strokeStyle = "rgba(102,255,204," + (0.5 + 0.25 * Math.sin(timeNow * 9)) + ")";
       ctx.lineWidth = 2.5;
-      ctx.setLineDash([6, 5]);
-      ctx.beginPath();
-      ctx.moveTo(e.x, e.y);
-      ctx.lineTo(e.healTgt.x, e.healTgt.y);
-      ctx.stroke();
+      ctx.setLineDash([6, 5]); ctx.lineDashOffset = -timeNow * 30;
+      ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.healTgt.x, e.healTgt.y); ctx.stroke();
       ctx.setLineDash([]);
       noglow();
       ctx.restore();
       ctx.fillStyle = col; ctx.strokeStyle = col;
     }
-    // hovering drone: rotor ring + medical cross
     ctx.save();
     ctx.translate(e.x, e.y + Math.sin(timeNow * 5 + e.phase) * 2.5);
+    // twin rotor blur rings
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, e.r + 3, timeNow * 5, timeNow * 5 + 4.6); ctx.stroke();
-    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
-    ctx.fillStyle = "#070720";
-    ctx.fillRect(-e.r * 0.55, -e.r * 0.2, e.r * 1.1, e.r * 0.4);
-    ctx.fillRect(-e.r * 0.2, -e.r * 0.55, e.r * 0.4, e.r * 1.1);
+    ctx.strokeStyle = "rgba(102,255,204,0.5)";
+    ctx.beginPath(); ctx.arc(0, 0, e.r + 4, timeNow * 9, timeNow * 9 + 3.2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, e.r + 4, timeNow * 9 + Math.PI, timeNow * 9 + Math.PI + 3.2); ctx.stroke();
+    // teardrop chassis
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.ellipse(0, 0, e.r, e.r * 0.82, 0, 0, TAU); ctx.fill();
+    // medical cross
+    ctx.fillStyle = dark;
+    ctx.fillRect(-e.r * 0.5, -e.r * 0.18, e.r * 1.0, e.r * 0.36);
+    ctx.fillRect(-e.r * 0.18, -e.r * 0.5, e.r * 0.36, e.r * 1.0);
+    // emitter pod glows while beaming
+    glow(healing ? "#aaffe0" : col, healing ? 12 : 6);
+    ctx.fillStyle = fl ? "#ffffff" : (healing ? "#d6fff0" : "#9fffe0");
+    ctx.beginPath(); ctx.arc(0, e.r * 0.7, e.r * 0.22 * (healing ? 1 + 0.3 * Math.sin(timeNow * 14) : 1), 0, TAU); ctx.fill();
+    noglow();
     ctx.restore();
   } else if (e.type === "phantom") {
-    // sleek dagger shard, aimed along its motion / strike line
+    // PHANTOM — cloaked wraith: a soft shimmer that resolves into a sharp striker on decloak
     ctx.save();
     ctx.translate(e.x, e.y);
     const pa = (e.state === "reveal" || e.state === "strike") ? Math.atan2(e.dirY, e.dirX)
-      : (Math.hypot(e.vx, e.vy) > 5 ? Math.atan2(e.vy, e.vx) : angTo(e.x, e.y, player.x, player.y));
+      : (Math.hypot(e.vx, e.vy) > 5 ? Math.atan2(e.vy, e.vx) : aimP);
     ctx.rotate(pa);
+    // solidity: 0 = ghostly drifting, 1 = fully materialized striker
+    const solid = e.state === "reveal" ? clamp(1 - e.t / 0.5, 0, 1)
+      : (e.state === "strike" || e.state === "recover") ? 1
+      : 0.15;
+    // wispy trailing cloak (always faintly there)
+    ctx.globalAlpha *= 0.5 + solid * 0.5;
+    ctx.fillStyle = col;
     ctx.beginPath();
-    ctx.moveTo(e.r + 7, 0); ctx.lineTo(-e.r * 0.5, e.r * 0.55);
-    ctx.lineTo(-e.r * 0.9, 0); ctx.lineTo(-e.r * 0.5, -e.r * 0.55);
+    ctx.moveTo(-e.r * 1.2, 0);
+    ctx.quadraticCurveTo(-e.r * 0.3, e.r * (0.5 + 0.2 * Math.sin(timeNow * 8)), e.r * 0.2, 0);
+    ctx.quadraticCurveTo(-e.r * 0.3, -e.r * (0.5 + 0.2 * Math.sin(timeNow * 8 + 1)), -e.r * 1.2, 0);
     ctx.closePath(); ctx.fill();
+    // hard striker blade emerges as it solidifies
+    ctx.globalAlpha = Math.min(1, 0.2 + solid);
+    glow(col, 6 + solid * 12);
     ctx.fillStyle = fl ? "#ffffff" : "#e8defc";
-    ctx.beginPath(); ctx.arc(e.r * 0.15, 0, e.r * 0.18, 0, TAU); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(e.r + 8, 0);
+    ctx.lineTo(-e.r * 0.4, e.r * 0.5 * solid + e.r * 0.15);
+    ctx.lineTo(-e.r * 0.8, 0);
+    ctx.lineTo(-e.r * 0.4, -(e.r * 0.5 * solid + e.r * 0.15));
+    ctx.closePath(); ctx.fill();
+    // cold eye
+    ctx.fillStyle = fl ? "#ffffff" : (solid > 0.5 ? "#ffffff" : "#c9b3ff");
+    ctx.beginPath(); ctx.arc(e.r * 0.1, 0, e.r * 0.16, 0, TAU); ctx.fill();
+    noglow();
     ctx.restore();
   } else if (e.type === "boss") {
-    ctx.save();
-    ctx.translate(e.x, e.y);
-    if (e.kind === "summoner") {
-      // VOIDCALLER: rune triangle with orbiting orbs; fades while teleporting
-      if (e.state === "tele") ctx.globalAlpha *= clamp(e.t / 0.55, 0.15, 1);
-      for (let i = 0; i < 3; i++) {
-        const a = e.rot * 1.6 + (i / 3) * TAU;
-        ctx.beginPath(); ctx.arc(Math.cos(a) * (e.r + 16), Math.sin(a) * (e.r + 16), 6, 0, TAU); ctx.fill();
-      }
-      ctx.rotate(e.rot * 0.7);
-      ctx.beginPath();
-      for (let i = 0; i < 3; i++) {
-        const a = (i / 3) * TAU - Math.PI / 2;
-        if (i === 0) ctx.moveTo(Math.cos(a) * (e.r + 6), Math.sin(a) * (e.r + 6));
-        else ctx.lineTo(Math.cos(a) * (e.r + 6), Math.sin(a) * (e.r + 6));
-      }
-      ctx.closePath(); ctx.fill();
-      ctx.fillStyle = "#070720";
-      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.45, 0, TAU); ctx.fill();
-      ctx.fillStyle = fl ? "#ffffff" : "#e0c0ff";
-      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.2, 0, TAU); ctx.fill();
-    } else if (e.kind === "artillery") {
-      // LANCE-7: walker turret with a long barrel
-      ctx.lineWidth = 5;
-      for (let i = 0; i < 4; i++) {
-        const a = (i / 4) * TAU + Math.PI / 4 + Math.sin(e.rot * 2) * 0.08;
-        ctx.beginPath();
-        ctx.moveTo(Math.cos(a) * e.r * 0.5, Math.sin(a) * e.r * 0.5);
-        ctx.lineTo(Math.cos(a) * (e.r + 12), Math.sin(a) * (e.r + 12));
-        ctx.stroke();
-      }
-      rrect(-e.r * 0.75, -e.r * 0.75, e.r * 1.5, e.r * 1.5, 8); ctx.fill();
-      const ba = e.state === "aim" ? Math.atan2(e.dirY, e.dirX) : angTo(e.x, e.y, player.x, player.y);
-      ctx.rotate(ba);
-      ctx.fillRect(0, -6, e.r + 22, 12);
-      ctx.rotate(-ba);
-      ctx.fillStyle = "#070720";
-      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.35, 0, TAU); ctx.fill();
-      ctx.fillStyle = fl ? "#ffffff" : "#ffd0a0";
-      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.16, 0, TAU); ctx.fill();
-    } else if (e.kind === "splitter") {
-      // MITOSIS PRIME: wobbling blob with nuclei (one per remaining split)
-      ctx.beginPath();
-      const segs = 14;
-      for (let i = 0; i <= segs; i++) {
-        const a = (i / segs) * TAU;
-        const rr = e.r * (1 + 0.09 * Math.sin(a * 3 + e.rot * 4) + 0.05 * Math.sin(a * 5 - e.rot * 3));
-        if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
-        else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
-      }
-      ctx.closePath(); ctx.fill();
-      ctx.fillStyle = "#070720";
-      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.55, 0, TAU); ctx.fill();
-      ctx.fillStyle = fl ? "#ffffff" : "#caffd8";
-      const nNuc = 3 - e.gen;
-      for (let i = 0; i < nNuc; i++) {
-        const a = e.rot * 2 + (i / nNuc) * TAU;
-        ctx.beginPath(); ctx.arc(Math.cos(a) * e.r * 0.22, Math.sin(a) * e.r * 0.22, e.r * 0.16, 0, TAU); ctx.fill();
-      }
-    } else {
-      // THE WARDEN: segmented outer ring + eye
-      ctx.rotate(e.rot * 0.5);
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      for (let i = 0; i < 6; i++) {
-        const a0 = (i / 6) * TAU, a1 = a0 + TAU / 9;
-        ctx.moveTo(Math.cos(a0) * (e.r + 10), Math.sin(a0) * (e.r + 10));
-        ctx.arc(0, 0, e.r + 10, a0, a1);
-      }
-      ctx.stroke();
-      ctx.rotate(-e.rot * 0.5);
-      ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
-      ctx.fillStyle = "#070720";
-      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.7, 0, TAU); ctx.fill();
-      const a = angTo(e.x, e.y, player.x, player.y);
-      ctx.fillStyle = fl ? "#ffffff" : "#ff88aa";
-      ctx.beginPath(); ctx.arc(Math.cos(a) * e.r * 0.3, Math.sin(a) * e.r * 0.3, e.r * 0.24, 0, TAU); ctx.fill();
-    }
-    ctx.restore();
+    drawBossBody(e, fl, col, dark, detail);
   }
   noglow();
 
-  // frozen overlay: ice shell + icicles
+  // frozen overlay: ice crust over the silhouette + icicles + drifting frost vapor
   if (frozen) {
     ctx.save();
     glow("#aaeeff", 12);
-    ctx.fillStyle = "rgba(170,230,255,0.28)";
+    ctx.fillStyle = "rgba(170,230,255,0.30)";
     ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 4, 0, TAU); ctx.fill();
+    // crystalline crust facets
+    ctx.strokeStyle = "rgba(225,248,255,0.7)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) {
+      const a = (i / 4) * TAU + e.phase;
+      ctx.beginPath();
+      ctx.moveTo(e.x + Math.cos(a) * e.r * 0.3, e.y + Math.sin(a) * e.r * 0.3);
+      ctx.lineTo(e.x + Math.cos(a) * (e.r + 3), e.y + Math.sin(a) * (e.r + 3));
+      ctx.stroke();
+    }
+    // icicles
     ctx.strokeStyle = "rgba(220,245,255,0.85)";
     ctx.lineWidth = 1.5;
     for (let i = 0; i < 3; i++) {
@@ -4157,6 +4451,65 @@ function drawEnemy(e) {
       ctx.beginPath();
       ctx.moveTo(x1, y1 - 4); ctx.lineTo(x1 + 3, y1 + 5); ctx.lineTo(x1 - 3, y1 + 5);
       ctx.closePath(); ctx.stroke();
+    }
+    // frost vapor (only at full detail to stay cheap)
+    if (detail) {
+      for (let i = 0; i < 3; i++) {
+        const ph = (timeNow * 0.6 + i / 3) % 1;
+        ctx.globalAlpha = (1 - ph) * 0.4;
+        ctx.fillStyle = "#dff4ff";
+        ctx.beginPath();
+        ctx.arc(e.x + Math.sin(i * 2 + timeNow) * e.r * 0.6, e.y - e.r - ph * 16, 2.5 * (1 - ph) + 1, 0, TAU);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    noglow();
+    ctx.restore();
+  }
+  // burn overlay: ember outline + rising smoke (skip if frozen — combo is rare/short)
+  if ((e.burnT || 0) > 0 && !frozen) {
+    ctx.save();
+    const flick = 0.5 + 0.5 * Math.sin(timeNow * 20 + e.phase);
+    glow("#ff7733", 8 + flick * 8);
+    ctx.strokeStyle = "rgba(255," + Math.round(120 + flick * 80) + ",40,0.85)";
+    ctx.lineWidth = 2 + flick;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 2, 0, TAU); ctx.stroke();
+    noglow();
+    if (detail) { // licking flame tongues + smoke
+      ctx.fillStyle = "rgba(255,150,40,0.7)";
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * TAU + timeNow * 2;
+        const fr = e.r + 3 + flick * 4;
+        ctx.beginPath(); ctx.arc(e.x + Math.cos(a) * fr, e.y + Math.sin(a) * fr, 2 + flick * 1.5, 0, TAU); ctx.fill();
+      }
+      for (let i = 0; i < 2; i++) {
+        const ph = (timeNow * 0.8 + i / 2) % 1;
+        ctx.globalAlpha = (1 - ph) * 0.3;
+        ctx.fillStyle = "#332828";
+        ctx.beginPath(); ctx.arc(e.x + Math.sin(i * 3 + timeNow) * 4, e.y - e.r - ph * 20, 3 * ph + 2, 0, TAU); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+  }
+  // shock overlay: crackling arc filaments around the (jittering) sprite
+  if ((e.shockT || 0) > 0 && !frozen) {
+    ctx.save();
+    glow("#ffee55", 10);
+    ctx.strokeStyle = "rgba(255,238,90,0.9)";
+    ctx.lineWidth = 1.6;
+    const nArc = detail ? 3 : 1;
+    for (let k = 0; k < nArc; k++) {
+      const a0 = rand(0, TAU);
+      ctx.beginPath();
+      let ax = e.x + Math.cos(a0) * e.r, ay = e.y + Math.sin(a0) * e.r;
+      ctx.moveTo(ax, ay);
+      for (let s = 0; s < 3; s++) {
+        ax += rand(-7, 7); ay += rand(-7, 7);
+        ctx.lineTo(ax, ay);
+      }
+      ctx.stroke();
     }
     noglow();
     ctx.restore();
@@ -4214,6 +4567,173 @@ function drawEnemy(e) {
     }
   }
   ctx.restore();
+}
+
+/* the held weapon, drawn in the android's lead hand at local coords
+   (hand near (hx,hy), aiming +x). Each form is visually distinct & weapon-tinted. */
+function drawHeldWeapon(W, hx, hy, recoil, fl) {
+  const wc = fl ? "#ffffff" : W.col;
+  ctx.save();
+  ctx.translate(hx, hy);
+  glow(wc, 8);
+  ctx.fillStyle = wc; ctx.strokeStyle = wc;
+  if (W.id === "blade") {
+    // single katana-blade
+    ctx.lineWidth = 2.5; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-2, 0); ctx.lineTo(16 + recoil * 6, -2); ctx.stroke();
+    ctx.fillRect(-3, -1.5, 4, 3); // hilt
+  } else if (W.id === "lance") {
+    // long spear
+    ctx.lineWidth = 2.5; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(24 + recoil * 10, 0); ctx.stroke();
+    ctx.beginPath(); // spearhead
+    ctx.moveTo(24 + recoil * 10, 0); ctx.lineTo(19 + recoil * 10, -3); ctx.lineTo(19 + recoil * 10, 3);
+    ctx.closePath(); ctx.fill();
+  } else if (W.id === "maul") {
+    // heavy maul: shaft + big block head
+    ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(12 + recoil * 4, 0); ctx.stroke();
+    rrect(10 + recoil * 4, -7, 10, 14, 2); ctx.fill();
+  } else if (W.id === "fang") {
+    // twin daggers fanned
+    ctx.lineWidth = 2; ctx.lineCap = "round";
+    for (const o of [-3.5, 3.5]) {
+      ctx.beginPath(); ctx.moveTo(-1, o * 0.5); ctx.lineTo(11 + recoil * 5, o); ctx.stroke();
+    }
+  } else if (W.id === "arc") {
+    // whip/arc emitter: a prong head crackling
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(9, 0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(11, 0, 4, -1.1, 1.1); ctx.stroke();
+    ctx.fillStyle = "#eaffff";
+    ctx.beginPath(); ctx.arc(11, 0, 1.8, 0, TAU); ctx.fill();
+  } else { // grav — gravity flail: short haft + orb on a chain
+    ctx.lineWidth = 2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(8, 0); ctx.stroke();
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(15 + recoil * 4, 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(17 + recoil * 4, 2, 4, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#1a0a28";
+    ctx.beginPath(); ctx.arc(17 + recoil * 4, 2, 1.8, 0, TAU); ctx.fill();
+  }
+  ctx.lineCap = "butt";
+  noglow();
+  ctx.restore();
+}
+
+/* the player android: head/visor, torso + chest light, two arms (lead arm holds the
+   weapon), legs/thrusters. Animated: idle bob, walk swing, dash thruster flare,
+   attack recoil/lunge, hit flinch, low-HP smoking/flicker. Faces aimDraw smoothly. */
+function drawAndroid(p) {
+  const W = weaponDef();
+  const detail = spriteDetail();
+  const r = p.r;
+  const dashing = p.dashT > 0;
+  const lowHp = p.hp / p.maxHp < 0.3;
+  const bodyCol = dashing ? "#aaf6ff" : "#5ee6ff";
+  const blink = p.hurtT > 0 && Math.floor(timeNow * 18) % 2 === 0;
+  // recoil pushes the whole body back a touch and kicks the weapon arm forward
+  const recoil = p.recoilT > 0 ? Math.sin((p.recoilT / 0.18) * Math.PI) : 0;
+  const lunge = recoil * (W.id === "lance" || W.id === "maul" ? 1 : 0.6);
+  // low-HP flicker
+  const flick = lowHp && Math.floor(timeNow * 14) % 3 === 0;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  if (blink) ctx.globalAlpha = 0.35;
+  else if (flick) ctx.globalAlpha = 0.7;
+  ctx.rotate(p.aimDraw);
+  // idle breathing bob + walk amount drives limb swing
+  const bob = Math.sin(timeNow * 3) * (0.6 + p.moveAmt * 0.4);
+  const swing = (detail ? Math.sin(p.walkT) : 0) * p.moveAmt;
+  const backShift = -lunge * 2.5;
+
+  // legs / thrusters (drawn first, under torso)
+  if (dashing) {
+    // thruster flare trailing behind
+    glow("#aaf6ff", 14);
+    ctx.fillStyle = "rgba(170,246,255,0.8)";
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.6, -r * 0.45); ctx.lineTo(-r * 1.7, 0); ctx.lineTo(-r * 0.6, r * 0.45);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.6, -r * 0.25); ctx.lineTo(-r * 1.2, 0); ctx.lineTo(-r * 0.6, r * 0.25);
+    ctx.closePath(); ctx.fill();
+    noglow();
+  } else {
+    ctx.strokeStyle = bodyCol; ctx.lineWidth = 3; ctx.lineCap = "round";
+    for (const sgn of [-1, 1]) {
+      const step = swing * sgn; // legs alternate
+      ctx.beginPath();
+      ctx.moveTo(backShift - r * 0.1, sgn * r * 0.45);
+      ctx.lineTo(backShift - r * 0.55 + step * 3, sgn * r * (0.75 + 0.1 * Math.abs(step)));
+      ctx.stroke();
+    }
+    ctx.lineCap = "butt";
+  }
+
+  // rear arm (free hand) swings opposite the legs
+  if (detail) {
+    ctx.strokeStyle = bodyCol; ctx.lineWidth = 2.6; ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(backShift + r * 0.1, -r * 0.55);
+    ctx.lineTo(backShift + r * 0.3 - swing * 3, -r * 0.85);
+    ctx.stroke();
+    ctx.lineCap = "butt";
+  }
+
+  // torso (rounded chassis) with chest light
+  glow(bodyCol, 14);
+  ctx.fillStyle = bodyCol;
+  ctx.beginPath();
+  ctx.ellipse(backShift, 0, r * 0.95 + lunge * 2, r * 0.72, 0, 0, TAU); ctx.fill();
+  noglow();
+  // chest core light (flares on dash, sputters at low HP)
+  ctx.fillStyle = lowHp ? (flick ? "#ff7755" : "#ffaa66") : (dashing ? "#ffffff" : "#d6fbff");
+  glow(lowHp ? "#ff5566" : bodyCol, 8);
+  ctx.beginPath(); ctx.arc(backShift, 0, r * 0.22 * (1 + (dashing ? 0.2 : 0)), 0, TAU); ctx.fill();
+  noglow();
+
+  // head + glowing visor (slightly forward of torso)
+  const hx = r * 0.45 + lunge;
+  ctx.fillStyle = "#0a1830";
+  ctx.beginPath(); ctx.arc(hx, 0, r * 0.42, 0, TAU); ctx.fill();
+  glow(bodyCol, 8);
+  ctx.fillStyle = blink ? "#ffffff" : (lowHp && flick ? "#ff6655" : "#9ff6ff");
+  // visor: a forward-facing slit
+  ctx.beginPath();
+  ctx.moveTo(hx + r * 0.42, -r * 0.18);
+  ctx.lineTo(hx + r * 0.1, -r * 0.05);
+  ctx.lineTo(hx + r * 0.1, r * 0.05);
+  ctx.lineTo(hx + r * 0.42, r * 0.18);
+  ctx.closePath(); ctx.fill();
+  noglow();
+
+  // weapon arm + held weapon (lead hand, kicks forward on recoil)
+  const handX = r * 0.5 + lunge * 4, handY = r * 0.5;
+  ctx.strokeStyle = bodyCol; ctx.lineWidth = 2.8; ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(backShift + r * 0.2, r * 0.45);
+  ctx.lineTo(handX - 2, handY);
+  ctx.stroke();
+  ctx.lineCap = "butt";
+  drawHeldWeapon(W, handX, handY, recoil, blink);
+
+  ctx.restore();
+
+  // low-HP smoke + exposed-core sparks (world-space, behind glow; cheap, detail-gated)
+  if (lowHp && detail && Math.random() < 0.5) {
+    addPart({
+      x: p.x + rand(-r * 0.5, r * 0.5), y: p.y - rand(0, r * 0.4),
+      vx: rand(-12, 12), vy: rand(-40, -18),
+      t: 0.5, tm: 0.5, col: Math.random() < 0.4 ? "#ffaa66" : "#445", r: rand(1.5, 3), drag: 1.5,
+    });
+  }
+  // hit flinch sparks (brief burst right after being hit)
+  if (p.hurtT > CONFIG.hurtIfr - 0.08 && detail && Math.random() < 0.5) {
+    ffx.spray(p.x, p.y, rand(0, TAU), "#aaf6ff", 5, 200);
+  }
 }
 
 function drawPlayer() {
@@ -4285,7 +4805,7 @@ function drawPlayer() {
     noglow();
     ctx.restore();
   }
-  // dash trail ghosts
+  // dash trail ghosts (afterimage of the android torso)
   for (const tr of p.trail) {
     const a = tr.t / 0.3;
     ctx.save();
@@ -4294,31 +4814,12 @@ function drawPlayer() {
     ctx.rotate(tr.a);
     ctx.fillStyle = "#5ee6ff";
     glow("#5ee6ff", 8);
-    ctx.beginPath();
-    ctx.moveTo(p.r + 3, 0); ctx.lineTo(-p.r * 0.8, p.r * 0.85); ctx.lineTo(-p.r * 0.4, 0); ctx.lineTo(-p.r * 0.8, -p.r * 0.85);
-    ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(-p.r * 0.1, 0, p.r * 0.95, p.r * 0.72, 0, 0, TAU); ctx.fill();
     noglow();
     ctx.restore();
   }
   bloomCircle(p.x, p.y, p.dashT > 0 ? 34 : 24, p.dashT > 0 ? "#aaf6ff" : "#5ee6ff", 0.5);
-  ctx.save();
-  ctx.translate(p.x, p.y);
-  const blink = p.hurtT > 0 && Math.floor(timeNow * 18) % 2 === 0;
-  if (blink) ctx.globalAlpha = 0.35;
-  ctx.rotate(p.aim);
-  const bodyCol = p.dashT > 0 ? "#aaf6ff" : "#5ee6ff";
-  glow(bodyCol, 16);
-  ctx.fillStyle = bodyCol;
-  ctx.beginPath();
-  ctx.moveTo(p.r + 3, 0); ctx.lineTo(-p.r * 0.8, p.r * 0.85); ctx.lineTo(-p.r * 0.4, 0); ctx.lineTo(-p.r * 0.8, -p.r * 0.85);
-  ctx.closePath(); ctx.fill();
-  noglow();
-  // visor
-  ctx.fillStyle = "#0a0a28";
-  ctx.beginPath();
-  ctx.moveTo(p.r - 1, 0); ctx.lineTo(p.r * 0.1, p.r * 0.4); ctx.lineTo(p.r * 0.1, -p.r * 0.4);
-  ctx.closePath(); ctx.fill();
-  ctx.restore();
+  drawAndroid(p);
 
   // slash swipe (weapon-formed: blade arc / lance thrust / maul full slam)
   if (p.slashT > 0) {
