@@ -20,11 +20,21 @@
     transition: opacity 0.2s;
   }
   #arcade:hover { opacity: 0.9; }
+  #fsbtn {
+    position: fixed; top: 12px; right: 14px; z-index: 10;
+    font: 14px "Courier New", monospace; letter-spacing: 1px;
+    color: #5ee6ff; opacity: 0.45; text-decoration: none;
+    text-shadow: 0 0 8px rgba(94,230,255,0.6);
+    background: none; border: none; cursor: pointer; padding: 0;
+    transition: opacity 0.2s; display: none;
+  }
+  #fsbtn:hover { opacity: 0.9; }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <a id="arcade" href="../">&larr; Arcade</a>
+<button id="fsbtn" type="button" aria-label="Toggle fullscreen">FULLSCREEN ⛶</button>
 <script>
 "use strict";
 
@@ -40,7 +50,9 @@
              Right Ctrl / Right click / Shift / E = plasma bolt (energy)
              K (or Q) = freeze nova (ice skill, 12s CD)
              Space = dash (i-frames)
-             P or Esc = pause, M = mute.
+             P or Esc = pause, M = mute, F = fullscreen toggle.
+             (Auto-fullscreen on the first start gesture, persisted & toggleable
+             in the pause menu; a ⛶ button sits top-right on title/pause.)
              Keyboard-only: if the mouse hasn't moved for ~1.5s,
              slashes/bolts auto-aim at the nearest enemy.
    Touch:    left half joystick, tap right half = slash,
@@ -58,8 +70,9 @@
              close ~3s; both down = game over.  Style meter shared.
    Hub ARMORY rack: 6 weapon forms (BLADE / LANCE / MAUL /
              TWIN FANG / ARC CASTER / GRAVITON MACE).
-   Pause menu: EFFECTS toggle (F) cycles bloom/scanlines/shake
-             intensity (full / reduced / off), persisted.
+   Pause menu: EFFECTS toggle (F while paused) cycles bloom/scanlines/shake
+             intensity (full / reduced / off), persisted; plus FULLSCREEN and
+             AUTO-FULLSCREEN items (gamepad d-pad navigates, × confirms).
    ============================================================ */
 
 /* ---------------- §B CONFIG ---------------- */
@@ -155,9 +168,11 @@ function computeView() {
   const availW = Math.max(80, cw - sideMargin * 2);
   const availH = Math.max(80, ch - topHud - botHud);
   let fit = Math.min(availW / A.arenaW, availH / A.arenaH);
-  // Fill the available real estate: raise the old 1.5 cap so big monitors get a big
-  // arena. Cap generously just to avoid pathological zoom; 2P is allowed slightly more.
-  const maxZoom = nPlayersSafe() > 1 ? 3.2 : 3.0;
+  // Fill the available real estate: raise the cap further so big/4K monitors in
+  // fullscreen get a large arena. `fit` (whole 960x600 room into the HUD-inset band)
+  // is always the limiter, so the full arena + both players stay on-screen; the cap
+  // is only an upper bound to avoid pathological zoom. 2P is allowed slightly more.
+  const maxZoom = nPlayersSafe() > 1 ? 4.0 : 3.8;
   aS = clamp(fit, 0.35, maxZoom);
   // Center the arena within the free band between the top and bottom HUD insets.
   aOX = (cw - A.arenaW * aS) / 2;
@@ -173,6 +188,82 @@ const s2wY = (sy) => (sy - aOY) / aS;
 const w2sX = (wx) => wx * aS + aOX;
 const w2sY = (wy) => wy * aS + aOY;
 const us = () => clamp(Math.min(cw, ch) / 640, 0.72, 1.25);  // ui scale
+
+/* ---------------- §C2 FULLSCREEN ----------------
+   Browsers only grant requestFullscreen() from a user gesture, so we fire it from
+   the title/pause start handlers (anyStart / startRun) and from the explicit toggle.
+   Everything is feature-detected and wrapped so a denied/rejected request can never
+   throw or break starting the game. A persisted "auto-fullscreen on start" pref
+   (default ON) and a per-page-load session flag keep it non-annoying: if the user
+   exits fullscreen we don't keep forcing them back. */
+const FS = {
+  // persisted preference; default ON unless explicitly disabled
+  auto: store.get("autofs") !== "0",
+  autoTried: false,   // only auto-request once per page load (reset if user re-enables)
+};
+function fsElement() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+function fsSupported() {
+  const el = document.documentElement;
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen ||
+            document.exitFullscreen || document.webkitExitFullscreen);
+}
+function isFullscreen() { return !!fsElement(); }
+/* Request fullscreen on the document root; swallow rejections (may be denied). */
+function requestFullscreen() {
+  if (isFullscreen()) return;
+  const el = document.documentElement;
+  try {
+    const fn = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!fn) return;
+    const r = fn.call(el);
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (e) { /* fullscreen denied — never break the game */ }
+}
+function exitFullscreen() {
+  try {
+    const fn = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!fn) return;
+    const r = fn.call(document);
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+/* explicit user toggle (key / button / pause-menu item): exit if in, else enter */
+function toggleFullscreen() {
+  if (isFullscreen()) { exitFullscreen(); }
+  else { FS.autoTried = true; requestFullscreen(); }
+}
+/* auto-request on the start gesture, honoring the persisted pref + session flag */
+function autoRequestFullscreen() {
+  if (!FS.auto) return;               // user turned it off
+  if (FS.autoTried) return;           // only once per page load (until re-enabled)
+  if (isFullscreen()) return;
+  FS.autoTried = true;
+  requestFullscreen();
+}
+function setAutoFullscreen(on) {
+  FS.auto = !!on;
+  store.set("autofs", FS.auto ? "1" : "0");
+  if (FS.auto) FS.autoTried = false;  // re-enabling lets the next start re-request
+}
+// On entering/exiting fullscreen the viewport size changes — re-fit canvas + view.
+function onFullscreenChange() { resize(); }
+document.addEventListener("fullscreenchange", onFullscreenChange);
+document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+
+/* subtle on-screen fullscreen button (title / pause), styled like the Arcade link */
+const fsBtn = document.getElementById("fsbtn");
+function updateFsBtn() {
+  if (!fsBtn) return;
+  fsBtn.style.display = (state === "title" || state === "summary" || paused) ? "block" : "none";
+  fsBtn.textContent = isFullscreen() ? "EXIT FULL ⛶" : "FULLSCREEN ⛶";
+}
+if (fsBtn) {
+  const fsClick = (e) => { e.preventDefault(); e.stopPropagation(); toggleFullscreen(); updateFsBtn(); };
+  fsBtn.addEventListener("click", fsClick);
+  fsBtn.addEventListener("touchstart", fsClick, { passive: false });
+}
 
 /* ---------------- §D AUDIO ---------------- */
 class AudioEngine {
@@ -834,8 +925,8 @@ function kbAutoAim(p) {
 
 function anyStart() {
   audio.unlock();
-  if (state === "title") { enterHub(); return true; }
-  if (state === "summary") { enterHub(); return true; }
+  if (state === "title") { autoRequestFullscreen(); enterHub(); return true; }
+  if (state === "summary") { autoRequestFullscreen(); enterHub(); return true; }
   return false;
 }
 /* title-screen pointer hit-test: consumes a tap on the 1P/2P toggle (returns true). */
@@ -856,6 +947,9 @@ window.addEventListener("keydown", (e) => {
   if (isRCtrl) { e.preventDefault(); keys["ctrlRight"] = true; }
   audio.unlock();
   if (k === "m") { audio.toggleMute(); return; }
+  // F = fullscreen toggle (global). In the pause menu, f keeps cycling EFFECTS
+  // (handled below), so fullscreen-via-key is suppressed only while paused.
+  if (k === "f" && !paused) { toggleFullscreen(); updateFsBtn(); return; }
   if (state === "title") {
     if (k === "1") { setPlayerCount(1); audio.uiSnd(); return; }
     if (k === "2") { setPlayerCount(2); audio.uiSnd(); return; }
@@ -867,7 +961,7 @@ window.addEventListener("keydown", (e) => {
     if (state === "heat") { closeHeat(); return; }
     if (state === "stats") { closeStats(); return; }
     if (state === "boon") return; // must choose
-    if (state === "play" || state === "hub") { paused = !paused; audio.uiSnd(); }
+    if (state === "play" || state === "hub") { paused = !paused; if (paused) menuHighlight = 0; audio.uiSnd(); }
     return;
   }
   if (paused) {
@@ -933,6 +1027,8 @@ canvas.addEventListener("mousedown", (e) => {
     for (const r of uiRects) {
       if (e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) {
         if (r.act === "fxtoggle") { ffx.cycleLevel(); return; }
+        if (r.act === "fstoggle") { toggleFullscreen(); updateFsBtn(); return; }
+        if (r.act === "fsauto") { setAutoFullscreen(!FS.auto); audio.uiSnd(); return; }
         if (r.act === "pcount") { setPlayerCount(r.n); if (state === "hub") spawnPlayers(); audio.uiSnd(); return; }
       }
     }
@@ -981,6 +1077,8 @@ canvas.addEventListener("touchstart", (e) => {
       for (const r of uiRects) {
         if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
           if (r.act === "fxtoggle") { ffx.cycleLevel(); hit = true; break; }
+          if (r.act === "fstoggle") { toggleFullscreen(); updateFsBtn(); hit = true; break; }
+          if (r.act === "fsauto") { setAutoFullscreen(!FS.auto); audio.uiSnd(); hit = true; break; }
           if (r.act === "pcount") { setPlayerCount(r.n); if (state === "hub") spawnPlayers(); audio.uiSnd(); hit = true; break; }
         }
       }
@@ -2322,6 +2420,7 @@ function enterHub() {
 }
 
 function startRun() {
+  autoRequestFullscreen(); // entering an actual run is also a valid gesture to go fullscreen
   kills = 0; runCores = 0; roomsCleared = 0; depth = 0;
   lastShopDepth = 0; lastFountainDepth = 0; lastSpecialDepth = 0;
   pendingRoom = null;
@@ -5972,6 +6071,7 @@ function drawTitle() {
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
+    "全屏：点击右上角图标 — fullscreen: tap the ⛶ icon (top-right)",
   ] : [
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
@@ -5983,7 +6083,7 @@ function drawTitle() {
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
-    "P/Esc 暂停 · M 静音 — pause / mute",
+    "P/Esc 暂停 · M 静音 · F 全屏 — pause / mute / F fullscreen",
   ];
   // append gamepad + co-op help blocks when relevant
   if (anyGamepad()) help.push(GAMEPAD_HELP);
@@ -6348,33 +6448,51 @@ function drawPause() {
   if (!touchUI) {
     ctx.fillStyle = "rgba(190,210,255,0.55)";
     ctx.font = 12 * u + "px 'Courier New', monospace";
-    ctx.fillText("J 斩击 · 右Ctrl 光弹 · K 冰冻 · 空格冲刺 — J slash · R-Ctrl bolt · K freeze · Space dash", cw / 2, ch * 0.58);
+    ctx.fillText("J 斩击 · 右Ctrl 光弹 · K 冰冻 · 空格冲刺 · F 全屏 — J slash · R-Ctrl bolt · K freeze · Space dash · F fullscreen", cw / 2, ch * 0.58);
   }
-  // FX / EFFECTS setting toggle (bloom · scanlines · shake intensity)
+  // selectable settings buttons (gamepad d-pad/stick navigates, × confirms)
+  const bw = 300 * u, bh = 32 * u, bx = cw / 2 - bw / 2, bgap = 10 * u;
+  let by = ch * 0.64;
+  const items = [];
+  // 0: FX / EFFECTS setting toggle (bloom · scanlines · shake intensity)
   const fxLabel = { full: "FULL — 全开", reduced: "REDUCED — 降低", off: "OFF — 关闭" }[ffx.level];
   const fxCol = ffx.level === "full" ? "#5ee6ff" : ffx.level === "reduced" ? "#ffcc44" : "#ff7755";
-  const by = ch * 0.66;
-  const bw = 280 * u, bh = 34 * u, bx = cw / 2 - bw / 2;
-  ctx.fillStyle = "rgba(10,14,34,0.8)";
-  rrect(bx, by, bw, bh, 6); ctx.fill();
-  ctx.strokeStyle = fxCol; ctx.lineWidth = 2;
-  rrect(bx, by, bw, bh, 6); ctx.stroke();
-  ctx.fillStyle = fxCol;
-  ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
-  ctx.fillText("EFFECTS / 特效: " + fxLabel, cw / 2, by + bh / 2 + 1);
-  uiRects.push({ x: bx, y: by, w: bw, h: bh, act: "fxtoggle" });
+  items.push({ act: "fxtoggle", label: "EFFECTS / 特效: " + fxLabel, col: fxCol });
+  // 1: manual fullscreen toggle
+  items.push({ act: "fstoggle", label: (isFullscreen() ? "退出全屏 — Exit Fullscreen" : "全屏 — Fullscreen") + " ⛶", col: "#5ee6ff" });
+  // 2: auto-fullscreen-on-start preference
+  items.push({ act: "fsauto", label: "启动时自动全屏 — Auto-Fullscreen: " + (FS.auto ? "ON 开" : "OFF 关"), col: FS.auto ? "#66ffaa" : "#ff7755" });
+  const gp = anyGamepad();
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const yy = by + i * (bh + bgap);
+    const hot = gp && menuHighlight === i;
+    ctx.fillStyle = hot ? "rgba(30,40,80,0.9)" : "rgba(10,14,34,0.8)";
+    rrect(bx, yy, bw, bh, 6); ctx.fill();
+    ctx.strokeStyle = it.col; ctx.lineWidth = hot ? 3 : 2;
+    rrect(bx, yy, bw, bh, 6); ctx.stroke();
+    ctx.fillStyle = it.col;
+    ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+    ctx.fillText(it.label, cw / 2, yy + bh / 2 + 1);
+    uiRects.push({ x: bx, y: yy, w: bw, h: bh, act: it.act, i });
+  }
+  let cueY = by + items.length * (bh + bgap) + 4 * u;
   ctx.fillStyle = "rgba(190,210,255,0.5)";
   ctx.font = 11 * u + "px 'Courier New', monospace";
-  ctx.fillText(touchUI ? "tap to cycle (bloom · scanlines · shake)" : "press F to cycle (bloom · scanlines · shake)", cw / 2, by + bh + 14 * u);
+  ctx.fillText(touchUI ? "tap EFFECTS to cycle · tap FULLSCREEN to toggle" : "F 切换全屏 · 暂停时 F 仍切特效 — F toggles fullscreen (in pause, F still cycles EFFECTS)", cw / 2, cueY);
+  cueY += 16 * u;
   // gamepad cue when present
-  if (anyGamepad()) {
+  if (gp) {
     ctx.fillStyle = "rgba(94,230,255,0.65)";
     ctx.font = 11 * u + "px 'Courier New', monospace";
-    ctx.fillText(GAMEPAD_HELP, cw / 2, by + bh + 32 * u);
+    ctx.fillText("方向键选择 · × 确认 — d-pad select · × confirm", cw / 2, cueY);
+    cueY += 16 * u;
+    ctx.fillText(GAMEPAD_HELP, cw / 2, cueY);
+    cueY += 16 * u;
   }
   // at the hub, allow toggling 1P/2P from the pause menu (only between runs)
   if (state === "hub") {
-    drawPlayerCountToggle(u, by + bh + 56 * u);
+    drawPlayerCountToggle(u, cueY + 8 * u);
   }
 }
 
@@ -6389,6 +6507,8 @@ function uiClick(x, y) {
       if (r.act === "heatclose") { closeHeat(); return; }
       if (r.act === "statsclose") { closeStats(); return; }
       if (r.act === "fxtoggle") { ffx.cycleLevel(); return; }
+      if (r.act === "fstoggle") { toggleFullscreen(); updateFsBtn(); return; }
+      if (r.act === "fsauto") { setAutoFullscreen(!FS.auto); audio.uiSnd(); return; }
     }
   }
 }
@@ -6564,6 +6684,7 @@ function render() {
   }
 
   arcadeLink.style.display = (state === "title" || state === "summary") ? "block" : "none";
+  updateFsBtn();
 }
 
 /* ---------------- §V MAIN LOOP ---------------- */
@@ -6581,7 +6702,7 @@ function pollGamepadUI(dt) {
   // Options/Start toggles pause in play/hub
   for (const pad of GP.pads) {
     if (gpPressed(pad, 9)) {
-      if (state === "play" || state === "hub") { paused = !paused; audio.uiSnd(); }
+      if (state === "play" || state === "hub") { paused = !paused; if (paused) menuHighlight = 0; audio.uiSnd(); }
       else if (state === "shop") closeShop();
       else if (state === "heat") closeHeat();
       else if (state === "stats") closeStats();
@@ -6589,7 +6710,22 @@ function pollGamepadUI(dt) {
     }
   }
   if (paused) {
-    if (gpConfirm() || gpCancel()) { paused = false; audio.uiSnd(); }
+    // navigate the 3 pause settings items (EFFECTS / FULLSCREEN / AUTO-FS); × confirms,
+    // ○ resumes. Highlight is clamped to the item count.
+    const PAUSE_ITEMS = 3;
+    const stepNav = gpMenuStep(dt);
+    if (stepNav.vert && GP.navCD <= 0) {
+      menuHighlight = (menuHighlight + stepNav.vert + PAUSE_ITEMS) % PAUSE_ITEMS;
+      GP.navCD = 0.18; audio.uiSnd();
+    }
+    if (gpConfirm()) {
+      const i = ((menuHighlight % PAUSE_ITEMS) + PAUSE_ITEMS) % PAUSE_ITEMS;
+      if (i === 0) ffx.cycleLevel();
+      else if (i === 1) { toggleFullscreen(); updateFsBtn(); }
+      else { setAutoFullscreen(!FS.auto); audio.uiSnd(); }
+      return;
+    }
+    if (gpCancel()) { paused = false; audio.uiSnd(); }
     return;
   }
   // boon / shop / heat menu navigation
