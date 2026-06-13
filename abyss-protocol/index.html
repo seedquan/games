@@ -45,6 +45,10 @@
              slashes/bolts auto-aim at the nearest enemy.
    Touch:    left half joystick, tap right half = slash,
              on-screen DASH / BOLT / FREEZE buttons.
+   Hub ARMORY rack: 6 weapon forms (BLADE / LANCE / MAUL /
+             TWIN FANG / ARC CASTER / GRAVITON MACE).
+   Pause menu: EFFECTS toggle (F) cycles bloom/scanlines/shake
+             intensity (full / reduced / off), persisted.
    ============================================================ */
 
 /* ---------------- §B CONFIG ---------------- */
@@ -136,6 +140,8 @@ resize();
 
 const s2wX = (sx) => (sx - aOX) / aS;
 const s2wY = (sy) => (sy - aOY) / aS;
+const w2sX = (wx) => wx * aS + aOX;
+const w2sY = (wy) => wy * aS + aOY;
 const us = () => clamp(Math.min(cw, ch) / 640, 0.72, 1.25);  // ui scale
 
 /* ---------------- §D AUDIO ---------------- */
@@ -261,6 +267,34 @@ class AudioEngine {
     const t = this.ctx.currentTime;
     this.noise(t, 0.3, 0.2, "lowpass", 1600, 100);
     this.tone("sine", 95, 40, t, 0.3, 0.16, true);
+  }
+  fangFlurry() { // twin fang rapid multi-slash zip
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      this.noise(t + i * 0.035, 0.06, 0.09, "bandpass", 3200 + i * 400, 900);
+    }
+    this.tone("sawtooth", 720, 1500, t, 0.1, 0.05, false);
+  }
+  arcZap() { // arc caster chain crackle
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 1300, 380, t, 0.1, 0.07, true);
+    this.noise(t, 0.1, 0.07, "highpass", 4000, 7000);
+    this.tone("square", 900, 1700, t + 0.03, 0.07, 0.04, false);
+  }
+  gravCast() { // graviton mace swing — descending whoomp
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sine", 220, 60, t, 0.28, 0.14, true);
+    this.noise(t, 0.24, 0.1, "lowpass", 900, 200);
+  }
+  gravImplode() { // singularity collapse — sub thump + inrush
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sine", 70, 30, t, 0.4, 0.2, true);
+    this.noise(t, 0.3, 0.16, "lowpass", 2400, 120);
+    this.tone("sawtooth", 180, 600, t, 0.12, 0.05, true);
   }
   styleUp(rank) {
     if (!this.ok()) return;
@@ -580,9 +614,15 @@ function fmtNum(n) {
 
 /* ---------------- §E3 WEAPON FORMS (hub ARMORY rack) ---------------- */
 const WEAPONS = [
-  { id: "blade", name: "BLADE", zh: "刀锋", col: "#aaf6ff", glyph: "⟆", rangeMul: 1,   arcMul: 1,   dmgMul: 1,   cdMul: 1,   durMul: 1 },
-  { id: "lance", name: "LANCE", zh: "长枪", col: "#ffd27a", glyph: "†", rangeMul: 1.6, arcMul: 0.8, dmgMul: 1,   cdMul: 1.2, durMul: 1.05 },
-  { id: "maul",  name: "MAUL",  zh: "重锤", col: "#ff8866", glyph: "◉", rangeMul: 0.95, arcMul: 1,  dmgMul: 1.4, cdMul: 1.6, durMul: 1.45 },
+  { id: "blade", name: "BLADE", zh: "刀锋", col: "#aaf6ff", glyph: "⟆", rangeMul: 1,    arcMul: 1,   dmgMul: 1,    cdMul: 1,    durMul: 1,    critBase: 0 },
+  { id: "lance", name: "LANCE", zh: "长枪", col: "#ffd27a", glyph: "†", rangeMul: 1.6,  arcMul: 0.8, dmgMul: 1,    cdMul: 1.2,  durMul: 1.05, critBase: 0 },
+  { id: "maul",  name: "MAUL",  zh: "重锤", col: "#ff8866", glyph: "◉", rangeMul: 0.95, arcMul: 1,   dmgMul: 1.4,  cdMul: 1.6,  durMul: 1.45, critBase: 0 },
+  // TWIN FANG: very fast, short reach, low per-hit dmg, high crit; every 3rd hit flurries
+  { id: "fang",  name: "TWIN FANG", zh: "双牙", col: "#ff5fa8", glyph: "⪜", rangeMul: 0.82, arcMul: 0.95, dmgMul: 0.6,  cdMul: 0.52, durMul: 0.62, critBase: 0.16 },
+  // ARC CASTER: medium-long sweeping cone beam, chains a zap between hit foes
+  { id: "arc",   name: "ARC CASTER", zh: "电弧", col: "#7fe9ff", glyph: "ϟ", rangeMul: 1.45, arcMul: 1.45, dmgMul: 0.85, cdMul: 1.18, durMul: 1.1,  critBase: 0 },
+  // GRAVITON MACE: slow heavy swing -> mini singularity pulls then implodes
+  { id: "grav",  name: "GRAVITON MACE", zh: "引力锤", col: "#b98cff", glyph: "✪", rangeMul: 1.0, arcMul: 1.1, dmgMul: 1.15, cdMul: 1.75, durMul: 1.5, critBase: 0 },
 ];
 let curWeapon = store.get("weapon") || "blade";
 if (!WEAPONS.some((w) => w.id === curWeapon)) curWeapon = "blade";
@@ -647,6 +687,12 @@ const BOONS = [
   { id: "phalanx",name: "PHALANX",    desc: "Lance: +crit chance at max thrust range",     col: "#ffe6aa", glyph: "⌖", max: 2, weapon: "lance" },
   { id: "ashock", name: "AFTERSHOCK", desc: "Maul slam leaves a damaging quake ring",      col: "#ff9966", glyph: "◌", max: 2, weapon: "maul" },
   { id: "jugg",   name: "JUGGERNAUT", desc: "Maul knockback +50%, slams briefly stun",     col: "#ffb088", glyph: "▼", max: 1, weapon: "maul" },
+  { id: "frenzy", name: "FRENZY",     desc: "Twin Fang: consecutive hits ramp attack speed", col: "#ff5fa8", glyph: "⇶", max: 2, weapon: "fang" },
+  { id: "exsang", name: "EXSANGUINATE", desc: "Twin Fang crits apply a stacking bleed (DoT)", col: "#ff7fb0", glyph: "🩸", max: 2, weapon: "fang" },
+  { id: "conduct",name: "CONDUCTOR",  desc: "Arc Caster always applies shock",            col: "#7fe9ff", glyph: "⌁", max: 1, weapon: "arc" },
+  { id: "overld", name: "OVERLOAD",   desc: "Arc Caster chain jumps +2 targets",          col: "#aef3ff", glyph: "↯", max: 2, weapon: "arc" },
+  { id: "horizon",name: "EVENT HORIZON", desc: "Graviton pull radius +50%, slows pulled foes", col: "#b98cff", glyph: "◯", max: 2, weapon: "grav" },
+  { id: "collapse",name: "COLLAPSE",  desc: "Graviton implosion damage scales with foes pulled", col: "#caa6ff", glyph: "✸", max: 2, weapon: "grav" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -689,6 +735,9 @@ let timeNow = 0;
 let bossWarnT = 0;
 /* hazards & weapon-feel state */
 let hazards = [], barrels = [], quakes = [], slashGhosts = [];
+let singularities = [];                // graviton mace mini black holes
+let lights = [];                       // dynamic point lights (rebuilt each frame)
+let motes = [];                        // drifting ambient dust/ember particles
 let slowmoT = 0;                       // execution slow-mo pulse (decays in REAL time)
 let styleN = 0, styleT = 0, styleRank = -1, styleBestRoom = -1, stylePop = 0;
 let runTrack = [];                     // depth -> room type, for the HUD depth track
@@ -752,7 +801,11 @@ window.addEventListener("keydown", (e) => {
     if (state === "play" || state === "hub") { paused = !paused; audio.uiSnd(); }
     return;
   }
-  if (paused) { if (k === " " || k === "Enter") paused = false; return; }
+  if (paused) {
+    if (k === "f") { ffx.cycleLevel(); return; }
+    if (k === " " || k === "Enter") paused = false;
+    return;
+  }
   if (state === "boon") {
     const n = parseInt(k, 10);
     if (n >= 1 && n <= boonChoices.length) pickBoon(n - 1);
@@ -802,7 +855,14 @@ canvas.addEventListener("mousedown", (e) => {
   audio.unlock();
   mouse.x = e.clientX; mouse.y = e.clientY; lastMouseT = nowMs();
   if (state === "title" || state === "summary") { anyStart(); return; }
-  if (paused) { paused = false; return; }
+  if (paused) {
+    for (const r of uiRects) {
+      if (r.act === "fxtoggle" && e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) {
+        ffx.cycleLevel(); return;
+      }
+    }
+    paused = false; return;
+  }
   if (state === "boon" || state === "shop" || state === "heat" || state === "stats") { uiClick(e.clientX, e.clientY); return; }
   if (e.button === 0) {
     mouse.left = true;
@@ -840,7 +900,14 @@ canvas.addEventListener("touchstart", (e) => {
   for (const t of e.changedTouches) {
     const x = t.clientX, y = t.clientY;
     if (state === "title" || state === "summary") { anyStart(); continue; }
-    if (paused) { paused = false; continue; }
+    if (paused) {
+      let hit = false;
+      for (const r of uiRects) {
+        if (r.act === "fxtoggle" && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { ffx.cycleLevel(); hit = true; break; }
+      }
+      if (!hit) paused = false;
+      continue;
+    }
     if (state === "boon" || state === "shop" || state === "heat" || state === "stats") { uiClick(x, y); continue; }
     const db = dashBtnPos(), bb = boltBtnPos();
     if (dist(x, y, db.x, db.y) < db.r + 10) {
@@ -936,8 +1003,67 @@ function sparkLine(x1, y1, x2, y2, col, n) {
 function dnum(x, y, txt, col, big) {
   dnums.push({ x: x + rand(-8, 8), y: y - 10, vy: -64, t: 0.8, txt, col, big: !!big });
 }
-function shake(amp, t) { shakeA = Math.max(shakeA, amp); shakeT = Math.max(shakeT, t); }
+function shake(amp, t) { shakeA = Math.max(shakeA, amp); shakeT = Math.max(shakeT, t); ffx.trauma(amp * 0.012 * ffx.shakeScale); }
 function toast(txt, col) { toasts.push({ txt, col: col || "#5ee6ff", t: 2.2 }); }
+
+/* ---- §I2 VISUAL FX SYSTEM (bloom / lights / trauma / shockwaves / settings) ---- */
+const FX_LIGHT_CAP = 48;       // max additive point lights per frame
+const FX_RING_CAP = 40;        // max shockwave rings
+const FX_SPARK_DIRMAX = 22;    // directional spark count clamp
+const ffx = {
+  // persisted settings: full | reduced | off
+  level: store.get("fxLevel") || (touchUI ? "reduced" : "full"),
+  rings: [],                   // shockwave / impact rings
+  shocks: [],                  // chromatic / distortion pulses
+  flashes: [],                 // transient point-light flashes (from attacks/explosions)
+  traumaV: 0,                  // accumulating screen-shake trauma (0..1)
+  setLevel(lv) { this.level = lv; store.set("fxLevel", lv); rebuildFxGrads(); },
+  cycleLevel() {
+    const order = ["full", "reduced", "off"];
+    this.setLevel(order[(order.indexOf(this.level) + 1) % order.length]);
+    audio.uiSnd();
+  },
+  get bloom() { return this.level !== "off"; },
+  get scanlines() { return this.level === "full"; },
+  get ambient() { return this.level !== "off"; },
+  get shakeScale() { return this.level === "off" ? 0.35 : this.level === "reduced" ? 0.7 : 1; },
+  get lightCap() { return this.level === "full" ? FX_LIGHT_CAP : this.level === "reduced" ? 22 : 0; },
+  trauma(v) { this.traumaV = Math.min(1, this.traumaV + v * this.shakeScale); },
+  spawnLight(x, y, r, col, a) {
+    if (this.level === "off") return;
+    if (this.flashes.length >= 24) this.flashes.shift();
+    this.flashes.push({ x, y, r, col, a: (a == null ? 0.6 : a), t: 0.25, tm: 0.25 });
+  },
+  ring(x, y, r, col, life, width) {
+    if (this.level === "off") return;
+    if (this.rings.length >= FX_RING_CAP) this.rings.shift();
+    this.rings.push({ x, y, r0: r * 0.25, r, t: life || 0.4, tm: life || 0.4, col, w: width || 4 });
+  },
+  pulse(x, y, mag) { // chromatic-aberration / distortion pulse on big events
+    if (this.level !== "full") return;
+    if (this.shocks.length >= 6) this.shocks.shift();
+    this.shocks.push({ x, y, t: 0.32, tm: 0.32, mag: mag || 6 });
+  },
+  // directional impact spray
+  spray(x, y, ang, col, n, spd) {
+    n = Math.min(FX_SPARK_DIRMAX, this.level === "off" ? Math.ceil(n * 0.4) : this.level === "reduced" ? Math.ceil(n * 0.65) : n);
+    for (let i = 0; i < n; i++) {
+      const a = ang + rand(-0.7, 0.7), v = rand(spd * 0.4, spd);
+      addPart({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, t: rand(0.18, 0.4), tm: 0.4, col, r: rand(1.4, 3), drag: 6 });
+    }
+  },
+  update(dt) {
+    this.traumaV = Math.max(0, this.traumaV - dt * 1.6);
+    for (const r of this.rings) { r.t -= dt; }
+    this.rings = this.rings.filter((r) => r.t > 0);
+    for (const s of this.shocks) { s.t -= dt; }
+    this.shocks = this.shocks.filter((s) => s.t > 0);
+    for (const f of this.flashes) { f.t -= dt; }
+    this.flashes = this.flashes.filter((f) => f.t > 0);
+  },
+};
+let fxLightGrad = null;
+function rebuildFxGrads() { fxLightGrad = null; }
 
 /* ---------------- §J PLAYER ---------------- */
 function newPlayer() {
@@ -950,6 +1076,7 @@ function newPlayer() {
     energy: CONFIG.energyMax, maxEnergy: CONFIG.energyMax,
     slashT: 0, slashCD: 0, slashSide: 1, slashAng: 0,
     slashDur: CONFIG.slashDur, comboN: 0, comboT: 0,
+    frenzyN: 0, frenzyT: 0,            // TWIN FANG attack-speed ramp
     boltCD: 0,
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
@@ -969,7 +1096,7 @@ function boltDamage() {
   const splitX = Math.max(0, boonPow("split") - boonLv("split")); // tri-cannon rarity bonus
   return CONFIG.boltDmg * dmgMul() * (1 + boonPow("over") * 0.35) * (1 + splitX * 0.06) * player.boltMul;
 }
-function critRoll() { return Math.random() < Math.min(0.8, boonPow("crit") * 0.15); }
+function critRoll() { return Math.random() < Math.min(0.85, (weaponDef().critBase || 0) + boonPow("crit") * 0.15); }
 function meleeRangeNow() { return (CONFIG.meleeRange + Math.min(64, boonPow("arc") * 12)) * weaponDef().rangeMul; }
 function meleeArcNow() {
   if (curWeapon === "maul") return TAU; // maul: full 360° slam
@@ -987,6 +1114,11 @@ function applyBoon(id, rar) {
   if (id === "wind") { /* passive */ }
   audio.boon();
   burst(player.x, player.y, R.col, 26, 220, 0.7, 3);
+  // rarity-colored pickup flourish: expanding ring(s) + light burst
+  ffx.ring(player.x, player.y, 60 + rar * 16, R.col, 0.6, 4 + rar);
+  if (rar >= 2) ffx.ring(player.x, player.y, 90 + rar * 20, R.col, 0.7, 3);
+  ffx.spawnLight(player.x, player.y, 120, R.col, 0.7);
+  if (rar >= 3) ffx.pulse(player.x, player.y, 6); // legendary flash
 }
 /* weapon-exclusive boons appear only for the wielded weapon form */
 function boonPool() {
@@ -1152,7 +1284,11 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   const kbScale = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.3 : 1);
   e.kbx += kx * kbScale; e.kby += ky * kbScale;
   dnum(e.x, e.y - e.r, String(final), isCrit ? "#ffee55" : "#ffffff", isCrit);
-  burst(e.x, e.y, e.col, isCrit ? 12 : 6, 180, 0.4, 2.5);
+  // punchier directional impact spray along the knockback vector
+  const sa = (kx || ky) ? Math.atan2(ky, kx) : rand(0, TAU);
+  ffx.spray(e.x, e.y, sa, isCrit ? "#ffee55" : e.col, isCrit ? 12 : 7, isCrit ? 320 : 220);
+  ffx.spawnLight(e.x, e.y, isCrit ? 60 : 40, isCrit ? "#ffee55" : e.col, isCrit ? 0.5 : 0.3);
+  if (isCrit) ffx.ring(e.x, e.y, 30, "#ffee55", 0.3, 3);
   audio.hit(isCrit);
   if (melee) {
     freezeT = Math.max(freezeT, CONFIG.hitStop);
@@ -1214,6 +1350,9 @@ function shatterCombo(e) {
   dnum(e.x, e.y - e.r - 14, "SHATTER", "#cfeeff", true);
   audio.shatter();
   shake(4, 0.15);
+  ffx.ring(e.x, e.y, 60, "#cfeeff", 0.4, 5);
+  ffx.pulse(e.x, e.y, 7);
+  ffx.spawnLight(e.x, e.y, 90, "#cfeeff", 0.7);
   statusDamage(e, (30 + depth * 2.5) * dmgMul(), "#cfeeff");
 }
 
@@ -1272,6 +1411,12 @@ function styleKill() {
     styleRank = r;
     stylePop = 0.45;
     if (r === 3) audio.styleChime(); else audio.styleUp(r);
+    // rank-up flash centered on the player
+    if (player) {
+      ffx.ring(player.x, player.y, 70 + r * 18, STYLE_RANKS[r].col, 0.5, 4);
+      ffx.spawnLight(player.x, player.y, 120, STYLE_RANKS[r].col, 0.6);
+      if (r === 3) ffx.pulse(player.x, player.y, 7);
+    }
   }
   if (styleRank > styleBestRoom) styleBestRoom = styleRank;
 }
@@ -1284,6 +1429,14 @@ function killEnemy(e) {
   const big = e.type === "tank" || e.type === "boss";
   burst(e.x, e.y, e.col, big ? 40 : 18, big ? 320 : 220, 0.8, big ? 4 : 3);
   burst(e.x, e.y, "#ffffff", 8, 260, 0.3, 2);
+  // richer per-type death effects
+  ffx.ring(e.x, e.y, big ? 70 : 36, e.col, big ? 0.5 : 0.32, big ? 6 : 3);
+  ffx.spawnLight(e.x, e.y, big ? 120 : 56, e.col, big ? 0.8 : 0.4);
+  if (e.type === "boss") { ffx.pulse(e.x, e.y, 9); ffx.ring(e.x, e.y, 140, "#ffffff", 0.6, 5); }
+  else if (e.type === "swarmer") { ffx.spray(e.x, e.y, rand(0, TAU), e.col, 6, 240); }
+  else if (e.type === "phantom") { burst(e.x, e.y, "#bb99ff", 14, 240, 0.5, 2.5); ffx.pulse(e.x, e.y, 4); }
+  else if (e.type === "tank") { ffx.pulse(e.x, e.y, 6); }
+  else if (e.type === "shield") { burst(e.x, e.y, "#88aaff", 16, 260, 0.5, 3); }
   audio.enemyDie(big);
   freezeT = Math.max(freezeT, e.type === "boss" ? 0.16 : CONFIG.killStop * 1.35);
   shake(big ? 9 : 4, big ? 0.4 : 0.18);
@@ -1534,6 +1687,9 @@ function explodeBarrel(b) {
   burst(b.x, b.y, "#ffb050", 30, 340, 0.6, 4);
   burst(b.x, b.y, "#ffe6c0", 12, 240, 0.35, 3);
   shake(7, 0.3);
+  ffx.ring(b.x, b.y, R, "#ffb050", 0.45, 6);
+  ffx.spawnLight(b.x, b.y, R + 30, "#ffb050", 0.9);
+  ffx.pulse(b.x, b.y, 8); // barrel chain distortion pulse
   audio.barrelBoom();
   if (player && player.hp > 0 && dist(b.x, b.y, player.x, player.y) < R + player.r) {
     damagePlayer(14 * eDmgMul(), angTo(b.x, b.y, player.x, player.y), null);
@@ -1856,6 +2012,7 @@ function enterHub() {
   pickups = []; pillars = []; boss = null; toasts = [];
   mortars = []; novas = []; pedestals = []; shopRoom = false; pendingRoom = null;
   hazards = []; barrels = []; quakes = []; slashGhosts = []; runTrack = [];
+  singularities = []; lights = []; motes = []; ffx.rings = []; ffx.shocks = []; ffx.traumaV = 0;
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
@@ -1972,12 +2129,20 @@ function trySlash() {
   p.comboT = 1.5;
   const lunge = W.id === "lance" && p.comboN === 3; // lance: 3rd hit is a piercing lunge
   const maul = W.id === "maul";
-  p.slashCD = CONFIG.meleeCD * W.cdMul;
+  const fang = W.id === "fang";
+  const arcW = W.id === "arc";
+  const grav = W.id === "grav";
+  const flurry = fang && p.comboN === 3; // TWIN FANG: every 3rd hit is a rapid flurry
+  // FRENZY ramps attack speed on consecutive hits (twin fang only)
+  let cdMul = W.cdMul;
+  if (fang && boonLv("frenzy")) cdMul *= Math.max(0.45, 1 - 0.08 * boonPow("frenzy") * Math.min(6, p.frenzyN || 0));
+  p.slashCD = CONFIG.meleeCD * cdMul;
   p.slashDur = CONFIG.slashDur * W.durMul;
   p.slashT = p.slashDur;
   p.slashSide *= -1;
   p.slashAng = p.aim;
   audio.slash(W.id);
+  if (fang) p.frenzyT = 1.2; // frenzy decay window
   if (lunge) { // dash a short step forward along the thrust
     burst(p.x, p.y, W.col, 8, 150, 0.3, 2.5);
     p.x += Math.cos(p.slashAng) * 64;
@@ -1989,59 +2154,138 @@ function trySlash() {
   // immediate hit detection — snappy
   const range = meleeRangeNow() * (lunge ? 1.15 : 1);
   const arc = lunge ? meleeArcNow() * 0.6 : meleeArcNow();
-  const dmg = meleeDamage() * (lunge ? 1.3 : 1);
-  const kb = maul ? 400 * (1 + 0.5 * boonPow("jugg")) : 260; // JUGGERNAUT: knockback +50%
-  slashGhosts.push({ x: p.x, y: p.y, ang: p.slashAng, side: p.slashSide, arc, range, t: 0.32, tm: 0.32, col: W.col, lunge });
-  if (slashGhosts.length > 10) slashGhosts.shift();
+  // twin fang per-hit is low; the flurry distributes its dmg across rapid sub-slashes
+  const dmg = meleeDamage() * (lunge ? 1.3 : 1) * (flurry ? 0.6 : 1);
+  const kb = maul ? 400 * (1 + 0.5 * boonPow("jugg")) : (fang ? 150 : 260); // JUGGERNAUT; fang barely knocks back
+  // swing trail ribbon (weapon-tinted; style chosen at render time)
+  slashGhosts.push({ x: p.x, y: p.y, ang: p.slashAng, side: p.slashSide, arc, range, t: 0.32, tm: 0.32, col: W.col, lunge, weapon: W.id, flurry });
+  if (slashGhosts.length > 14) slashGhosts.shift();
+  ffx.spawnLight(p.x + Math.cos(p.slashAng) * range * 0.5, p.y + Math.sin(p.slashAng) * range * 0.5, range * 0.7, W.col, 0.5);
+
+  // GRAVITON MACE: the swing seeds a mini singularity at its reach; it pulls then implodes.
+  if (grav) {
+    const sx = p.x + Math.cos(p.slashAng) * range * 0.8;
+    const sy = p.y + Math.sin(p.slashAng) * range * 0.8;
+    const pullR = (120 + range * 0.6) * (1 + 0.5 * boonPow("horizon"));
+    singularities.push({
+      x: sx, y: sy, t: 0.4, tm: 0.4, pullR,
+      dmg: dmg * 1.6, slow: boonLv("horizon") > 0, col: W.col, pulled: [], done: false,
+    });
+    if (singularities.length > 6) singularities.shift();
+    burst(sx, sy, W.col, 14, 180, 0.4, 3);
+    ffx.spawnLight(sx, sy, pullR, W.col, 0.9);
+    audio.gravCast();
+    shake(3, 0.12);
+    // light direct contact damage along the swing so it isn't purely delayed
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      const d = dist(p.x, p.y, e.x, e.y);
+      if (d > range + e.r) continue;
+      const a = angTo(p.x, p.y, e.x, e.y);
+      if (Math.abs(angDiff(p.slashAng, a)) > arc / 2 + Math.atan2(e.r, Math.max(1, d))) continue;
+      if (shieldBlocks(e, p.x, p.y)) { e.exposeT = 1.1; e.kbx += Math.cos(a) * 200; audio.clank(); continue; }
+      hitEnemy(e, dmg * 0.5, Math.cos(a) * 120, Math.sin(a) * 120, critRoll(), true);
+      if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+    }
+    // barrels too
+    for (const b of barrels) {
+      if (b.dead || b.fuse >= 0) continue;
+      if (dist(sx, sy, b.x, b.y) < pullR) igniteBarrel(b, 0.2);
+    }
+    return; // graviton's hit feedback is handled by the singularity
+  }
+
   let hitAny = false;
-  for (const e of enemies) {
-    if (e.hp <= 0) continue;
-    const d = dist(p.x, p.y, e.x, e.y);
-    if (d > range + e.r) continue;
-    const a = angTo(p.x, p.y, e.x, e.y);
-    if (Math.abs(angDiff(p.slashAng, a)) > arc / 2 + Math.atan2(e.r, Math.max(1, d))) continue;
-    if (!lunge && shieldBlocks(e, p.x, p.y)) { // the lance lunge punches through shields
-      // clang: blocked, but the impact knocks the shieldbearer back and exposes it
-      e.kbx += Math.cos(a) * 340; e.kby += Math.sin(a) * 340;
-      e.exposeT = 1.1;
-      burst(e.x + Math.cos(e.shieldA) * (e.r + 6), e.y + Math.sin(e.shieldA) * (e.r + 6), "#88aaff", 8, 180, 0.3, 2.5);
-      audio.clank();
+  const arcHits = []; // ARC CASTER: enemies struck this swing, for the chain zap
+  // one swing's hit pass; flurry runs it several times with tiny angle jitter
+  const swings = flurry ? 3 : 1;
+  const doSwing = (jitter) => {
+    const sAng = p.slashAng + jitter;
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      const d = dist(p.x, p.y, e.x, e.y);
+      if (d > range + e.r) continue;
+      const a = angTo(p.x, p.y, e.x, e.y);
+      if (Math.abs(angDiff(sAng, a)) > arc / 2 + Math.atan2(e.r, Math.max(1, d))) continue;
+      if (!lunge && shieldBlocks(e, p.x, p.y)) { // the lance lunge punches through shields
+        e.kbx += Math.cos(a) * 340; e.kby += Math.sin(a) * 340;
+        e.exposeT = 1.1;
+        burst(e.x + Math.cos(e.shieldA) * (e.r + 6), e.y + Math.sin(e.shieldA) * (e.r + 6), "#88aaff", 8, 180, 0.3, 2.5);
+        audio.clank();
+        hitAny = true;
+        continue;
+      }
+      // PHALANX: lance crits far more often at the tip of its reach
+      let crit = critRoll();
+      if (!crit && boonLv("phalanx") && d > range * 0.66) crit = Math.random() < 0.25 * boonPow("phalanx");
+      hitEnemy(e, dmg, Math.cos(a) * kb, Math.sin(a) * kb, crit, true);
+      if (maul && boonLv("jugg") && e.hp > 0) {
+        e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.25 : 0.55);
+      }
+      if (lunge && boonLv("skewer") && e.hp > 0) {
+        e.kbx = (p.x - e.x) * 6; e.kby = (p.y - e.y) * 6;
+      }
+      if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE
+      // TWIN FANG: frenzy ramp + EXSANGUINATE bleed-on-crit
+      if (fang) {
+        p.frenzyN = Math.min(8, (p.frenzyN || 0) + 1); p.frenzyT = 1.2;
+        if (crit && boonLv("exsang") && e.hp > 0) applyBurn(e, (3 + depth * 0.4) * boonPow("exsang") * dmgMul());
+      }
+      // ARC CASTER: CONDUCTOR always shocks struck foes
+      if (arcW && boonLv("conduct") && e.hp > 0) applyShock(e, 4 * dmgMul(), 0);
+      if (arcW && !arcHits.includes(e)) arcHits.push(e);
       hitAny = true;
-      continue;
-    }
-    // PHALANX: lance crits far more often at the tip of its reach
-    let crit = critRoll();
-    if (!crit && boonLv("phalanx") && d > range * 0.66) crit = Math.random() < 0.25 * boonPow("phalanx");
-    hitEnemy(e, dmg, Math.cos(a) * kb, Math.sin(a) * kb, crit, true);
-    if (maul && boonLv("jugg") && e.hp > 0) { // stunning slam (plain stun, no zap combos)
-      e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.25 : 0.55);
-    }
-    if (lunge && boonLv("skewer") && e.hp > 0) { // SKEWER: drag pierced foes along
-      e.kbx = (p.x - e.x) * 6; e.kby = (p.y - e.y) * 6;
-    }
-    if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE
-    hitAny = true;
-    // chain lightning
-    const cl = boonLv("chain");
-    if (cl) {
-      let from = e, chained = 0;
-      const hitIds = [e];
-      const chFrac = Math.min(1.1, 0.5 + 0.1 * boonPow("chain")); // rarity-scaled chain damage
-      while (chained < cl) {
-        let tgt = null, bd = 170;
-        for (const o of enemies) {
-          if (o.hp <= 0 || hitIds.includes(o)) continue;
-          const dd = dist(from.x, from.y, o.x, o.y);
-          if (dd < bd) { bd = dd; tgt = o; }
+      // chain lightning (boon, all weapons)
+      const cl = boonLv("chain");
+      if (cl) {
+        let from = e, chained = 0;
+        const hitIds = [e];
+        const chFrac = Math.min(1.1, 0.5 + 0.1 * boonPow("chain"));
+        while (chained < cl) {
+          let tgt = null, bd = 170;
+          for (const o of enemies) {
+            if (o.hp <= 0 || hitIds.includes(o)) continue;
+            const dd = dist(from.x, from.y, o.x, o.y);
+            if (dd < bd) { bd = dd; tgt = o; }
+          }
+          if (!tgt) break;
+          beams.push({ x1: from.x, y1: from.y, x2: tgt.x, y2: tgt.y, t: 0.18, col: "#8cc8ff" });
+          sparkLine(from.x, from.y, tgt.x, tgt.y, "#8cc8ff", 8);
+          hitEnemy(tgt, dmg * chFrac, 0, 0, false, false);
+          hitIds.push(tgt);
+          from = tgt; chained++;
         }
-        if (!tgt) break;
-        beams.push({ x1: from.x, y1: from.y, x2: tgt.x, y2: tgt.y, t: 0.18, col: "#8cc8ff" });
-        sparkLine(from.x, from.y, tgt.x, tgt.y, "#8cc8ff", 8);
-        hitEnemy(tgt, dmg * chFrac, 0, 0, false, false);
-        hitIds.push(tgt);
-        from = tgt; chained++;
       }
     }
+  };
+  for (let s = 0; s < swings; s++) doSwing(swings === 1 ? 0 : (s - 1) * 0.22 * p.slashSide);
+  // ARC CASTER signature: a small zap chains between every enemy hit in the cone/line
+  if (arcW && arcHits.length >= 2) {
+    const jumps = 2 + boonLv("overld") * 2; // OVERLOAD: +2 jumps per pick
+    const zapDmg = dmg * 0.45;
+    for (let i = 0; i < arcHits.length - 1; i++) {
+      const a2 = arcHits[i], b2 = arcHits[i + 1];
+      beams.push({ x1: a2.x, y1: a2.y, x2: b2.x, y2: b2.y, t: 0.2, col: W.col });
+      sparkLine(a2.x, a2.y, b2.x, b2.y, W.col, 6);
+      ffx.spawnLight((a2.x + b2.x) / 2, (a2.y + b2.y) / 2, 60, W.col, 0.4);
+    }
+    // additional jumps from the last struck foe to nearby unhit enemies
+    let from = arcHits[arcHits.length - 1], used = arcHits.slice(), jumped = 0;
+    while (jumped < jumps) {
+      let tgt = null, bd = 200;
+      for (const o of enemies) {
+        if (o.hp <= 0 || used.includes(o)) continue;
+        const dd = dist(from.x, from.y, o.x, o.y);
+        if (dd < bd) { bd = dd; tgt = o; }
+      }
+      if (!tgt) break;
+      beams.push({ x1: from.x, y1: from.y, x2: tgt.x, y2: tgt.y, t: 0.2, col: W.col });
+      sparkLine(from.x, from.y, tgt.x, tgt.y, W.col, 6);
+      hitEnemy(tgt, zapDmg, 0, 0, false, false);
+      if (boonLv("conduct") && tgt.hp > 0) applyShock(tgt, 3 * dmgMul(), 0);
+      used.push(tgt); from = tgt; jumped++;
+    }
+    audio.arcZap();
   }
   // volatile barrels can be struck by melee
   for (const b of barrels) {
@@ -2057,10 +2301,12 @@ function trySlash() {
     novas.push({ x: p.x, y: p.y, t: 0.35, tm: 0.35, maxR: range + 16, col: "#ff9966" });
     shake(4, 0.18);
     audio.maulSlam();
+    ffx.spawnLight(p.x, p.y, range + 24, "#ff9966", 0.8);
     if (boonLv("ashock")) {
       quakes.push({ x: p.x, y: p.y, r: range * 0.85, t: 1.4, tm: 1.4, tick: 0.25, dps: (5 + depth) * dmgMul() * boonPow("ashock") });
     }
   }
+  if (flurry) { audio.fangFlurry(); if (hitAny) ffx.trauma(0.18); }
   if (hitAny) shake(2.5, 0.1);
 }
 
@@ -2088,6 +2334,8 @@ function tryFreeze() {
   novas.push({ x: p.x, y: p.y, t: 0.5, tm: 0.5, maxR: CONFIG.freezeR });
   audio.freezeCast();
   shake(3, 0.15);
+  ffx.ring(p.x, p.y, CONFIG.freezeR, "#aaeeff", 0.5, 6);
+  ffx.spawnLight(p.x, p.y, CONFIG.freezeR, "#aaeeff", 0.6);
   for (const e of enemies) {
     if (e.hp <= 0) continue;
     if (dist(p.x, p.y, e.x, e.y) < CONFIG.freezeR + e.r) {
@@ -2115,6 +2363,8 @@ function tryDash() {
   if (p.dashCD <= 0) p.dashCD = CONFIG.dashCD;
   audio.dash();
   burst(p.x, p.y, "#5ee6ff", 10, 160, 0.35, 2.5);
+  ffx.ring(p.x, p.y, 40, "#5ee6ff", 0.3, 3);
+  ffx.spawnLight(p.x, p.y, 70, "#aaf6ff", 0.5);
 }
 
 let mouseActive = false;
@@ -2134,6 +2384,8 @@ function updatePlayer(dt) {
   p.slashCD = Math.max(0, p.slashCD - dt);
   p.slashT = Math.max(0, p.slashT - dt);
   p.comboT = Math.max(0, p.comboT - dt);
+  p.frenzyT = Math.max(0, p.frenzyT - dt);
+  if (p.frenzyT <= 0) p.frenzyN = 0;
   p.boltCD = Math.max(0, p.boltCD - dt);
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
@@ -2300,6 +2552,7 @@ function updateEnemy(e, dt) {
   // knockback decay
   e.x += e.kbx * dt; e.y += e.kby * dt;
   e.kbx *= Math.pow(0.0001, dt); e.kby *= Math.pow(0.0001, dt);
+  if ((e.gravSlow || 0) > 0) e.gravSlow = Math.max(0, e.gravSlow - dt); // EVENT HORIZON slow lingers
   const p = player;
   const d = dist(e.x, e.y, p.x, p.y);
 
@@ -2502,6 +2755,7 @@ function updateEnemy(e, dt) {
     }
   }
 
+  if ((e.gravSlow || 0) > 0) { e.vx *= 0.45; e.vy *= 0.45; } // EVENT HORIZON: pulled foes are sluggish
   e.x += e.vx * dt; e.y += e.vy * dt;
   if (!(e.type === "boss" && e.state === "dash")) collidePillars(e);
   collideArena(e);
@@ -2782,6 +3036,8 @@ function step(dt) {
   // execution slow-mo decays in REAL time (the loop runs game time at 0.3x while active)
   if (slowmoT > 0) slowmoT = Math.max(0, slowmoT - dt / 0.3);
   stylePop = Math.max(0, stylePop - dt);
+  ffx.update(dt);
+  updateMotes(dt);
   // adaptive audio: combat intensity layer + low-HP heartbeat
   audio.updateDynamics(dt,
     state === "play" && !roomClear && (enemies.length > 0 || spawnQ.length > 0),
@@ -2977,6 +3233,50 @@ function step(dt) {
   for (const nv of novas) nv.t -= dt;
   novas = novas.filter((nv) => nv.t > 0);
 
+  // graviton singularities: pull nearby foes inward, then implode
+  for (const sg of singularities) {
+    sg.t -= dt;
+    const pr = 1 - clamp(sg.t / sg.tm, 0, 1);
+    for (const e of enemies) {
+      if (e.hp <= 0 || e.type === "boss") continue; // bosses resist the pull
+      const d = dist(sg.x, sg.y, e.x, e.y);
+      if (d < sg.pullR && d > 1) {
+        const a = angTo(e.x, e.y, sg.x, sg.y);
+        const force = (1 - d / sg.pullR) * 1400 * dt;
+        e.kbx += Math.cos(a) * force; e.kby += Math.sin(a) * force;
+        if (sg.slow) e.gravSlow = 0.12;
+        if (!sg.pulled.includes(e)) sg.pulled.push(e);
+      }
+    }
+    if (sg.t <= 0 && !sg.done) { // implosion burst
+      sg.done = true;
+      const nPulled = sg.pulled.filter((e) => e.hp > 0).length;
+      const collapseMul = 1 + 0.35 * boonPow("collapse") * nPulled; // COLLAPSE: scales with foes pulled
+      const idmg = sg.dmg * collapseMul;
+      burst(sg.x, sg.y, sg.col, 26, 320, 0.6, 4);
+      burst(sg.x, sg.y, "#ffffff", 10, 240, 0.35, 2.5);
+      novas.push({ x: sg.x, y: sg.y, t: 0.35, tm: 0.35, maxR: sg.pullR * 0.7, col: sg.col });
+      ffx.ring(sg.x, sg.y, sg.pullR * 0.7, sg.col, 0.4, 5);
+      ffx.spawnLight(sg.x, sg.y, sg.pullR, sg.col, 1);
+      ffx.pulse(sg.x, sg.y, 7);
+      shake(5, 0.2);
+      audio.gravImplode();
+      const ir = sg.pullR * 0.6;
+      for (const e of enemies) {
+        if (e.hp <= 0) continue;
+        if (dist(sg.x, sg.y, e.x, e.y) < ir + e.r) {
+          const crit = critRoll();
+          hitEnemy(e, idmg, 0, 0, crit, true);
+          if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        }
+      }
+      for (const bl of barrels) {
+        if (!bl.dead && bl.fuse < 0 && dist(sg.x, sg.y, bl.x, bl.y) < ir + bl.r) igniteBarrel(bl, 0.06);
+      }
+    }
+  }
+  singularities = singularities.filter((s) => s.t > 0);
+
   // beams
   for (const bm of beams) bm.t -= dt;
   beams = beams.filter((bm) => bm.t > 0);
@@ -3000,6 +3300,25 @@ function step(dt) {
 
   // door open anim
   for (const d of doors) d.openT = Math.min(1, d.openT + dt * 2);
+}
+
+function updateMotes(dt) {
+  if (!ffx.ambient) { if (motes.length) motes.length = 0; return; }
+  const want = ffx.level === "full" ? 34 : 18;
+  while (motes.length < want) {
+    motes.push({
+      x: rand(0, CONFIG.arenaW), y: rand(0, CONFIG.arenaH),
+      vx: rand(-7, 7), vy: rand(-12, -3), r: rand(0.7, 2), ph: rand(0, TAU),
+      col: Math.random() < 0.5 ? "rgba(120,150,255," : "rgba(110,200,255,",
+    });
+  }
+  while (motes.length > want) motes.pop();
+  for (const m of motes) {
+    m.x += (m.vx + Math.sin(timeNow * 0.5 + m.ph) * 4) * dt;
+    m.y += m.vy * dt;
+    if (m.y < -6) { m.y = CONFIG.arenaH + 6; m.x = rand(0, CONFIG.arenaW); }
+    if (m.x < -6) m.x = CONFIG.arenaW + 6; else if (m.x > CONFIG.arenaW + 6) m.x = -6;
+  }
 }
 
 function updateParts(dt) {
@@ -3053,6 +3372,140 @@ function drawArenaFloor() {
   ctx.strokeStyle = "rgba(20,25,60,0.9)";
   ctx.lineWidth = w;
   ctx.strokeRect(w / 2, w / 2, A.arenaW - w, A.arenaH - w);
+}
+
+/* dynamic point lights: soft additive radial gradients onto the dark floor.
+   Bright entities cast reactive light; capped + additive to stay cheap. */
+function drawLighting() {
+  lights.length = 0;
+  if (ffx.level === "off") return;
+  const cap = ffx.lightCap;
+  const add = (x, y, r, col, a) => { if (lights.length < cap) lights.push({ x, y, r, col, a }); };
+  // player core glow
+  if (player && player.hp > 0 && (state === "play" || state === "hub")) {
+    const W = weaponDef();
+    add(player.x, player.y, 90, player.dashT > 0 ? "#aaf6ff" : "#5ee6ff", player.dashT > 0 ? 0.5 : 0.32);
+    if (player.slashT > 0) add(player.x + Math.cos(player.slashAng) * 30, player.y + Math.sin(player.slashAng) * 30, 70, W.col, 0.4);
+  }
+  for (const b of pbolts) add(b.x, b.y, 46, "#ff66ee", 0.32);
+  for (const b of ebolts) add(b.x, b.y, 40, b.col, 0.26);
+  for (const z of zones) add(z.x, z.y, 64, "#ffaa44", 0.3);
+  for (const nv of novas) {
+    const pr = 1 - clamp(nv.t / nv.tm, 0, 1);
+    add(nv.x, nv.y, lerp(40, nv.maxR, pr), nv.col || "#aaeeff", (1 - pr) * 0.5);
+  }
+  for (const sg of singularities) add(sg.x, sg.y, sg.pullR, sg.col, 0.4 + 0.4 * (1 - sg.t / sg.tm));
+  for (const f of ffx.flashes) add(f.x, f.y, f.r, f.col, f.a * (f.t / f.tm));
+  for (const b of barrels) { if (!b.dead) add(b.x, b.y, b.fuse >= 0 ? 90 : 44, "#ffb050", b.fuse >= 0 ? 0.5 : 0.22); }
+  // burning enemies cast warm flicker light; frozen ones a cold glow
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    if ((e.burnT || 0) > 0) add(e.x, e.y, 54 + Math.sin(timeNow * 18 + e.x) * 8, "#ff8844", 0.3);
+    else if (e.frozenT > 0) add(e.x, e.y, 44, "#bfe8ff", 0.22);
+  }
+  for (const pd of pillars) add(pd.x, pd.y, pd.r + 26, "#5577ff", 0.12); // glowstone-like props
+  if (!lights.length) return;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  for (const L of lights) {
+    const g = ctx.createRadialGradient(L.x, L.y, 0, L.x, L.y, L.r);
+    g.addColorStop(0, hexA(L.col, L.a));
+    g.addColorStop(1, hexA(L.col, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(L.x, L.y, L.r, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* convert "#rrggbb" + alpha to rgba(); passes through rgba() strings */
+const _hexCache = {};
+function hexA(col, a) {
+  if (col[0] !== "#") return col + (col.endsWith(",") ? a + ")" : "");
+  let rgb = _hexCache[col];
+  if (!rgb) {
+    const h = col.length === 4
+      ? [col[1] + col[1], col[2] + col[2], col[3] + col[3]]
+      : [col.slice(1, 3), col.slice(3, 5), col.slice(5, 7)];
+    rgb = _hexCache[col] = h.map((x) => parseInt(x, 16));
+  }
+  return "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + a + ")";
+}
+
+/* additive bloom helper: redraw an emissive shape larger & faint under 'lighter' */
+function bloomCircle(x, y, r, col, a) {
+  if (!ffx.bloom) return;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.globalAlpha = a;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, hexA(col, 0.9));
+  g.addColorStop(1, hexA(col, 0));
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+function drawMotes() {
+  if (!ffx.ambient || !motes.length) return;
+  for (const m of motes) {
+    const tw = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(timeNow * 2 + m.ph));
+    ctx.fillStyle = m.col + tw + ")";
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU); ctx.fill();
+  }
+}
+
+function drawSingularities() {
+  for (const sg of singularities) {
+    const pr = 1 - clamp(sg.t / sg.tm, 0, 1);
+    ctx.save();
+    // accretion swirl
+    ctx.translate(sg.x, sg.y);
+    ctx.rotate(timeNow * 6 + pr * 4);
+    glow(sg.col, 18);
+    ctx.strokeStyle = sg.col;
+    for (let i = 0; i < 3; i++) {
+      const rr = sg.pullR * (0.55 - i * 0.15) * (1 - pr * 0.4);
+      ctx.globalAlpha = 0.5 - i * 0.12;
+      ctx.lineWidth = 2.5 - i * 0.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, rr, i * 1.6, i * 1.6 + 4.2);
+      ctx.stroke();
+    }
+    noglow();
+    // dark core
+    ctx.globalAlpha = 0.9;
+    const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, 14 + pr * 6);
+    cg.addColorStop(0, "rgba(8,2,18,0.95)");
+    cg.addColorStop(1, "rgba(8,2,18,0)");
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.arc(0, 0, 14 + pr * 6, 0, TAU); ctx.fill();
+    ctx.restore();
+    // faint pull-radius ring
+    ctx.save();
+    ctx.globalAlpha = 0.18 * (1 - pr);
+    ctx.strokeStyle = sg.col;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(sg.x, sg.y, sg.pullR, 0, TAU); ctx.stroke();
+    ctx.restore();
+    bloomCircle(sg.x, sg.y, 24, sg.col, 0.4 * (1 - pr));
+  }
+}
+
+/* impact / shockwave rings */
+function drawFxRings() {
+  for (const r of ffx.rings) {
+    const pr = 1 - clamp(r.t / r.tm, 0, 1);
+    const rad = lerp(r.r0, r.r, Math.min(1, pr * 1.1));
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = (1 - pr) * 0.8;
+    glow(r.col, 14);
+    ctx.strokeStyle = r.col;
+    ctx.lineWidth = r.w * (1 - pr) + 1;
+    ctx.beginPath(); ctx.arc(r.x, r.y, rad, 0, TAU); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
 }
 
 function drawPillars() {
@@ -3766,26 +4219,68 @@ function drawEnemy(e) {
 function drawPlayer() {
   const p = player;
   if (!p || p.hp <= 0) return;
-  // weapon-colored swing trail afterimages
+  // weapon-colored swing trails: smooth tapered ribbon arcs, tinted per weapon
   for (const g of slashGhosts) {
     const a = g.t / g.tm;
     ctx.save();
-    ctx.globalAlpha = a * 0.3;
-    glow(g.col, 10);
-    ctx.strokeStyle = g.col;
-    if (g.lunge) {
+    if (ffx.bloom) ctx.globalCompositeOperation = "lighter";
+    glow(g.col, ffx.bloom ? 14 : 8);
+    ctx.lineCap = "round";
+    if (g.lunge || g.weapon === "lance") {
+      // lance: clean tapered streak
+      ctx.globalAlpha = a * 0.4;
+      ctx.strokeStyle = g.col;
       ctx.lineWidth = 5 * a + 1;
       ctx.beginPath();
       ctx.moveTo(g.x, g.y);
       ctx.lineTo(g.x + Math.cos(g.ang) * g.range, g.y + Math.sin(g.ang) * g.range);
       ctx.stroke();
-    } else {
-      ctx.lineWidth = 6 * a + 1;
-      const a0 = g.ang - g.side * g.arc / 2;
-      const a1 = g.ang + g.side * g.arc / 2;
+    } else if (g.weapon === "fang") {
+      // twin fang: quick thin double-streaks offset to either side
+      ctx.globalAlpha = a * 0.45;
+      ctx.strokeStyle = g.col;
+      const a0 = g.ang - g.side * g.arc / 2, a1 = g.ang + g.side * g.arc / 2;
+      for (const off of [-6, 6]) {
+        ctx.lineWidth = (g.flurry ? 2 : 2.6) * a + 0.6;
+        ctx.beginPath();
+        ctx.arc(g.x, g.y, g.range - 10 + off, Math.min(a0, a1), Math.max(a0, a1));
+        ctx.stroke();
+      }
+    } else if (g.weapon === "arc") {
+      // arc caster: jagged electric beam along the cone edge
+      ctx.globalAlpha = a * 0.5;
+      ctx.strokeStyle = g.col;
+      ctx.lineWidth = 2.5 * a + 1;
+      const a0 = g.ang - g.side * g.arc / 2, a1 = g.ang + g.side * g.arc / 2;
+      const segs = 9;
       ctx.beginPath();
-      ctx.arc(g.x, g.y, g.range - 10, Math.min(a0, a1), Math.max(a0, a1));
+      for (let i = 0; i <= segs; i++) {
+        const ang = lerp(a0, a1, i / segs);
+        const rr = g.range - 10 + (i === 0 || i === segs ? 0 : rand(-7, 7));
+        const x = g.x + Math.cos(ang) * rr, y = g.y + Math.sin(ang) * rr;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
       ctx.stroke();
+    } else if (g.weapon === "grav") {
+      // graviton: thick dark-tinted warped arc
+      ctx.globalAlpha = a * 0.5;
+      const a0 = g.ang - g.side * g.arc / 2, a1 = g.ang + g.side * g.arc / 2;
+      ctx.strokeStyle = "rgba(40,12,70,0.7)";
+      ctx.lineWidth = 11 * a + 2;
+      ctx.beginPath(); ctx.arc(g.x, g.y, g.range - 12, Math.min(a0, a1), Math.max(a0, a1)); ctx.stroke();
+      ctx.strokeStyle = g.col;
+      ctx.lineWidth = 4 * a + 1;
+      ctx.beginPath(); ctx.arc(g.x, g.y, g.range - 12, Math.min(a0, a1), Math.max(a0, a1)); ctx.stroke();
+    } else {
+      // blade / maul: tapered ribbon arc with soft inner glow
+      const a0 = g.ang - g.side * g.arc / 2, a1 = g.ang + g.side * g.arc / 2;
+      ctx.globalAlpha = a * 0.45;
+      ctx.strokeStyle = g.col;
+      ctx.lineWidth = (g.weapon === "maul" ? 9 : 6) * a + 1;
+      ctx.beginPath(); ctx.arc(g.x, g.y, g.range - 10, Math.min(a0, a1), Math.max(a0, a1)); ctx.stroke();
+      ctx.globalAlpha = a * 0.2;
+      ctx.lineWidth = (g.weapon === "maul" ? 18 : 13) * a + 1;
+      ctx.beginPath(); ctx.arc(g.x, g.y, g.range - 16, Math.min(a0, a1), Math.max(a0, a1)); ctx.stroke();
     }
     noglow();
     ctx.restore();
@@ -3805,6 +4300,7 @@ function drawPlayer() {
     noglow();
     ctx.restore();
   }
+  bloomCircle(p.x, p.y, p.dashT > 0 ? 34 : 24, p.dashT > 0 ? "#aaf6ff" : "#5ee6ff", 0.5);
   ctx.save();
   ctx.translate(p.x, p.y);
   const blink = p.hurtT > 0 && Math.floor(timeNow * 18) % 2 === 0;
@@ -3868,12 +4364,14 @@ function drawPlayer() {
 
 function drawBolts() {
   for (const b of pbolts) {
+    bloomCircle(b.x, b.y, b.r * 4, "#ff66ee", 0.4);
     glow("#ff66ee", 14);
     ctx.fillStyle = "#ffb3f5";
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
     noglow();
   }
   for (const b of ebolts) {
+    bloomCircle(b.x, b.y, b.r * 3.5, b.col, 0.32);
     glow(b.col, 12);
     ctx.fillStyle = b.col;
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
@@ -3914,13 +4412,24 @@ function drawBeamsParts() {
 function drawDnums() {
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   for (const n of dnums) {
-    const a = clamp(n.t / 0.8, 0, 1);
+    const life = clamp(n.t / 0.8, 0, 1);
+    const age = 1 - life;
+    // snappy pop-in scale that settles, then a slight fade
+    const pop = age < 0.18 ? 1 + (0.18 - age) / 0.18 * (n.big ? 0.7 : 0.4) : 1;
+    const a = age < 0.7 ? 1 : (life / 0.3);
+    const base = n.big ? 22 : 14;
+    ctx.save();
+    ctx.translate(n.x, n.y);
+    ctx.scale(pop, pop);
     ctx.globalAlpha = a;
-    ctx.font = "bold " + (n.big ? 20 : 14) + "px 'Courier New', monospace";
+    ctx.font = "bold " + base + "px 'Courier New', monospace";
+    if (n.big) { glow(n.col, 12); } // crit emphasis: glow halo
     ctx.fillStyle = "#000";
-    ctx.fillText(n.txt, n.x + 1, n.y + 1);
+    ctx.fillText(n.txt, 1.2, 1.2);
     ctx.fillStyle = n.col;
-    ctx.fillText(n.txt, n.x, n.y);
+    ctx.fillText(n.txt, 0, 0);
+    noglow();
+    ctx.restore();
   }
   ctx.globalAlpha = 1;
 }
@@ -3972,27 +4481,30 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — HEAT CONTRACT" : "PRESS E — HEAT CONTRACT", t.heatX, t.heatY - 48);
   }
-  // ARMORY weapon rack (武器架): cycle weapon forms
+  // ARMORY weapon rack (武器架): cycle weapon forms — 6 forms in a 3x2 grid
   const Wsel = weaponDef();
   glow(Wsel.col, 16);
   ctx.fillStyle = "#121a2c";
-  rrect(t.rackX - 42, t.rackY - 26, 84, 52, 8); ctx.fill();
+  rrect(t.rackX - 50, t.rackY - 30, 100, 56, 8); ctx.fill();
   ctx.strokeStyle = Wsel.col;
   ctx.lineWidth = 2.5;
-  rrect(t.rackX - 42, t.rackY - 26, 84, 52, 8); ctx.stroke();
+  rrect(t.rackX - 50, t.rackY - 30, 100, 56, 8); ctx.stroke();
   noglow();
-  for (let i = 0; i < WEAPONS.length; i++) { // three slots, current highlighted
+  const cols = 3;
+  for (let i = 0; i < WEAPONS.length; i++) { // grid slots, current highlighted
     const w2 = WEAPONS[i];
     const sel = w2.id === curWeapon;
+    const cx = t.rackX + ((i % cols) - 1) * 30;
+    const cy = t.rackY - 16 + Math.floor(i / cols) * 22;
     if (sel) glow(w2.col, 12);
     ctx.fillStyle = sel ? w2.col : "rgba(150,170,220,0.4)";
-    ctx.font = "bold " + (sel ? 18 : 13) + "px 'Courier New', monospace";
-    ctx.fillText(w2.glyph, t.rackX + (i - 1) * 24, t.rackY - 6);
+    ctx.font = "bold " + (sel ? 17 : 12) + "px 'Courier New', monospace";
+    ctx.fillText(w2.glyph, cx, cy);
     noglow();
   }
   ctx.fillStyle = Wsel.col;
   ctx.font = "bold 10px 'Courier New', monospace";
-  ctx.fillText("ARMORY·" + Wsel.name, t.rackX, t.rackY + 14);
+  ctx.fillText("ARMORY·" + Wsel.name, t.rackX, t.rackY + 18);
   const rPulse = 0.5 + Math.sin(timeNow * 3 + 3) * 0.3;
   ctx.strokeStyle = "rgba(255,210,122," + rPulse * 0.6 + ")";
   ctx.beginPath(); ctx.arc(t.rackX, t.rackY, t.rackR, 0, TAU); ctx.stroke();
@@ -4430,7 +4942,7 @@ function drawTitle() {
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
-    "枢纽武器架与战绩终端 — hub ARMORY weapon rack · STATS terminal",
+    "枢纽武器架：6 种武器形态与战绩终端 — hub ARMORY: 6 weapon forms · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -4441,7 +4953,7 @@ function drawTitle() {
     "J 近战斩击 · 右Ctrl 发射光弹 — J slash / Right-Ctrl bolt (LMB/RMB too)",
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
-    "枢纽武器架与战绩终端 — hub ARMORY weapon rack · STATS terminal",
+    "枢纽武器架：6 种武器形态与战绩终端 — hub ARMORY: 6 weapon forms · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -4756,6 +5268,7 @@ function drawStatsScreen() {
 
 function drawPause() {
   dimScreen(0.55);
+  uiRects = [];
   const u = us();
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   glow("#5ee6ff", 18);
@@ -4771,6 +5284,22 @@ function drawPause() {
     ctx.font = 12 * u + "px 'Courier New', monospace";
     ctx.fillText("J 斩击 · 右Ctrl 光弹 · K 冰冻 · 空格冲刺 — J slash · R-Ctrl bolt · K freeze · Space dash", cw / 2, ch * 0.58);
   }
+  // FX / EFFECTS setting toggle (bloom · scanlines · shake intensity)
+  const fxLabel = { full: "FULL — 全开", reduced: "REDUCED — 降低", off: "OFF — 关闭" }[ffx.level];
+  const fxCol = ffx.level === "full" ? "#5ee6ff" : ffx.level === "reduced" ? "#ffcc44" : "#ff7755";
+  const by = ch * 0.66;
+  const bw = 280 * u, bh = 34 * u, bx = cw / 2 - bw / 2;
+  ctx.fillStyle = "rgba(10,14,34,0.8)";
+  rrect(bx, by, bw, bh, 6); ctx.fill();
+  ctx.strokeStyle = fxCol; ctx.lineWidth = 2;
+  rrect(bx, by, bw, bh, 6); ctx.stroke();
+  ctx.fillStyle = fxCol;
+  ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+  ctx.fillText("EFFECTS / 特效: " + fxLabel, cw / 2, by + bh / 2 + 1);
+  uiRects.push({ x: bx, y: by, w: bw, h: bh, act: "fxtoggle" });
+  ctx.fillStyle = "rgba(190,210,255,0.5)";
+  ctx.font = 11 * u + "px 'Courier New', monospace";
+  ctx.fillText(touchUI ? "tap to cycle (bloom · scanlines · shake)" : "press F to cycle (bloom · scanlines · shake)", cw / 2, by + bh + 14 * u);
 }
 
 function uiClick(x, y) {
@@ -4783,6 +5312,7 @@ function uiClick(x, y) {
       if (r.act === "heatmod") { toggleHeat(r.i); return; }
       if (r.act === "heatclose") { closeHeat(); return; }
       if (r.act === "statsclose") { closeStats(); return; }
+      if (r.act === "fxtoggle") { ffx.cycleLevel(); return; }
     }
   }
 }
@@ -4802,13 +5332,21 @@ function render() {
     ctx.fillRect(sx, sy, 2, 2);
   }
 
-  // world
-  let sx2 = 0, sy2 = 0;
-  if (shakeT > 0) {
-    sx2 = rand(-shakeA, shakeA); sy2 = rand(-shakeA, shakeA);
+  // world — trauma-curve screen shake (offset + slight rotation), legacy shakeA as floor
+  let sx2 = 0, sy2 = 0, srot = 0;
+  const tr = ffx.traumaV * ffx.traumaV; // squared trauma feels punchier
+  if (tr > 0.0008 || shakeT > 0) {
+    const amp = Math.max(shakeT > 0 ? shakeA : 0, tr * 26);
+    sx2 = rand(-amp, amp); sy2 = rand(-amp, amp);
+    srot = rand(-1, 1) * tr * 0.05;
   }
   ctx.save();
-  ctx.translate(aOX + sx2, aOY + sy2);
+  ctx.translate(aOX, aOY);
+  if (srot) { // rotate about arena center for the trauma roll
+    const cx = (CONFIG.arenaW / 2) * aS, cy = (CONFIG.arenaH / 2) * aS;
+    ctx.translate(cx, cy); ctx.rotate(srot); ctx.translate(-cx, -cy);
+  }
+  ctx.translate(sx2, sy2);
   ctx.scale(aS, aS);
   if (slowmoT > 0) { // execution slow-mo: subtle zoom pulse on the arena
     const z = 1 + 0.05 * Math.sin((slowmoT / 0.5) * Math.PI);
@@ -4817,8 +5355,11 @@ function render() {
     ctx.translate(-CONFIG.arenaW / 2, -CONFIG.arenaH / 2);
   }
   drawArenaFloor();
+  drawMotes();
+  drawLighting();
   drawHazards();
   drawZonesAndPickups();
+  drawSingularities();
   if (state === "hub" || state === "shop" || state === "heat" || state === "stats") drawHubObjects();
   if (roomType === "fountain" && state === "play") drawFountain();
   if (shopRoom || roomType === "treasure") drawPedestals();
@@ -4829,6 +5370,7 @@ function render() {
   drawPlayer();
   drawBolts();
   drawBeamsParts();
+  drawFxRings();
   drawDnums();
   ctx.restore();
 
@@ -4840,6 +5382,14 @@ function render() {
   }
   ctx.fillStyle = vigGrad;
   ctx.fillRect(0, 0, cw, ch);
+  // combat-reactive vignette deepening
+  if (audio.intensityCur > 0.02) {
+    ctx.save();
+    ctx.globalAlpha = audio.intensityCur * 0.35;
+    ctx.fillStyle = vigGrad;
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.restore();
+  }
 
   // red hurt flash
   if (redFlash > 0) {
@@ -4870,6 +5420,36 @@ function render() {
     ctx.fillStyle = "rgba(200,240,255," + (a * 0.06).toFixed(3) + ")";
     ctx.fillRect(0, 0, cw, ch);
   }
+  // cheap chromatic-aberration / distortion pulse on big events (boss slam, shatter, barrel chain)
+  if (ffx.shocks.length) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    for (const s of ffx.shocks) {
+      const pr = 1 - clamp(s.t / s.tm, 0, 1);
+      const sx = w2sX(s.x), sy = w2sY(s.y);
+      const rad = (40 + pr * 220) * aS;
+      const a = (1 - pr) * 0.5;
+      const off = s.mag * (1 - pr);
+      ctx.lineWidth = 3 * (1 - pr) + 1;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = "rgba(255,40,40,1)";
+      ctx.beginPath(); ctx.arc(sx - off, sy, rad, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = "rgba(40,160,255,1)";
+      ctx.beginPath(); ctx.arc(sx + off, sy, rad, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = "rgba(80,255,120,1)";
+      ctx.beginPath(); ctx.arc(sx, sy - off, rad, 0, TAU); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  // subtle CRT scanline shimmer (neon-arcade vibe)
+  if (ffx.scanlines) {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0," + (0.07 + 0.02 * Math.sin(timeNow * 1.5)).toFixed(3) + ")";
+    const off = Math.floor((timeNow * 24) % 3);
+    for (let y = off; y < ch; y += 3) ctx.fillRect(0, y, cw, 1);
+    ctx.restore();
+  }
+
   // room fade
   if (roomFade > 0) {
     ctx.fillStyle = "rgba(3,3,14," + roomFade + ")";
