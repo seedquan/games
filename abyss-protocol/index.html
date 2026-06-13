@@ -141,11 +141,30 @@ function resize() {
 }
 function computeView() {
   const A = CONFIG;
-  aS = Math.min(cw / (A.arenaW + 24), (ch - 56) / (A.arenaH + 24));
-  aS = Math.min(aS, 1.5);
+  // Reserve screen-anchored HUD insets (scaled by the UI scale us()), then fit the
+  // fixed-size arena into the remaining space and let it scale UP on large displays.
+  // The whole arena is always drawn (camera never tracks a sub-region), so fitting the
+  // full room here guarantees both players + room bounds stay in frame at any zoom.
+  // UI scale (mirrors us()); inlined so computeView is safe to call during early init.
+  const u = clamp(Math.min(cw, ch) / 640, 0.72, 1.25);
+  const topHud = 46 * u;          // boss bar + depth/cores readout clearance
+  const botHud = 78 * u;          // player HP/energy/dash/boon block (P1 left / P2 right)
+  const sideMargin = 16;          // small breathing room at the screen edges
+  // 2P spreads players wider, so give it a touch more vertical clearance for the
+  // mirrored bars but it shares the same fit logic (one screen, whole arena visible).
+  const availW = Math.max(80, cw - sideMargin * 2);
+  const availH = Math.max(80, ch - topHud - botHud);
+  let fit = Math.min(availW / A.arenaW, availH / A.arenaH);
+  // Fill the available real estate: raise the old 1.5 cap so big monitors get a big
+  // arena. Cap generously just to avoid pathological zoom; 2P is allowed slightly more.
+  const maxZoom = nPlayersSafe() > 1 ? 3.2 : 3.0;
+  aS = clamp(fit, 0.35, maxZoom);
+  // Center the arena within the free band between the top and bottom HUD insets.
   aOX = (cw - A.arenaW * aS) / 2;
-  aOY = (ch - A.arenaH * aS) / 2 + 14;
+  aOY = topHud + (availH - A.arenaH * aS) / 2;
 }
+// Reads numPlayers if initialized; returns 1 during early module init (TDZ-safe).
+function nPlayersSafe() { try { return numPlayers; } catch (e) { return 1; } }
 window.addEventListener("resize", resize);
 resize();
 
