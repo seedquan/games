@@ -35,6 +35,13 @@
    Controls: mouse / touch-drag / arrows / A-D = move paddle.
              Space / click / tap = launch ball.
              P or Esc = pause, M = mute.
+             Gamepad: left stick / d-pad = move, A/cross = launch/confirm,
+                      Start/Options = start/pause, B/circle = cancel.
+
+   Roguelike: a RUN is a series of brick-stages; after each clear pick the
+   next node (branching doors: combat / treasure / shop / boss), earn boons
+   (choose 1 of 3, rarity-rolled, stackable) and currency, banked on death.
+   The META HUB on the title screen spends currency on permanent upgrades.
    ============================================================ */
 
 /* ---------------- §B CONFIG ---------------- */
@@ -57,10 +64,16 @@ const CONFIG = Object.freeze({
   slowFactor: 0.55,
   laserRate: 0.32,           // s between shots
   laserSpeed: 700,
-  maxBalls: 6,
+  maxBalls: 10,
   comboMax: 9,
   lives0: 3,
   maxParticles: 700,
+  /* --- roguelike --- */
+  bossDepths: 5,             // every Nth stage is a boss
+  stickDeadzone: 0.2,
+  gamepadSpeed: 720,        // px/s at full stick tilt
+  hazardSpeed: 130,         // boss hazard fall speed
+  bossHazardR: 9,
 });
 
 /* ---------------- §C UTIL ---------------- */
@@ -202,6 +215,49 @@ class AudioEngine {
     [392, 311, 262, 196].forEach((f, i) =>
       this.tone("triangle", f, f * 0.97, t + i * 0.18, 0.4, 0.13, true));
   }
+  boon() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [523, 659, 784, 1047, 1319].forEach((f, i) =>
+      this.tone("sine", f, f, t + i * 0.07, 0.26, 0.12, true));
+    this.tone("triangle", 261, 392, t, 0.4, 0.08, true);
+  }
+  purchase() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 880, 1320, t, 0.1, 0.1, true);
+    this.tone("sine", 1320, 1760, t + 0.06, 0.16, 0.1, true);
+  }
+  deny() { if (this.ok()) this.tone("sawtooth", 180, 90, this.ctx.currentTime, 0.14, 0.12, false); }
+  nav() { if (this.ok()) this.tone("triangle", 520, 560, this.ctx.currentTime, 0.04, 0.06, false); }
+  bossWarn() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 110, 70, t, 0.8, 0.16, true);
+    this.tone("square", 55, 40, t, 0.9, 0.12, true);
+    this.noise(t, 0.6, 0.1, "lowpass", 700, 120);
+  }
+  bossHit() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 240, 120, t, 0.12, 0.14, true);
+    this.noise(t, 0.12, 0.1, "bandpass", 1200, 600);
+  }
+  bossDie() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [196, 262, 330, 392, 523, 659].forEach((f, i) =>
+      this.tone("triangle", f, f, t + i * 0.1, 0.4, 0.13, true));
+    this.noise(t, 0.7, 0.14, "lowpass", 1600, 100);
+  }
+  explode() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.22, 0.13, "highpass", 900, 3200);
+    this.tone("square", 180, 60, t, 0.2, 0.1, true);
+  }
+  zap() { if (this.ok()) this.tone("sawtooth", 1400, 400, this.ctx.currentTime, 0.07, 0.06, true); }
+  coin() { if (this.ok()) this.tone("square", 988, 1318, this.ctx.currentTime, 0.06, 0.05, false); }
   /* --- ambient music: slow minor-pentatonic pad --- */
   startMusic() {
     if (this._musicTimer) return;
@@ -346,11 +402,102 @@ function buildLevel(n) {  // n is 1-based
   return bricks;
 }
 
+/* ---------------- §G1b STAGES / MODIFIERS ---------------- */
+/* Stage modifiers tweak a freshly built brick layout. */
+const STAGE_MODS = {
+  armored:  { name: "护甲 Armored",  color: "#9fb4d6", apply(br) { br.hp += 1; br.maxHp += 1; br.armored = true; } },
+  moving:   { name: "移动 Moving",   color: "#ff9d4d", apply(br) { br.drift = rand(20, 46) * (Math.random() < 0.5 ? -1 : 1); br.driftBase = br.x; br.driftPhase = rand(0, TAU); } },
+  dense:    { name: "密集 Dense",    color: "#ff5e8a", apply() {} },
+};
+function buildStage(depth, modId) {
+  const bricks = buildLevel(depth);
+  const mod = modId && STAGE_MODS[modId];
+  if (mod) for (const br of bricks) mod.apply(br);
+  // depth-scaled hp bump every 4 depths
+  const bump = Math.floor((depth - 1) / 4);
+  if (bump > 0) for (const br of bricks) { br.hp = Math.min(6, br.hp + bump); br.maxHp = br.hp; }
+  return bricks;
+}
+
+/* ---------------- §G2 BOONS (roguelike upgrades) ---------------- */
+/* Each boon: id, name (bilingual short), line (synergy), max stacks,
+   rarity-scaled value via apply(level). Boons mutate G.boons counters and
+   physics flags read across the engine. Stored as counts in G.boonStacks. */
+const RARITY = [
+  { id: "common",    name: "普通 Common",    color: "#9fb4d6", weight: 60, mult: 1 },
+  { id: "rare",      name: "稀有 Rare",      color: "#4de8ff", weight: 28, mult: 1.6 },
+  { id: "epic",      name: "史诗 Epic",      color: "#d06bff", weight: 9,  mult: 2.4 },
+  { id: "legendary", name: "传说 Legendary", color: "#ffe14d", weight: 3,  mult: 3.6 },
+];
+function rarityById(id) { return RARITY.find(r => r.id === id) || RARITY[0]; }
+
+/* BOONS catalogue. icon = short glyph for HUD. desc(level) is bilingual. */
+const BOONS = [
+  { id: "multiball", line: "balls", icon: "+B", name: "分裂球 Split Ball", max: 4,
+    desc: (n) => "+" + n + " 球 each serve · +" + n + " ball(s) per serve" },
+  { id: "balldmg", line: "power", icon: "DMG", max: 5,
+    desc: (n) => "+" + n + " 球伤害 · +" + n + " ball damage" },
+  { id: "ballsize", line: "power", icon: "BIG", max: 4,
+    desc: (n) => "+" + Math.round(n * 35) + "% 球体积 · ball size" },
+  { id: "paddlew", line: "paddle", icon: "WID", max: 5,
+    desc: (n) => "+" + Math.round(n * 18) + " 挡板宽 · paddle width" },
+  { id: "fireball", line: "power", icon: "FIRE", max: 1,
+    desc: () => "穿透小球 · fireball pierces bricks" },
+  { id: "explosive", line: "aoe", icon: "BOOM", max: 3,
+    desc: (n) => "击碎砖块爆炸 r" + (28 + n * 12) + " · explosive bricks" },
+  { id: "chain", line: "aoe", icon: "CHN", max: 3,
+    desc: (n) => "连锁闪电 x" + n + " · chain-lightning between bricks" },
+  { id: "sticky", line: "paddle", icon: "STK", max: 1,
+    desc: () => "粘性挡板 · catch & re-aim the ball" },
+  { id: "extralife", line: "survive", icon: "+1U", max: 9,
+    desc: (n) => "+" + n + " 命 · +" + n + " life" },
+  { id: "scoremul", line: "econ", icon: "$$", max: 5,
+    desc: (n) => "+" + Math.round(n * 20) + "% 得分/金币 · score & currency" },
+  { id: "slowmo", line: "survive", icon: "SLW", max: 1,
+    desc: () => "近台慢动作 · slow-mo when ball nears paddle" },
+  { id: "bumpers", line: "survive", icon: "BMP", max: 1,
+    desc: () => "侧墙缓冲 · side-wall bumpers nudge ball up" },
+  { id: "laser", line: "paddle", icon: "LZR", max: 3,
+    desc: (n) => "激光挡板 rate+" + n + " · laser paddle shoots" },
+  { id: "homing", line: "balls", icon: "HOM", max: 3,
+    desc: (n) => "追踪微调 x" + n + " · homing ball nudge" },
+  { id: "crit", line: "power", icon: "CRT", max: 5,
+    desc: (n) => (n * 10) + "% 暴击x3 · " + (n * 10) + "% crit (x3 dmg)" },
+  { id: "shield", line: "survive", icon: "SHD", max: 3,
+    desc: (n) => "+" + n + " 护盾(免死) · floor shield saves" },
+];
+function boonById(id) { return BOONS.find(b => b.id === id); }
+
+/* ---------------- §G3 META UPGRADES (persistent hub) ---------------- */
+/* cost = base * ratio^owned (geometric). Persisted under meta.<id>. */
+const META = [
+  { id: "life", icon: "+1U", name: "起始生命 Starting Life",
+    desc: "+1 起始命 · +1 starting life", base: 40, ratio: 1.8, max: 5 },
+  { id: "dmg", icon: "DMG", name: "起始伤害 Starting Damage",
+    desc: "+1 起始球伤 · +1 starting ball damage", base: 60, ratio: 2.0, max: 3 },
+  { id: "boon", icon: "BN", name: "起始恩赐 Starting Boon",
+    desc: "+1 起始恩赐 · start each run with +1 boon", base: 120, ratio: 2.4, max: 3 },
+  { id: "luck", icon: "LK", name: "幸运 Luck",
+    desc: "更好稀有度概率 · better boon rarity odds", base: 90, ratio: 1.9, max: 4 },
+  { id: "wide", icon: "WID", name: "宽挡板 Wide Start",
+    desc: "起始更宽挡板 · start with wider paddle", base: 50, ratio: 1.8, max: 4 },
+  { id: "ball", icon: "+B", name: "额外起始球 Extra Ball",
+    desc: "+1 起始球 · start with +1 ball", base: 110, ratio: 2.3, max: 2 },
+  { id: "discount", icon: "%", name: "折扣 Shop Discount",
+    desc: "商店便宜 10% · 10% shop discount", base: 80, ratio: 2.0, max: 3 },
+  { id: "revive", icon: "RV", name: "复活 Revive",
+    desc: "每局一次复活 · one revive per run", base: 200, ratio: 3.0, max: 2 },
+];
+function metaById(id) { return META.find(m => m.id === id); }
+
 /* ---------------- §H GAME STATE ---------------- */
 const G = {
-  state: "title",         // title | play | levelclear | gameover
+  // state machine:
+  // title | hub | play | boon | nodes | shop | summary | gameover
+  state: "title",
   paused: false,
-  level: 1,
+  level: 1,                // legacy alias for stage display
+  depth: 1,                // run depth (1-based)
   score: 0,
   hi: parseInt(store.get("hi") || "0", 10) || 0,
   lives: CONFIG.lives0,
@@ -360,40 +507,437 @@ const G = {
   balls: [],
   powerups: [],
   lasers: [],
-  paddle: { x: CONFIG.W / 2, w: CONFIG.paddleW, glow: 0 },
+  hazards: [],             // boss-dropped hazards
+  paddle: { x: CONFIG.W / 2, w: CONFIG.paddleW, glow: 0, vx: 0 },
   wideT: 0, slowT: 0, laserT: 0, laserCd: 0,
   serving: true,           // ball stuck to paddle
+  caught: null,            // sticky-paddle: offset of caught ball, or null
   shake: 0,
   flashMsg: "", flashT: 0,
   stateT: 0,               // time in current state
   newHi: false,
+  /* --- roguelike run state --- */
+  boss: null,
+  stageMod: null,          // active stage modifier id
+  boonStacks: {},          // id -> count for current run
+  currency: 0,             // banked persistent currency
+  runCurrency: 0,          // earned this run (added to currency on death)
+  bricksDestroyed: 0,
+  revivesLeft: 0,
+  shieldsLeft: 0,
+  nodeChoices: [],         // current branching node options
+  boonChoices: [],         // current boon offer
+  shopItems: [],
+  menuIndex: 0,            // highlighted menu item (gamepad/keyboard nav)
+  runPath: [],             // history of node types for the run map
+  pendingReward: null,     // "boon" | "treasure" | null after a stage
 };
+/* persistent currency */
+G.currency = parseInt(store.get("currency") || "0", 10) || 0;
+/* migrate: legacy save had only "hi" & "muted"; nothing else to convert. */
 
+/* meta-upgrade ownership (persisted) */
+const metaOwned = {};
+for (const m of META) metaOwned[m.id] = parseInt(store.get("meta." + m.id) || "0", 10) || 0;
+function metaLevel(id) { return metaOwned[id] || 0; }
+function metaCost(m) {
+  const owned = metaLevel(m.id);
+  return Math.round(m.base * Math.pow(m.ratio, owned));
+}
+function buyMeta(m) {
+  if (metaLevel(m.id) >= m.max) { audio.deny(); return false; }
+  const cost = metaCost(m);
+  if (G.currency < cost) { audio.deny(); return false; }
+  G.currency -= cost;
+  metaOwned[m.id] = metaLevel(m.id) + 1;
+  store.set("meta." + m.id, String(metaOwned[m.id]));
+  store.set("currency", String(G.currency));
+  audio.purchase();
+  return true;
+}
+
+/* --- boon helpers --- */
+function boonCount(id) { return G.boonStacks[id] || 0; }
+function addBoon(id, rarityId) {
+  const def = boonById(id);
+  if (!def) return;
+  const r = rarityById(rarityId);
+  // value scaling: rarity multiplier rounded, at least +1
+  const inc = Math.max(1, Math.round(r.mult));
+  const cur = boonCount(id);
+  G.boonStacks[id] = Math.min(def.max, cur + Math.min(inc, def.max - cur || 1));
+  // immediate-effect boons
+  if (id === "extralife") G.lives += (G.boonStacks[id] - cur);
+  if (id === "shield") G.shieldsLeft += (G.boonStacks[id] - cur);
+  audio.boon();
+  spawnBurst(G.paddle.x, CONFIG.paddleY - 30, r.color, 30, 240, 0.9);
+}
+/* derived stat helpers (read across engine) */
+function ballDamage() { return 1 + metaLevel("dmg") + boonCount("balldmg"); }
+function ballRadius() { return CONFIG.ballR * (1 + boonCount("ballsize") * 0.35); }
+function paddleBaseW() {
+  return CONFIG.paddleW + metaLevel("wide") * 14 + boonCount("paddlew") * 18;
+}
+function scoreMult() { return 1 + boonCount("scoremul") * 0.20; }
+function critChance() { return boonCount("crit") * 0.10; }
+function explosiveRadius() { const n = boonCount("explosive"); return n > 0 ? 28 + n * 12 : 0; }
+function chainCount() { return boonCount("chain"); }
+function homingStr() { return boonCount("homing") * 26; }
+
+/* ---------------- §H2 RUN FLOW: rarity / boons / nodes / shop ---------------- */
+function rollRarity() {
+  // luck meta shifts weights toward higher rarity
+  const luck = metaLevel("luck");
+  const weights = RARITY.map((r, i) => Math.max(0.5, r.weight + (i > 0 ? luck * (i * 2.5) : -luck * 4)));
+  let total = 0; for (const w of weights) total += w;
+  let x = Math.random() * total;
+  for (let i = 0; i < RARITY.length; i++) { x -= weights[i]; if (x <= 0) return RARITY[i]; }
+  return RARITY[0];
+}
+function generateBoonChoices(count) {
+  // candidate boons not yet maxed
+  const pool = BOONS.filter(b => boonCount(b.id) < b.max);
+  const src = pool.length ? pool.slice() : BOONS.slice();
+  const out = [];
+  for (let i = 0; i < count && src.length; i++) {
+    const idx = Math.floor(Math.random() * src.length);
+    const def = src.splice(idx, 1)[0];
+    const r = rollRarity();
+    out.push({ boon: def, rarity: r });
+  }
+  return out;
+}
+function offerBoons() {
+  G.boonChoices = generateBoonChoices(3);
+  G.menuIndex = 0;
+  G.state = "boon";
+  G.stateT = 0;
+}
+function chooseBoon(i) {
+  const c = G.boonChoices[i];
+  if (!c) return;
+  addBoon(c.boon.id, c.rarity.id);
+  afterReward();
+}
+/* after a reward screen, present node choices (or end-of-run loop) */
+function afterReward() {
+  G.depth++;
+  generateNodes();
+  G.state = "nodes";
+  G.stateT = 0;
+  G.menuIndex = 0;
+}
+/* branching node generation: 2-3 options previewing kind + modifier + reward */
+const NODE_KINDS = [
+  { kind: "combat",   label: "战斗 Combat",   color: "#4de8ff", reward: "boon" },
+  { kind: "elite",    label: "精英 Elite",    color: "#ff5e8a", reward: "boon", mod: "armored" },
+  { kind: "hazard",   label: "危险 Hazard",   color: "#ff9d4d", reward: "boon", mod: "moving" },
+  { kind: "treasure", label: "宝藏 Treasure", color: "#ffe14d", reward: "treasure" },
+  { kind: "shop",     label: "商店 Shop",     color: "#5dff7e", reward: "shop" },
+];
+function generateNodes() {
+  // boss at depth milestones
+  if (G.depth % CONFIG.bossDepths === 0) {
+    G.nodeChoices = [{ kind: "boss", label: "首领 BOSS", color: "#d06bff", reward: "boon", mod: null }];
+    return;
+  }
+  const n = 2 + (Math.random() < 0.6 ? 1 : 0);
+  const choices = [];
+  const used = {};
+  // always offer at least one plain combat
+  choices.push(Object.assign({}, NODE_KINDS[0]));
+  used.combat = true;
+  while (choices.length < n) {
+    const pick = NODE_KINDS[Math.floor(Math.random() * NODE_KINDS.length)];
+    if (used[pick.kind] && pick.kind !== "combat") continue;
+    used[pick.kind] = true;
+    choices.push(Object.assign({}, pick));
+  }
+  G.nodeChoices = choices;
+}
+function chooseNode(i) {
+  const node = G.nodeChoices[i];
+  if (!node) return;
+  G.nodeKind = node.kind;
+  G.stageMod = node.mod || null;
+  G.pendingReward = node.reward;
+  G.runPath.push(node.kind);
+  if (node.reward === "shop") { openShop(); return; }
+  if (node.reward === "treasure") {
+    // treasure: immediate currency + a boon
+    const bonus = 30 + G.depth * 6;
+    G.runCurrency += bonus; G.currency += bonus; store.set("currency", String(G.currency));
+    flash("+" + bonus + " 金币 · gold");
+    audio.coin();
+    startStage();
+    return;
+  }
+  startStage();
+}
+/* shop node (mid-run): spend currency on instant effects */
+function openShop() {
+  const disc = 1 - metaLevel("discount") * 0.10;
+  const dep = G.depth;
+  G.shopItems = [
+    { id: "heal", name: "+1 命 · +1 life", cost: Math.round((25 + dep * 4) * disc),
+      buy() { G.lives++; } },
+    { id: "ball", name: "+1 起始球 · +1 ball (run)", cost: Math.round((40 + dep * 6) * disc),
+      buy() { G.boonStacks.multiball = Math.min(boonById("multiball").max, boonCount("multiball") + 1); } },
+    { id: "rndboon", name: "随机恩赐 · random boon", cost: Math.round((60 + dep * 8) * disc),
+      buy() { const p = BOONS[Math.floor(rand(0, BOONS.length))]; addBoon(p.id, rollRarity().id); } },
+    { id: "shield", name: "+1 护盾 · +1 floor shield", cost: Math.round((45 + dep * 5) * disc),
+      buy() { G.shieldsLeft++; G.boonStacks.shield = boonCount("shield") + 1; } },
+  ];
+  G.menuIndex = 0;
+  G.state = "shop";
+  G.stateT = 0;
+}
+function buyShop(i) {
+  const it = G.shopItems[i];
+  if (!it || it.bought) { audio.deny(); return; }
+  if (G.currency < it.cost) { audio.deny(); return; }
+  G.currency -= it.cost;
+  store.set("currency", String(G.currency));
+  it.bought = true;
+  it.buy();
+  audio.purchase();
+}
+function leaveShop() {
+  // after shopping, proceed into a combat stage at this depth
+  G.nodeKind = "combat";
+  G.stageMod = null;
+  startStage();
+}
+/* award currency from a destroyed brick */
+function earnCurrency(n) {
+  const amt = Math.round(n * scoreMult());
+  G.runCurrency += amt;
+  G.currency += amt;
+}
+
+/* ---------------- §H3 BOSS ---------------- */
+const BOSS_TYPES = [
+  { id: "sentinel", name: "哨兵 SENTINEL", color: "#ff5e8a", hp: 40, attack: "drop" },
+  { id: "weaver",   name: "织者 WEAVER",   color: "#d06bff", hp: 52, attack: "spread" },
+];
+function spawnBoss() {
+  const loop = Math.floor((G.depth - 1) / (CONFIG.bossDepths)) ;
+  const type = BOSS_TYPES[(Math.floor(G.depth / CONFIG.bossDepths) - 1) % BOSS_TYPES.length] || BOSS_TYPES[0];
+  const hp = Math.round(type.hp * (1 + loop * 0.6));
+  G.boss = {
+    type, hpMax: hp, hp,
+    x: CONFIG.W / 2, y: 150, w: 170, h: 54,
+    vx: 70 + loop * 18,
+    armorAngle: 0,            // shifting armor rotation
+    coreExposed: false,
+    fireCd: 2.0, phase: 0,
+    flash: 0,
+  };
+  audio.bossWarn();
+}
+function bossCoreRect() {
+  const b = G.boss;
+  return { x: b.x - 26, y: b.y - 18, w: 52, h: 36 };
+}
+function hitBoss(px, py, dmg) {
+  const b = G.boss;
+  if (!b) return false;
+  if (!b.coreExposed) { audio.wall(); spawnBurst(px, py, "#9fb4d6", 5, 120, 0.3); return true; }
+  b.hp -= dmg;
+  b.flash = 1;
+  audio.bossHit();
+  spawnBurst(px, py, b.type.color, 10, 200, 0.5);
+  G.shake = Math.min(10, G.shake + 3);
+  addScore(Math.round(40 * scoreMult()));
+  earnCurrency(3);
+  if (b.hp <= 0) defeatBoss();
+  return true;
+}
+function defeatBoss() {
+  const b = G.boss;
+  audio.bossDie();
+  spawnBurst(b.x, b.y, b.type.color, 80, 360, 1.4);
+  G.shake = 14;
+  const reward = 80 + G.depth * 10;
+  G.runCurrency += reward; G.currency += reward; store.set("currency", String(G.currency));
+  addScore(Math.round(600 * G.depth * scoreMult()));
+  G.boss = null;
+  G.hazards.length = 0;
+}
+function updateBoss(dt) {
+  const b = G.boss;
+  if (!b) return;
+  b.flash = Math.max(0, b.flash - dt * 3);
+  // move side to side
+  b.x += b.vx * dt;
+  if (b.x < b.w / 2 + 10) { b.x = b.w / 2 + 10; b.vx = Math.abs(b.vx); }
+  if (b.x > CONFIG.W - b.w / 2 - 10) { b.x = CONFIG.W - b.w / 2 - 10; b.vx = -Math.abs(b.vx); }
+  // shifting armor: core exposed periodically
+  b.armorAngle += dt * 1.4;
+  b.coreExposed = Math.sin(b.armorAngle) > 0.3;
+  // attacks
+  b.fireCd -= dt;
+  if (b.fireCd <= 0) {
+    b.fireCd = Math.max(1.0, 2.4 - G.depth * 0.05);
+    if (b.type.attack === "drop") {
+      G.hazards.push({ x: b.x, y: b.y + b.h / 2, vx: 0, vy: CONFIG.hazardSpeed });
+    } else {
+      for (const a of [-0.4, 0, 0.4]) {
+        G.hazards.push({ x: b.x, y: b.y + b.h / 2, vx: Math.sin(a) * 90, vy: CONFIG.hazardSpeed * 0.9 });
+      }
+    }
+    audio.zap();
+  }
+  // ball/boss collisions
+  for (const ball of G.balls) {
+    if (Math.abs(ball.x - b.x) < b.w / 2 + CONFIG.ballR && Math.abs(ball.y - b.y) < b.h / 2 + CONFIG.ballR) {
+      // bounce off boss body
+      if (ball.y < b.y) { ball.vy = -Math.abs(ball.vy); ball.y = b.y - b.h / 2 - CONFIG.ballR; }
+      else { ball.vy = Math.abs(ball.vy); ball.y = b.y + b.h / 2 + CONFIG.ballR; }
+      hitBoss(ball.x, ball.y, ballDamage());
+    }
+  }
+  // lasers vs boss
+  for (let i = G.lasers.length - 1; i >= 0; i--) {
+    const L = G.lasers[i];
+    if (Math.abs(L.x - b.x) < b.w / 2 && Math.abs(L.y - b.y) < b.h / 2) {
+      hitBoss(L.x, L.y, ballDamage());
+      G.lasers.splice(i, 1);
+    }
+  }
+}
+function updateHazards(dt) {
+  const C = CONFIG, p = G.paddle;
+  for (let i = G.hazards.length - 1; i >= 0; i--) {
+    const hz = G.hazards[i];
+    hz.x += hz.vx * dt; hz.y += hz.vy * dt;
+    if (hz.y > C.H + 20) { G.hazards.splice(i, 1); continue; }
+    // hit paddle -> lose ball/life-ish: trigger a life loss like missing ball
+    if (hz.y > C.paddleY - C.paddleH && hz.y < C.paddleY + 14 &&
+        Math.abs(hz.x - p.x) < p.w / 2 + C.bossHazardR) {
+      G.hazards.splice(i, 1);
+      spawnBurst(hz.x, C.paddleY, "#ff5e8a", 16, 220, 0.6);
+      loseLife("被击中 · HIT!");
+      return;
+    }
+  }
+}
+
+/* ball pool to avoid per-serve allocation churn */
+const ballPool = [];
+function getBall() {
+  const b = ballPool.pop() || { x: 0, y: 0, vx: 0, vy: 0, speed: 0, trail: [] };
+  b.trail.length = 0;
+  return b;
+}
+function freeBall(b) { if (ballPool.length < 32) ballPool.push(b); }
 function makeBall(x, y, angle, speed) {
-  return { x, y, vx: Math.sin(angle) * speed, vy: -Math.cos(angle) * speed, speed, trail: [] };
+  const b = getBall();
+  b.x = x; b.y = y;
+  b.vx = Math.sin(angle) * speed; b.vy = -Math.cos(angle) * speed; b.speed = speed;
+  return b;
 }
 function ballSpeed() {
-  return Math.min(CONFIG.ballSpeedMax, CONFIG.ballSpeed0 + (G.level - 1) * CONFIG.ballSpeedPerLevel);
+  return Math.min(CONFIG.ballSpeedMax, CONFIG.ballSpeed0 + (G.depth - 1) * CONFIG.ballSpeedPerLevel);
+}
+function startingBallCount() {
+  return 1 + metaLevel("ball") + boonCount("multiball");
 }
 function resetServe() {
-  G.balls = [makeBall(G.paddle.x, CONFIG.paddleY - CONFIG.ballR - CONFIG.paddleH / 2 - 1, 0, ballSpeed())];
+  for (const b of G.balls) freeBall(b);
+  G.balls = [makeBall(G.paddle.x, CONFIG.paddleY - ballRadius() - CONFIG.paddleH / 2 - 1, 0, ballSpeed())];
   G.serving = true;
+  G.caught = null;
   G.combo = 0;
 }
-function startLevel(n) {
-  G.level = n;
-  G.bricks = buildLevel(n);
+/* spawn the extra serve balls once launched (multiball boon / meta) */
+function spawnServeBalls(base) {
+  const extra = startingBallCount() - 1;
+  const ang0 = Math.atan2(base.vx, -base.vy);
+  for (let i = 0; i < extra && G.balls.length < CONFIG.maxBalls; i++) {
+    const da = (i % 2 === 0 ? 1 : -1) * (0.28 + 0.12 * Math.floor(i / 2));
+    G.balls.push(makeBall(base.x, base.y, ang0 + da, base.speed));
+  }
+}
+function startStage() {
+  G.level = G.depth;
+  G.boss = null;
+  G.hazards = [];
+  const mod = G.stageMod;
+  if (G.nodeKind === "boss") {
+    spawnBoss();
+    G.bricks = [];
+  } else {
+    G.bricks = buildStage(G.depth, mod);
+  }
   G.powerups = [];
   G.lasers = [];
   G.wideT = 0; G.slowT = 0; G.laserT = 0;
-  G.paddle.w = CONFIG.paddleW;
+  G.paddle.w = paddleBaseW();
   resetServe();
   G.state = "play";
   G.stateT = 0;
 }
 function startGame() {
-  G.score = 0; G.lives = CONFIG.lives0; G.combo = 0; G.comboBest = 0; G.newHi = false;
-  startLevel(1);
+  G.score = 0;
+  G.depth = 1; G.level = 1;
+  G.combo = 0; G.comboBest = 0; G.newHi = false;
+  G.runCurrency = 0; G.bricksDestroyed = 0;
+  G.boonStacks = {};
+  G.runPath = [];
+  G.stageMod = null;
+  G.nodeKind = "combat";
+  // meta-derived starting state
+  G.lives = CONFIG.lives0 + metaLevel("life");
+  G.revivesLeft = metaLevel("revive");
+  G.shieldsLeft = 0;
+  // starting boons (meta)
+  const sb = metaLevel("boon");
+  for (let i = 0; i < sb; i++) {
+    const pick = BOONS[Math.floor(rand(0, BOONS.length))];
+    addBoon(pick.id, rollRarity().id);
+  }
+  startStage();
+}
+function enterHub() {
+  G.state = "hub";
+  G.stateT = 0;
+  G.menuIndex = 0;
+}
+/* shared life-loss: shields absorb, then revive, then serve or end run */
+function loseLife(msg) {
+  G.combo = 0;
+  if (G.shieldsLeft > 0) {
+    G.shieldsLeft--;
+    flash("护盾! · SHIELD!");
+    audio.power();
+    resetServe();
+    return;
+  }
+  G.lives--;
+  audio.lifeLost();
+  G.shake = 10;
+  if (G.lives <= 0) {
+    if (G.revivesLeft > 0) {
+      G.revivesLeft--;
+      G.lives = 1;
+      flash("复活! · REVIVE!");
+      audio.power();
+      resetServe();
+      return;
+    }
+    endRun();
+  } else {
+    flash(msg || (G.lives === 1 ? "LAST LIFE!" : "LIFE LOST"));
+    resetServe();
+  }
+}
+function endRun() {
+  // bank currency (already added live; just persist) and show summary
+  store.set("currency", String(G.currency));
+  G.state = "summary";
+  G.stateT = 0;
+  audio.gameOver();
 }
 function flash(msg) { G.flashMsg = msg; G.flashT = 1.6; }
 
@@ -410,33 +954,107 @@ function addScore(n) {
 const keys = {};
 let pointerActive = false;
 
-function primaryAction() {
-  audio.unlock();
-  if (G.state === "title") { startGame(); return; }
-  if (G.state === "gameover" && G.stateT > 0.8) { G.state = "title"; G.stateT = 0; return; }
-  if (G.state === "levelclear" && G.stateT > 0.7) { startLevel(G.level + 1); return; }
-  if (G.state === "play") {
-    if (G.paused) { G.paused = false; return; }
-    if (G.serving) launchBall();
+/* current menu item count by state (for nav wrapping) */
+function menuLen() {
+  switch (G.state) {
+    case "hub": return META.length + 1;          // +1 = "START RUN"
+    case "boon": return G.boonChoices.length;
+    case "nodes": return G.nodeChoices.length;
+    case "shop": return G.shopItems.length + 1;   // +1 = "LEAVE"
+    default: return 0;
   }
 }
+function navMenu(d) {
+  const len = menuLen();
+  if (len <= 0) return;
+  G.menuIndex = (G.menuIndex + d + len) % len;
+  audio.nav();
+}
+/* B / circle / Esc cancel within menus */
+function cancelAction() {
+  if (G.state === "hub") { G.state = "title"; G.stateT = 0; audio.nav(); return; }
+  if (G.state === "shop") { audio.nav(); leaveShop(); return; }
+}
+
+/* confirm = A / cross / space / click / tap. Routes by state. */
+function primaryAction() {
+  audio.unlock();
+  switch (G.state) {
+    case "title": enterHub(); return;
+    case "hub":
+      if (G.menuIndex >= META.length) { startGame(); }
+      else { buyMeta(META[G.menuIndex]); }
+      return;
+    case "summary":
+      if (G.stateT > 0.6) enterHub();
+      return;
+    case "boon":
+      chooseBoon(G.menuIndex); return;
+    case "nodes":
+      chooseNode(G.menuIndex); return;
+    case "shop":
+      if (G.menuIndex >= G.shopItems.length) leaveShop();
+      else buyShop(G.menuIndex);
+      return;
+    case "play":
+      if (G.paused) { G.paused = false; return; }
+      if (G.caught) { releaseCaught(); return; }
+      if (G.serving) launchBall();
+      return;
+  }
+}
+/* Start/Options button: starts run from title/hub, toggles pause in play */
+function startAction() {
+  audio.unlock();
+  if (G.state === "title") { enterHub(); return; }
+  if (G.state === "hub") { startGame(); return; }
+  if (G.state === "play") { G.paused = !G.paused; return; }
+  if (G.state === "summary" && G.stateT > 0.6) { enterHub(); return; }
+}
 function launchBall() {
+  if (G.balls.length === 0) resetServe();
   G.serving = false;
   const b = G.balls[0];
   const a = rand(-0.35, 0.35);
   b.vx = Math.sin(a) * b.speed;
   b.vy = -Math.cos(a) * b.speed;
+  spawnServeBalls(b);
+  audio.paddle();
+}
+function releaseCaught() {
+  const b = G.caught.ball;
+  G.caught = null;
+  const off = clamp((b.x - G.paddle.x) / (G.paddle.w / 2), -1, 1);
+  const ang = off * CONFIG.maxBounceAngle;
+  b.vx = Math.sin(ang) * b.speed;
+  b.vy = -Math.cos(ang) * b.speed;
   audio.paddle();
 }
 
 window.addEventListener("keydown", (e) => {
   if (["ArrowLeft", "ArrowRight", " ", "ArrowUp", "ArrowDown"].includes(e.key)) e.preventDefault();
-  keys[e.key.toLowerCase()] = true;
+  const k = e.key.toLowerCase();
+  keys[k] = true;
   if (e.repeat) return;
   audio.unlock();
+  const inMenu = G.state === "hub" || G.state === "boon" || G.state === "nodes" || G.state === "shop";
+  if (inMenu) {
+    // menu navigation: arrows/WASD move highlight
+    if (k === "arrowup" || k === "w" || k === "arrowleft" || k === "a") {
+      navMenu(-1); return;
+    }
+    if (k === "arrowdown" || k === "s" || k === "arrowright" || k === "d") {
+      navMenu(1); return;
+    }
+  }
   if (e.key === " " || e.key === "Enter") primaryAction();
-  else if (e.key === "p" || e.key === "P" || e.key === "Escape") {
+  else if (e.key === "p" || e.key === "P") {
     if (G.state === "play") G.paused = !G.paused;
+  } else if (e.key === "Escape") {
+    if (G.state === "play") G.paused = !G.paused;
+    else cancelAction();
+  } else if (e.key === "Backspace") {
+    cancelAction();
   } else if (e.key === "m" || e.key === "M") {
     audio.toggleMute();
     flash(audio.muted ? "MUTED" : "SOUND ON");
@@ -449,12 +1067,35 @@ function pointerMove(px) {
     G.paddle.x = clamp(toWorldX(px), G.paddle.w / 2, CONFIG.W - G.paddle.w / 2);
   }
 }
+/* map a screen-space click to a menu item rectangle (set by render) */
+function pointerSelect(px, py) {
+  const wx = toWorldX(px), wy = (py - oy) / scale;
+  for (let i = 0; i < menuRects.length; i++) {
+    const r = menuRects[i];
+    if (wx >= r.x && wx <= r.x + r.w && wy >= r.y && wy <= r.y + r.h) {
+      G.menuIndex = r.idx;
+      primaryAction();
+      return true;
+    }
+  }
+  return false;
+}
+/* menu hit-rectangles, refreshed each render of a menu state */
+let menuRects = [];
+const MENU_STATES = { hub: 1, boon: 1, nodes: 1, shop: 1 };
 canvas.addEventListener("mousemove", (e) => pointerMove(e.clientX));
-canvas.addEventListener("mousedown", (e) => { e.preventDefault(); primaryAction(); });
+canvas.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  audio.unlock();
+  if (MENU_STATES[G.state] && pointerSelect(e.clientX, e.clientY)) return;
+  primaryAction();
+});
 canvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
   pointerActive = true;
   const t = e.changedTouches[0];
+  audio.unlock();
+  if (MENU_STATES[G.state] && pointerSelect(t.clientX, t.clientY)) return;
   pointerMove(t.clientX);
   primaryAction();
 }, { passive: false });
@@ -464,6 +1105,78 @@ canvas.addEventListener("touchmove", (e) => {
   pointerMove(t.clientX);
 }, { passive: false });
 canvas.addEventListener("touchend", (e) => { e.preventDefault(); pointerActive = false; }, { passive: false });
+
+/* ---------------- §I2 GAMEPAD ---------------- */
+/* Standard mapping: 0=A/cross, 1=B/circle, 9=Start/Options,
+   12/13/14/15 = dpad up/down/left/right, axes[0] = left stick X.
+   Edge-detected buttons fire on press; no per-frame allocations. */
+const GP = {
+  connected: false,
+  index: -1,
+  // previous pressed state for edge detection (fixed slots, no alloc)
+  prevA: false, prevB: false, prevStart: false,
+  prevUp: false, prevDown: false, prevLeft: false, prevRight: false,
+  navRepeat: 0,            // d-pad/stick hold-to-repeat timer for menus
+  stickX: 0,
+};
+let toastMsg = "", toastT = 0;
+function toast(msg) { toastMsg = msg; toastT = 2.4; }
+
+window.addEventListener("gamepadconnected", (e) => {
+  GP.connected = true;
+  GP.index = e.gamepad.index;
+  toast("手柄已连接 — Gamepad connected");
+});
+window.addEventListener("gamepaddisconnected", (e) => {
+  if (e.gamepad.index === GP.index) {
+    GP.connected = false; GP.index = -1; GP.stickX = 0;
+    toast("手柄已断开 — Gamepad disconnected");
+  }
+});
+
+function pollGamepad(dt) {
+  const pads = (typeof navigator !== "undefined" && navigator.getGamepads)
+    ? navigator.getGamepads() : null;
+  if (!pads) { GP.stickX = 0; return; }
+  let pad = GP.index >= 0 ? pads[GP.index] : null;
+  if (!pad) { for (let i = 0; i < pads.length; i++) { if (pads[i]) { pad = pads[i]; GP.index = i; GP.connected = true; break; } } }
+  if (!pad) { GP.stickX = 0; return; }
+
+  const btn = (i) => pad.buttons[i] && pad.buttons[i].pressed;
+  const a = btn(0), b = btn(1), start = btn(9);
+  const dUp = btn(12), dDown = btn(13), dLeft = btn(14), dRight = btn(15);
+
+  // left stick X with deadzone; speed scales with tilt
+  let ax = pad.axes && pad.axes.length > 0 ? pad.axes[0] : 0;
+  if (Math.abs(ax) < CONFIG.stickDeadzone) ax = 0;
+  GP.stickX = ax;
+
+  const inMenu = G.state === "hub" || G.state === "boon" || G.state === "nodes" || G.state === "shop";
+
+  // edge-detected confirm / cancel / start
+  if (a && !GP.prevA) primaryAction();
+  if (b && !GP.prevB) cancelAction();
+  if (start && !GP.prevStart) startAction();
+
+  // menu navigation: d-pad or stick, edge + slow repeat
+  if (inMenu) {
+    const navUp = dUp || dLeft || ax < -0.5;
+    const navDown = dDown || dRight || ax > 0.5;
+    const edgeUp = (dUp && !GP.prevUp) || (dLeft && !GP.prevLeft);
+    const edgeDown = (dDown && !GP.prevDown) || (dRight && !GP.prevRight);
+    if (edgeUp) { navMenu(-1); GP.navRepeat = 0.35; }
+    else if (edgeDown) { navMenu(1); GP.navRepeat = 0.35; }
+    else if (navUp || navDown) {
+      GP.navRepeat -= dt;
+      if (GP.navRepeat <= 0) { navMenu(navUp ? -1 : 1); GP.navRepeat = 0.18; }
+    } else {
+      GP.navRepeat = 0;
+    }
+  }
+
+  GP.prevA = a; GP.prevB = b; GP.prevStart = start;
+  GP.prevUp = dUp; GP.prevDown = dDown; GP.prevLeft = dLeft; GP.prevRight = dRight;
+}
 
 /* ---------------- §J POWER-UPS ---------------- */
 const POWER_TYPES = [
@@ -503,34 +1216,93 @@ function applyPower(t) {
 }
 
 /* ---------------- §K BRICK / BALL PHYSICS ---------------- */
-function hitBrick(br, px, py) {
-  br.hp--;
+/* damage a brick by dmg points; px,py = impact point. Returns true if broken.
+   cascade=false suppresses secondary AoE (prevents infinite recursion). */
+function hitBrick(br, px, py, dmg, cascade) {
+  dmg = dmg || 1;
+  // crit chance
+  let crit = false;
+  if (critChance() > 0 && Math.random() < critChance()) { dmg *= 3; crit = true; }
+  br.hp -= dmg;
   br.flash = 1;
   G.combo++;
   G.comboBest = Math.max(G.comboBest, G.combo);
   const mult = Math.min(G.combo, CONFIG.comboMax);
   audio.brick(G.combo, br.hp);
   if (br.hp <= 0) {
-    addScore((20 + 15 * (br.maxHp - 1)) * mult);
-    spawnBurst(br.x + br.w / 2, br.y + br.h / 2, br.color, 18 + br.maxHp * 6, 260, 0.8);
+    addScore(Math.round((20 + 15 * (br.maxHp - 1)) * mult * scoreMult()));
+    earnCurrency(1 + br.maxHp);
+    G.bricksDestroyed++;
+    spawnBurst(br.x + br.w / 2, br.y + br.h / 2, crit ? "#ffe14d" : br.color, 18 + br.maxHp * 6, 260, 0.8);
     G.shake = Math.min(8, G.shake + 2.2 + br.maxHp);
     maybeDropPower(br.x + br.w / 2, br.y + br.h / 2);
+    const cx = br.x + br.w / 2, cy = br.y + br.h / 2, col = br.color;
     const i = G.bricks.indexOf(br);
     if (i >= 0) G.bricks.splice(i, 1);
+    if (cascade !== false) {
+      const er = explosiveRadius();
+      if (er > 0) explodeAt(cx, cy, er, col);
+      const cc = chainCount();
+      if (cc > 0) chainLightning(cx, cy, cc, col);
+    }
+    return true;
   } else {
-    addScore(8 * mult);
-    spawnBurst(px, py, br.color, 7, 160, 0.45);
+    addScore(Math.round(8 * mult * scoreMult()));
+    spawnBurst(px, py, crit ? "#ffe14d" : br.color, 7, 160, 0.45);
     G.shake = Math.min(8, G.shake + 0.8);
+    return false;
+  }
+}
+/* explosive boon: damage all bricks within radius (no further cascade) */
+function explodeAt(x, y, radius, color) {
+  audio.explode();
+  spawnBurst(x, y, color, 24, 300, 0.7);
+  G.shake = Math.min(10, G.shake + 3);
+  const r2 = radius * radius;
+  for (let i = G.bricks.length - 1; i >= 0; i--) {
+    const br = G.bricks[i];
+    const bx = br.x + br.w / 2, by = br.y + br.h / 2;
+    const dx = bx - x, dy = by - y;
+    if (dx * dx + dy * dy <= r2) hitBrick(br, bx, by, 1, false);
+  }
+}
+/* chain-lightning: arc to nearest n bricks, 1 dmg each (no cascade) */
+function chainLightning(x, y, n, color) {
+  audio.zap();
+  let fx = x, fy = y;
+  for (let k = 0; k < n; k++) {
+    let best = null, bestD = Infinity;
+    for (const br of G.bricks) {
+      const bx = br.x + br.w / 2, by = br.y + br.h / 2;
+      const d = (bx - fx) * (bx - fx) + (by - fy) * (by - fy);
+      if (d < bestD) { bestD = d; best = br; }
+    }
+    if (!best) break;
+    const bx = best.x + best.w / 2, by = best.y + best.h / 2;
+    spawnBurst(bx, by, "#aef6ff", 5, 160, 0.3);
+    // visual arc as short-lived particles along the line
+    for (let t = 0; t <= 1; t += 0.2) {
+      if (particles.length < CONFIG.maxParticles)
+        particles.push({ x: lerp(fx, bx, t), y: lerp(fy, by, t), vx: 0, vy: 0, life: 0.18, t: 0, color: "#aef6ff", r: 2 });
+    }
+    hitBrick(best, bx, by, 1, false);
+    fx = bx; fy = by;
   }
 }
 
 function collideBallBricks(b) {
-  const r = CONFIG.ballR;
+  const r = ballRadius();
+  const fire = boonCount("fireball") > 0;
   for (const br of G.bricks) {
     const nx = clamp(b.x, br.x, br.x + br.w);
     const ny = clamp(b.y, br.y, br.y + br.h);
     const dx = b.x - nx, dy = b.y - ny;
     if (dx * dx + dy * dy > r * r) continue;
+    if (fire) {
+      // fireball pierces: damage but do not reflect
+      hitBrick(br, nx, ny, ballDamage());
+      return false;
+    }
     // resolve along the shallower axis
     const penX = r - Math.abs(dx), penY = r - Math.abs(dy);
     const inX = b.x > br.x && b.x < br.x + br.w;
@@ -549,7 +1321,7 @@ function collideBallBricks(b) {
         b.vy = Math.abs(b.vy) * Math.sign(dy || 1);
       }
     }
-    hitBrick(br, nx, ny);
+    hitBrick(br, nx, ny, ballDamage());
     return true;
   }
   return false;
@@ -557,21 +1329,55 @@ function collideBallBricks(b) {
 
 function updateBall(b, dt) {
   const C = CONFIG;
+  const br = ballRadius();
+  const sticky = boonCount("sticky") > 0;
+  const bumpers = boonCount("bumpers") > 0;
+  const hom = homingStr();
+  // homing nudge toward nearest brick
+  if (hom > 0 && G.bricks.length) {
+    let best = null, bestD = Infinity;
+    for (const k of G.bricks) {
+      const d = (k.x - b.x) * (k.x - b.x) + (k.y - b.y) * (k.y - b.y);
+      if (d < bestD) { bestD = d; best = k; }
+    }
+    if (best) {
+      const ang = Math.atan2(best.y + best.h / 2 - b.y, best.x + best.w / 2 - b.x);
+      b.vx += Math.cos(ang) * hom * dt;
+      b.vy += Math.sin(ang) * hom * dt;
+      const m = Math.hypot(b.vx, b.vy) || 1;
+      b.vx = b.vx / m * b.speed; b.vy = b.vy / m * b.speed;
+    }
+  }
   // substep so fast balls never tunnel through bricks
-  const steps = Math.max(1, Math.ceil((Math.hypot(b.vx, b.vy) * dt) / (C.ballR)));
+  const steps = Math.max(1, Math.ceil((Math.hypot(b.vx, b.vy) * dt) / br));
   for (let s = 0; s < steps; s++) {
     b.x += b.vx * dt / steps;
     b.y += b.vy * dt / steps;
     // walls
-    if (b.x < C.ballR) { b.x = C.ballR; b.vx = Math.abs(b.vx); audio.wall(); }
-    else if (b.x > C.W - C.ballR) { b.x = C.W - C.ballR; b.vx = -Math.abs(b.vx); audio.wall(); }
-    if (b.y < C.ballR) { b.y = C.ballR; b.vy = Math.abs(b.vy); audio.wall(); }
+    if (b.x < br) { b.x = br; b.vx = Math.abs(b.vx); audio.wall(); }
+    else if (b.x > C.W - br) { b.x = C.W - br; b.vx = -Math.abs(b.vx); audio.wall(); }
+    if (b.y < br) { b.y = br; b.vy = Math.abs(b.vy); audio.wall(); }
+    // side-wall bumpers: nudge ball upward on wall hits
+    if (bumpers && (b.x <= br + 1 || b.x >= C.W - br - 1) && b.vy > 0) {
+      b.vy = -Math.abs(b.vy) * 0.6 - 60;
+      const m = Math.hypot(b.vx, b.vy) || 1;
+      b.vx = b.vx / m * b.speed; b.vy = b.vy / m * b.speed;
+    }
     // paddle
     const p = G.paddle;
     const pTop = C.paddleY - C.paddleH / 2;
-    if (b.vy > 0 && b.y + C.ballR >= pTop && b.y - C.ballR < C.paddleY + C.paddleH &&
-        b.x > p.x - p.w / 2 - C.ballR && b.x < p.x + p.w / 2 + C.ballR) {
-      b.y = pTop - C.ballR;
+    if (b.vy > 0 && b.y + br >= pTop && b.y - br < C.paddleY + C.paddleH &&
+        b.x > p.x - p.w / 2 - br && b.x < p.x + p.w / 2 + br) {
+      b.y = pTop - br;
+      if (sticky && !G.caught && !G.serving) {
+        // catch ball; player re-aims and releases
+        G.caught = { ball: b };
+        b.vx = 0; b.vy = 0;
+        G.combo = 0;
+        p.glow = 1;
+        audio.paddle();
+        return;
+      }
       const off = clamp((b.x - p.x) / (p.w / 2), -1, 1);
       const ang = off * C.maxBounceAngle;          // angle control by hit position
       b.speed = Math.min(C.ballSpeedMax, b.speed * C.paddleSpeedup);
@@ -594,41 +1400,66 @@ function updateBall(b, dt) {
   if (b.trail.length > 10) b.trail.shift();
 }
 
+/* slow-mo boon: time scale dips when ball is near paddle */
+function slowmoScale() {
+  if (boonCount("slowmo") <= 0) return 1;
+  let near = false;
+  for (const b of G.balls) { if (b.y > CONFIG.H * 0.7 && b.vy > 0) { near = true; break; } }
+  return near ? 0.55 : 1;
+}
+
 /* ---------------- §L UPDATE ---------------- */
 function update(dt) {
   G.stateT += dt;
+  if (toastT > 0) toastT -= dt;
   updateStars(dt);
   if (G.flashT > 0) G.flashT -= dt;
   G.shake = Math.max(0, G.shake - dt * 18);
   updateParticles(dt);
 
+  // gamepad poll every frame, regardless of state (menus need it)
+  pollGamepad(dt);
+
   if (G.state !== "play" || G.paused) return;
 
-  const ts = G.slowT > 0 ? CONFIG.slowFactor : 1;   // slow-motion time scale
+  const ts = (G.slowT > 0 ? CONFIG.slowFactor : 1) * slowmoScale();
   const gdt = dt * ts;
 
-  // power timers
+  // power timers (temp pickups still exist alongside boons)
   G.wideT = Math.max(0, G.wideT - dt);
   G.slowT = Math.max(0, G.slowT - dt);
   G.laserT = Math.max(0, G.laserT - dt);
-  const targetW = G.wideT > 0 ? CONFIG.paddleWideW : CONFIG.paddleW;
+  const targetW = (G.wideT > 0 ? CONFIG.paddleWideW : paddleBaseW());
   G.paddle.w = lerp(G.paddle.w, targetW, Math.min(1, dt * 10));
   G.paddle.glow = Math.max(0, G.paddle.glow - dt * 4);
 
   // keyboard paddle
+  const prevX = G.paddle.x;
   let dir = 0;
-  if (keys["arrowleft"] || keys["a"]) dir -= 1;
-  if (keys["arrowright"] || keys["d"]) dir += 1;
+  if (keys["arrowleft"]) dir -= 1;
+  if (keys["arrowright"]) dir += 1;
+  // A/D only count for paddle when not used as menu nav (we're in play)
+  if (keys["a"]) dir -= 1;
+  if (keys["d"]) dir += 1;
   if (dir !== 0) {
-    G.paddle.x = clamp(G.paddle.x + dir * CONFIG.paddleSpeed * dt,
+    G.paddle.x = clamp(G.paddle.x + Math.sign(dir) * CONFIG.paddleSpeed * dt,
       G.paddle.w / 2, CONFIG.W - G.paddle.w / 2);
   }
+  // gamepad: stick (analog, speed scales with tilt) + d-pad
+  if (GP.stickX !== 0) {
+    G.paddle.x = clamp(G.paddle.x + GP.stickX * CONFIG.gamepadSpeed * dt,
+      G.paddle.w / 2, CONFIG.W - G.paddle.w / 2);
+  }
+  if (GP.prevLeft) G.paddle.x = clamp(G.paddle.x - CONFIG.gamepadSpeed * dt, G.paddle.w / 2, CONFIG.W - G.paddle.w / 2);
+  if (GP.prevRight) G.paddle.x = clamp(G.paddle.x + CONFIG.gamepadSpeed * dt, G.paddle.w / 2, CONFIG.W - G.paddle.w / 2);
+  G.paddle.vx = (G.paddle.x - prevX) / Math.max(dt, 1e-4);
 
-  // lasers
-  if (G.laserT > 0) {
+  // lasers (temp pickup OR laser boon both enable; boon adds rate)
+  const laserActive = G.laserT > 0 || boonCount("laser") > 0;
+  if (laserActive) {
     G.laserCd -= dt;
     if (G.laserCd <= 0) {
-      G.laserCd = CONFIG.laserRate;
+      G.laserCd = CONFIG.laserRate / (1 + boonCount("laser") * 0.4);
       const p = G.paddle;
       G.lasers.push({ x: p.x - p.w / 2 + 6, y: CONFIG.paddleY - 10 });
       G.lasers.push({ x: p.x + p.w / 2 - 6, y: CONFIG.paddleY - 10 });
@@ -639,42 +1470,54 @@ function update(dt) {
     const L = G.lasers[i];
     L.y -= CONFIG.laserSpeed * gdt;
     if (L.y < -20) { G.lasers.splice(i, 1); continue; }
+    let hit = false;
     for (const br of G.bricks) {
       if (L.x > br.x && L.x < br.x + br.w && L.y > br.y && L.y < br.y + br.h) {
-        hitBrick(br, L.x, L.y);
-        G.lasers.splice(i, 1);
+        hitBrick(br, L.x, L.y, ballDamage());
+        hit = true;
         break;
       }
     }
+    if (hit) G.lasers.splice(i, 1);
+  }
+
+  // drifting bricks (moving modifier)
+  for (const br of G.bricks) {
+    if (br.drift) {
+      br.driftPhase += dt;
+      br.x = br.driftBase + Math.sin(br.driftPhase * 1.2) * 26;
+    }
+  }
+
+  // boss + hazards
+  if (G.boss) { updateBoss(gdt); }
+  if (G.hazards.length) updateHazards(gdt);
+
+  // sticky-caught ball follows paddle
+  if (G.caught) {
+    G.caught.ball.x = G.paddle.x;
+    G.caught.ball.y = CONFIG.paddleY - CONFIG.paddleH / 2 - ballRadius() - 1;
   }
 
   // balls
   if (G.serving) {
+    if (G.balls.length === 0) resetServe();   // defensive: never serve with no ball
     const b = G.balls[0];
     b.x = G.paddle.x;
-    b.y = CONFIG.paddleY - CONFIG.paddleH / 2 - CONFIG.ballR - 1;
+    b.y = CONFIG.paddleY - CONFIG.paddleH / 2 - ballRadius() - 1;
   } else {
     for (let i = G.balls.length - 1; i >= 0; i--) {
       const b = G.balls[i];
+      if (G.caught && G.caught.ball === b) continue;
       updateBall(b, gdt);
       if (b.y > CONFIG.H + 30) {
-        G.balls.splice(i, 1);
         spawnBurst(b.x, CONFIG.H - 10, "#ff5e8a", 14, 200, 0.6);
+        G.balls.splice(i, 1);
+        freeBall(b);
       }
     }
     if (G.balls.length === 0) {
-      G.lives--;
-      G.combo = 0;
-      audio.lifeLost();
-      G.shake = 10;
-      if (G.lives <= 0) {
-        G.state = "gameover";
-        G.stateT = 0;
-        audio.gameOver();
-      } else {
-        flash(G.lives === 1 ? "LAST LIFE!" : "LIFE LOST");
-        resetServe();
-      }
+      loseLife();
       return;
     }
   }
@@ -694,13 +1537,22 @@ function update(dt) {
     }
   }
 
-  // level clear
-  if (G.bricks.length === 0) {
-    G.state = "levelclear";
-    G.stateT = 0;
-    addScore(250 * G.level);
-    audio.levelClear();
-    spawnBurst(CONFIG.W / 2, CONFIG.H / 2, "#7ef3ff", 60, 320, 1.2);
+  // stage clear -> reward then node choices
+  const cleared = G.boss ? false : (G.bricks.length === 0);
+  if (cleared || (G.nodeKind === "boss" && !G.boss && G.stateT > 0.1)) {
+    onStageClear();
+  }
+}
+
+function onStageClear() {
+  addScore(Math.round(250 * G.depth * scoreMult()));
+  audio.levelClear();
+  spawnBurst(CONFIG.W / 2, CONFIG.H / 2, "#7ef3ff", 60, 320, 1.2);
+  // reward type set when the node was chosen
+  if (G.pendingReward === "boon" || G.pendingReward == null || G.nodeKind === "boss") {
+    offerBoons();
+  } else {
+    afterReward();
   }
 }
 
@@ -756,16 +1608,18 @@ function drawBricks() {
 function drawPaddle() {
   const p = G.paddle, C = CONFIG;
   const x = p.x - p.w / 2, y = C.paddleY - C.paddleH / 2;
-  ctx.shadowColor = "#7ef3ff";
+  const laser = G.laserT > 0 || boonCount("laser") > 0;
+  const sticky = boonCount("sticky") > 0;
+  ctx.shadowColor = sticky ? "#ffe14d" : "#7ef3ff";
   ctx.shadowBlur = 16 + p.glow * 18;
-  ctx.fillStyle = G.laserT > 0 ? "#ff8aac" : "#7ef3ff";
+  ctx.fillStyle = laser ? "#ff8aac" : (sticky ? "#ffe88a" : "#7ef3ff");
   roundRect(x, y, p.w, C.paddleH, 7);
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.fillStyle = "rgba(255,255,255,0.5)";
   roundRect(x + 5, y + 2.5, p.w - 10, 4, 2);
   ctx.fill();
-  if (G.laserT > 0) {
+  if (laser) {
     ctx.fillStyle = "#ffffff";
     ctx.shadowColor = "#ff5e8a"; ctx.shadowBlur = 10;
     ctx.fillRect(x + 3, y - 5, 5, 6);
@@ -775,25 +1629,79 @@ function drawPaddle() {
 }
 
 function drawBalls() {
+  const R = ballRadius();
+  const fire = boonCount("fireball") > 0;
+  const col = fire ? "#ff9d4d" : "#aef6ff";
   for (const b of G.balls) {
     // trail
     for (let i = 0; i < b.trail.length; i++) {
       const t = b.trail[i], a = (i / b.trail.length) * 0.35;
       ctx.globalAlpha = a;
-      ctx.fillStyle = "#aef6ff";
+      ctx.fillStyle = col;
       ctx.beginPath();
-      ctx.arc(t.x, t.y, CONFIG.ballR * (i / b.trail.length), 0, TAU);
+      ctx.arc(t.x, t.y, R * (i / b.trail.length), 0, TAU);
       ctx.fill();
     }
     ctx.globalAlpha = 1;
-    ctx.shadowColor = "#aef6ff";
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = col;
+    ctx.shadowBlur = fire ? 24 : 18;
+    ctx.fillStyle = fire ? "#fff0d8" : "#ffffff";
     ctx.beginPath();
-    ctx.arc(b.x, b.y, CONFIG.ballR, 0, TAU);
+    ctx.arc(b.x, b.y, R, 0, TAU);
     ctx.fill();
     ctx.shadowBlur = 0;
   }
+}
+
+function drawBoss() {
+  const b = G.boss;
+  if (!b) return;
+  // body
+  ctx.save();
+  ctx.translate(b.x, b.y);
+  ctx.shadowColor = b.type.color;
+  ctx.shadowBlur = 22 + b.flash * 18;
+  ctx.fillStyle = b.flash > 0 ? "#ffffff" : b.type.color;
+  roundRect(-b.w / 2, -b.h / 2, b.w, b.h, 12);
+  ctx.fill();
+  // shifting armor plates
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(20,20,40,0.85)";
+  const open = b.coreExposed;
+  const gap = open ? 30 : 6;
+  roundRect(-b.w / 2 + 6, -b.h / 2 + 6, b.w / 2 - gap, b.h - 12, 6); ctx.fill();
+  roundRect(gap, -b.h / 2 + 6, b.w / 2 - gap, b.h - 12, 6); ctx.fill();
+  // core
+  const cr = bossCoreRect();
+  ctx.translate(-b.x, -b.y);
+  ctx.shadowColor = open ? "#ffe14d" : "#444";
+  ctx.shadowBlur = open ? 20 : 4;
+  ctx.fillStyle = open ? "#ffe14d" : "#5a5a70";
+  roundRect(cr.x, cr.y, cr.w, cr.h, 8); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.restore();
+  // HP bar
+  const C = CONFIG;
+  const bw = C.W - 80, bx = 40, by = 64;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(bx, by, bw, 8);
+  ctx.fillStyle = b.type.color;
+  ctx.shadowColor = b.type.color; ctx.shadowBlur = 8;
+  ctx.fillRect(bx, by, bw * Math.max(0, b.hp / b.hpMax), 8);
+  ctx.shadowBlur = 0;
+  neonText(b.type.name, C.W / 2, 50, 14, b.type.color, 8);
+}
+
+function drawHazards() {
+  ctx.shadowColor = "#ff5e8a";
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = "#ff8aac";
+  for (const hz of G.hazards) {
+    ctx.beginPath();
+    ctx.arc(hz.x, hz.y, CONFIG.bossHazardR, 0, TAU);
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
 }
 
 function drawPowerups() {
@@ -835,6 +1743,32 @@ function neonText(txt, x, y, size, color, blur, font) {
   ctx.shadowBlur = 0;
 }
 
+/* compact stacked boon icons under the lives row */
+function drawBoonHUD() {
+  const C = CONFIG;
+  let bx = C.W - 26, by = 50;
+  ctx.font = "bold 9px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const def of BOONS) {
+    const n = boonCount(def.id);
+    if (n <= 0) continue;
+    ctx.fillStyle = "rgba(126,243,255,0.16)";
+    roundRect(bx, by, 24, 16, 4); ctx.fill();
+    ctx.fillStyle = "#aef6ff";
+    ctx.fillText(def.icon + (n > 1 ? "" + n : ""), bx + 12, by + 8);
+    bx -= 28;
+    if (bx < C.W * 0.45) { bx = C.W - 26; by += 20; }
+  }
+  // shields / revives
+  if (G.shieldsLeft > 0 || G.revivesLeft > 0) {
+    ctx.textAlign = "right";
+    let s = "";
+    if (G.shieldsLeft > 0) s += "SHD" + G.shieldsLeft + " ";
+    if (G.revivesLeft > 0) s += "RV" + G.revivesLeft;
+    neonText(s, C.W - 14, by + 22, 11, "#5dff7e", 6);
+  }
+}
+
 function drawHUD() {
   const C = CONFIG;
   ctx.textBaseline = "middle";
@@ -844,18 +1778,26 @@ function drawHUD() {
   ctx.textAlign = "left";
   ctx.shadowColor = "#7ef3ff"; ctx.fillStyle = "#7ef3ff";
   ctx.fillText("SCORE " + G.score, 14, 28);
-  // level
+  // depth
   ctx.textAlign = "center";
   ctx.shadowColor = "#d06bff"; ctx.fillStyle = "#d06bff";
-  ctx.fillText("LVL " + G.level, C.W / 2, 28);
+  ctx.fillText("D" + G.depth, C.W / 2, 28);
   // lives
   ctx.shadowColor = "#ff5e8a"; ctx.fillStyle = "#ff5e8a";
-  for (let i = 0; i < G.lives; i++) {
+  for (let i = 0; i < Math.min(G.lives, 8); i++) {
     ctx.beginPath();
     ctx.arc(C.W - 20 - i * 20, 28, 6, 0, TAU);
     ctx.fill();
   }
   ctx.shadowBlur = 0;
+  // currency
+  ctx.font = "bold 13px 'Courier New', monospace";
+  ctx.textAlign = "left";
+  ctx.shadowColor = "#ffe14d"; ctx.shadowBlur = 6; ctx.fillStyle = "#ffe14d";
+  ctx.fillText("$" + G.currency, 14, 48);
+  ctx.shadowBlur = 0;
+  // boon icon stacks (top-right cluster)
+  drawBoonHUD();
   // combo
   if (G.combo >= 2) {
     const m = Math.min(G.combo, C.comboMax);
@@ -903,62 +1845,247 @@ function drawTitle() {
     ["a neon space brick-breaker", 16, "rgba(200,220,255,0.8)", 70, 6],
   ]);
   ctx.globalAlpha = pulse;
-  neonText("TAP / PRESS TO START", C.W / 2, C.H * 0.62, 20, "#ffe14d", 14);
+  neonText("点击进入大本营 — TAP / PRESS: META HUB", C.W / 2, C.H * 0.6, 18, "#ffe14d", 14);
   ctx.globalAlpha = 1;
-  neonText("HIGH SCORE  " + G.hi, C.W / 2, C.H * 0.7, 16, "#5dff7e", 10);
+  neonText("HIGH SCORE  " + G.hi + "    $" + G.currency, C.W / 2, C.H * 0.665, 15, "#5dff7e", 10);
   // HOW TO PLAY / 操作说明 panel
-  neonText("操作说明 · HOW TO PLAY", C.W / 2, C.H * 0.765, 12, "rgba(160,180,220,0.6)", 4);
+  neonText("操作说明 · HOW TO PLAY", C.W / 2, C.H * 0.73, 12, "rgba(160,180,220,0.6)", 4);
   const help = touchUI ? [
-    "拖动：移动挡板 — drag to move the paddle",
-    "点触：发射小球 — tap to launch the ball",
-    "接住强化道具 · 共 3 条命 — catch power-ups, 3 lives",
+    "拖动移动 · 点触发射 — drag move, tap launch",
+    "肉鸽闯关：清关后选门、得恩赐 — pick doors, earn boons",
+    "死亡后金币存入大本营升级 — bank gold to upgrade",
   ] : [
-    "鼠标 / ← → / A-D：移动挡板 — mouse / arrows to move",
-    "空格 / 点击：发射小球 — space / click to launch",
-    "接住强化道具 · 共 3 条命 — catch power-ups, 3 lives",
+    "鼠标 / ←→ / A-D 移动 · 空格发射 — move / launch",
+    "肉鸽闯关：清关选门、得恩赐(三选一) — branching doors, boons",
+    "死亡后金币存入大本营做永久升级 — meta hub upgrades",
     "P 暂停 · M 静音 — pause / mute",
   ];
+  if (GP.connected) help.push("手柄：左摇杆移动 · A 发射 — gamepad: stick move, A launch");
   for (let i = 0; i < help.length; i++)
-    neonText(help[i], C.W / 2, C.H * 0.795 + i * 24, 13, "rgba(190,190,230,0.75)", 4);
+    neonText(help[i], C.W / 2, C.H * 0.765 + i * 22, 12.5, "rgba(190,190,230,0.75)", 4);
 }
 
-function drawGameOver() {
+/* run summary on death -> back to hub */
+function drawSummary() {
   const C = CONFIG;
   drawCenterPanel([
-    ["GAME OVER", 48, "#ff5e8a", -20, 24],
-    ["SCORE  " + G.score, 22, "#7ef3ff", 50, 12],
-    [(G.newHi ? "NEW HIGH SCORE!" : "HIGH SCORE  " + G.hi), 17,
-      G.newHi ? "#ffe14d" : "#5dff7e", 88, 12],
-    ["best combo x" + Math.min(G.comboBest, CONFIG.comboMax) + "   level " + G.level, 14, "rgba(200,220,255,0.7)", 122, 4],
+    ["RUN OVER", 46, "#ff5e8a", -40, 24],
   ]);
-  if (G.stateT > 0.8) {
+  const rows = [
+    ["深度 DEPTH", String(G.depth)],
+    ["砖块 BRICKS", String(G.bricksDestroyed)],
+    ["得分 SCORE", String(G.score)],
+    ["金币 GOLD +", String(G.runCurrency)],
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    const y = C.H * 0.42 + i * 30;
+    ctx.font = "bold 16px 'Courier New', monospace";
+    ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.shadowColor = "#7ef3ff"; ctx.shadowBlur = 6; ctx.fillStyle = "rgba(200,220,255,0.85)";
+    ctx.fillText(rows[i][0], C.W * 0.22, y);
+    ctx.textAlign = "right"; ctx.fillStyle = "#ffe14d"; ctx.shadowColor = "#ffe14d";
+    ctx.fillText(rows[i][1], C.W * 0.78, y);
+  }
+  ctx.shadowBlur = 0;
+  neonText(G.newHi ? "NEW HIGH SCORE!" : "BANKED · $" + G.currency, C.W / 2, C.H * 0.62,
+    16, G.newHi ? "#ffe14d" : "#5dff7e", 10);
+  if (G.stateT > 0.6) {
     const pulse = 0.6 + 0.4 * Math.sin(G.stateT * 2.4);
     ctx.globalAlpha = pulse;
-    neonText("TAP / PRESS TO CONTINUE", C.W / 2, C.H * 0.66, 17, "#ffe14d", 12);
+    neonText("TAP / A 回到大本营 — to META HUB", C.W / 2, C.H * 0.7, 16, "#ffe14d", 12);
     ctx.globalAlpha = 1;
   }
 }
 
-function drawLevelClear() {
+/* highlighted list-item box used by menus; records hit-rect for pointer */
+function menuItem(idx, x, y, w, h, color, selected) {
+  menuRects.push({ idx, x, y, w, h });
+  ctx.globalAlpha = selected ? 0.30 : 0.12;
+  ctx.fillStyle = color;
+  ctx.shadowColor = color; ctx.shadowBlur = selected ? 16 : 4;
+  roundRect(x, y, w, h, 8); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = selected ? 2.5 : 1;
+  ctx.strokeStyle = color;
+  roundRect(x, y, w, h, 8); ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+function drawHub() {
   const C = CONFIG;
-  drawCenterPanel([
-    ["LEVEL " + G.level + " CLEAR", 40, "#5dff7e", -10, 24],
-    ["+" + (250 * G.level) + " BONUS", 20, "#ffe14d", 44, 12],
-  ]);
-  if (G.stateT > 0.7) {
-    const pulse = 0.6 + 0.4 * Math.sin(G.stateT * 2.4);
-    ctx.globalAlpha = pulse;
-    neonText("TAP / PRESS FOR LEVEL " + (G.level + 1), C.W / 2, C.H * 0.58, 17, "#7ef3ff", 12);
-    ctx.globalAlpha = 1;
+  menuRects = [];
+  ctx.fillStyle = "rgba(5,5,20,0.78)";
+  ctx.fillRect(0, 0, C.W, C.H);
+  neonText("大本营 · META HUB", C.W / 2, 54, 26, "#7ef3ff", 18);
+  neonText("$" + G.currency, C.W / 2, 88, 20, "#ffe14d", 12);
+  const x = 24, w = C.W - 48, h = 44, gap = 6;
+  let y = 116;
+  for (let i = 0; i < META.length; i++) {
+    const m = META[i];
+    const owned = metaLevel(m.id), maxed = owned >= m.max;
+    const cost = metaCost(m);
+    const afford = !maxed && G.currency >= cost;
+    const sel = G.menuIndex === i;
+    const col = maxed ? "#5dff7e" : (afford ? "#4de8ff" : "#7a7a90");
+    menuItem(i, x, y, w, h, col, sel);
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.textAlign = "left"; ctx.fillStyle = "#e6f0ff"; ctx.shadowBlur = 0;
+    ctx.fillText(m.name + "  [" + owned + "/" + m.max + "]", x + 12, y + 15);
+    ctx.font = "11px 'Courier New', monospace"; ctx.fillStyle = "rgba(200,220,255,0.7)";
+    ctx.fillText(m.desc, x + 12, y + 31);
+    ctx.textAlign = "right";
+    ctx.font = "bold 13px 'Courier New', monospace";
+    ctx.fillStyle = maxed ? "#5dff7e" : (afford ? "#ffe14d" : "#ff5e8a");
+    ctx.fillText(maxed ? "MAX" : "$" + cost, x + w - 12, y + 22);
+    y += h + gap;
   }
+  // START RUN button
+  const sel = G.menuIndex === META.length;
+  menuItem(META.length, x, y, w, 48, "#ffe14d", sel);
+  neonText("开始闯关 · START RUN", C.W / 2, y + 24, 18, "#ffe14d", sel ? 16 : 6);
+  // controls hint
+  let hint = "↑↓ 选择 · Enter 购买 · Esc 返回 — select / buy / back";
+  if (GP.connected) hint = "手柄 d-pad 选 · A 购买 · B 返回 — gamepad nav";
+  neonText(hint, C.W / 2, C.H - 22, 12, "rgba(190,190,230,0.7)", 4);
+}
+
+function drawBoonScreen() {
+  const C = CONFIG;
+  menuRects = [];
+  ctx.fillStyle = "rgba(5,5,20,0.8)";
+  ctx.fillRect(0, 0, C.W, C.H);
+  neonText("选择恩赐 · CHOOSE A BOON", C.W / 2, 80, 24, "#d06bff", 18);
+  neonText("三选一 · pick one of three", C.W / 2, 112, 13, "rgba(200,220,255,0.7)", 4);
+  const w = C.W - 64, h = 120, x = 32;
+  let y = 150;
+  for (let i = 0; i < G.boonChoices.length; i++) {
+    const c = G.boonChoices[i];
+    const sel = G.menuIndex === i;
+    menuItem(i, x, y, w, h, c.rarity.color, sel);
+    neonText(c.rarity.name, x + w / 2, y + 22, 13, c.rarity.color, sel ? 12 : 4);
+    neonText(c.boon.name, x + w / 2, y + 54, 20, "#ffffff", sel ? 14 : 6);
+    ctx.font = "12px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(210,225,255,0.85)";
+    const inc = Math.max(1, Math.round(c.rarity.mult));
+    ctx.fillText(c.boon.desc(inc), x + w / 2, y + 84);
+    const owned = boonCount(c.boon.id);
+    if (owned > 0) ctx.fillText("已持有 owned x" + owned, x + w / 2, y + 102);
+    y += h + 12;
+  }
+  let hint = "↑↓ 选择 · Enter 确认 — select / confirm";
+  if (GP.connected) hint = "手柄 d-pad · A 确认 — gamepad nav, A confirm";
+  neonText(hint, C.W / 2, C.H - 24, 12, "rgba(190,190,230,0.7)", 4);
+}
+
+const NODE_ICON = { combat: "战", elite: "精", hazard: "险", treasure: "宝", shop: "店", boss: "王" };
+function drawNodeScreen() {
+  const C = CONFIG;
+  menuRects = [];
+  ctx.fillStyle = "rgba(5,5,20,0.8)";
+  ctx.fillRect(0, 0, C.W, C.H);
+  neonText("选择前路 · CHOOSE YOUR PATH", C.W / 2, 70, 22, "#7ef3ff", 16);
+  neonText("深度 DEPTH " + G.depth, C.W / 2, 100, 14, "#d06bff", 8);
+  drawRunMap(130);
+  const n = G.nodeChoices.length;
+  const w = C.W - 80, h = 96, x = 40;
+  let y = 200;
+  for (let i = 0; i < n; i++) {
+    const node = G.nodeChoices[i];
+    const sel = G.menuIndex === i;
+    menuItem(i, x, y, w, h, node.color, sel);
+    // door icon
+    neonText(NODE_ICON[node.kind] || "?", x + 40, y + h / 2, 34, node.color, sel ? 16 : 6);
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.shadowBlur = 0;
+    ctx.font = "bold 16px 'Courier New', monospace"; ctx.fillStyle = "#ffffff";
+    ctx.fillText(node.label, x + 76, y + 30);
+    ctx.font = "11px 'Courier New', monospace"; ctx.fillStyle = "rgba(210,225,255,0.8)";
+    let rw = node.reward === "shop" ? "商店 shop" : node.reward === "treasure" ? "宝藏+金币 treasure" : "恩赐 boon";
+    ctx.fillText("奖励 reward: " + rw, x + 76, y + 52);
+    if (node.mod) ctx.fillText("修饰 mod: " + (STAGE_MODS[node.mod] ? STAGE_MODS[node.mod].name : node.mod), x + 76, y + 72);
+    if (node.kind === "boss") ctx.fillText("⚠ 首领战 BOSS FIGHT", x + 76, y + 72);
+    y += h + 14;
+  }
+  let hint = "↑↓ 选门 · Enter 进入 — select / enter";
+  if (GP.connected) hint = "手柄 d-pad · A 进入门 — gamepad, A enter door";
+  neonText(hint, C.W / 2, C.H - 24, 12, "rgba(190,190,230,0.7)", 4);
+}
+
+function drawRunMap(y) {
+  const C = CONFIG;
+  const path = G.runPath;
+  const n = Math.min(path.length, 12);
+  const start = Math.max(0, path.length - 12);
+  const dotGap = (C.W - 80) / 11;
+  ctx.textBaseline = "middle"; ctx.textAlign = "center";
+  for (let i = 0; i < n; i++) {
+    const k = path[start + i];
+    const px = 40 + i * dotGap;
+    ctx.fillStyle = "rgba(126,243,255,0.7)";
+    ctx.beginPath(); ctx.arc(px, y, 5, 0, TAU); ctx.fill();
+    if (i > 0) {
+      ctx.strokeStyle = "rgba(126,243,255,0.3)"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(40 + (i - 1) * dotGap + 6, y); ctx.lineTo(px - 6, y); ctx.stroke();
+    }
+  }
+}
+
+function drawShop() {
+  const C = CONFIG;
+  menuRects = [];
+  ctx.fillStyle = "rgba(5,5,20,0.82)";
+  ctx.fillRect(0, 0, C.W, C.H);
+  neonText("商店 · SHOP", C.W / 2, 70, 26, "#5dff7e", 18);
+  neonText("$" + G.currency, C.W / 2, 104, 18, "#ffe14d", 12);
+  const w = C.W - 64, h = 56, x = 32;
+  let y = 140;
+  for (let i = 0; i < G.shopItems.length; i++) {
+    const it = G.shopItems[i];
+    const afford = !it.bought && G.currency >= it.cost;
+    const sel = G.menuIndex === i;
+    const col = it.bought ? "#5dff7e" : (afford ? "#4de8ff" : "#7a7a90");
+    menuItem(i, x, y, w, h, col, sel);
+    ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.shadowBlur = 0;
+    ctx.font = "bold 14px 'Courier New', monospace"; ctx.fillStyle = "#e6f0ff";
+    ctx.fillText(it.name, x + 14, y + h / 2);
+    ctx.textAlign = "right";
+    ctx.fillStyle = it.bought ? "#5dff7e" : (afford ? "#ffe14d" : "#ff5e8a");
+    ctx.fillText(it.bought ? "已购 SOLD" : "$" + it.cost, x + w - 14, y + h / 2);
+    y += h + 8;
+  }
+  const sel = G.menuIndex === G.shopItems.length;
+  menuItem(G.shopItems.length, x, y, w, 48, "#ffe14d", sel);
+  neonText("离开商店 · LEAVE", C.W / 2, y + 24, 16, "#ffe14d", sel ? 14 : 6);
+  let hint = "↑↓ 选择 · Enter 购买/离开 — buy / leave";
+  if (GP.connected) hint = "手柄 d-pad · A 购买 · B 离开 — gamepad";
+  neonText(hint, C.W / 2, C.H - 22, 12, "rgba(190,190,230,0.7)", 4);
 }
 
 function drawPause() {
+  let line = "鼠标 / A-D 移动 · 空格发射 · M 静音 — move / launch / mute";
+  if (GP.connected) line = "手柄：左摇杆移动 · A 发射 · Start 暂停 — gamepad: stick, A, Start";
   drawCenterPanel([
     ["PAUSED", 40, "#7ef3ff", 0, 20],
-    ["P / Esc to resume", 15, "rgba(200,220,255,0.75)", 50, 4],
-    ["鼠标 / A-D 移动 · 空格发射 · M 静音 — move / launch / mute", 13, "rgba(190,190,230,0.75)", 84, 4],
+    ["P / Esc / Start to resume", 15, "rgba(200,220,255,0.75)", 50, 4],
+    [line, 12, "rgba(190,190,230,0.75)", 84, 4],
   ]);
+}
+
+/* small corner toast (gamepad connect/disconnect, etc.) */
+function drawToast() {
+  if (toastT <= 0) return;
+  const C = CONFIG;
+  ctx.globalAlpha = Math.min(1, toastT * 1.5);
+  ctx.font = "bold 13px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const w = ctx.measureText(toastMsg).width + 28;
+  ctx.fillStyle = "rgba(10,10,30,0.85)";
+  ctx.strokeStyle = "#7ef3ff"; ctx.lineWidth = 1.5;
+  roundRect(C.W / 2 - w / 2, C.H - 60, w, 30, 8); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "#7ef3ff"; ctx.shadowColor = "#7ef3ff"; ctx.shadowBlur = 8;
+  ctx.fillText(toastMsg, C.W / 2, C.H - 45);
+  ctx.shadowBlur = 0; ctx.globalAlpha = 1;
 }
 
 function render() {
@@ -985,18 +2112,23 @@ function render() {
   ctx.strokeRect(1, 1, CONFIG.W - 2, CONFIG.H - 2);
   ctx.shadowBlur = 0;
 
-  if (G.state === "play" || G.state === "levelclear" || G.state === "gameover") {
+  const showField = G.state === "play" || G.state === "summary" ||
+    G.state === "boon" || G.state === "nodes" || G.state === "shop";
+  if (showField) {
     drawBricks();
+    if (G.boss) drawBoss();
+    drawHazards();
     drawPowerups();
     drawLasers();
     drawPaddle();
     if (G.state === "play") drawBalls();
     drawParticles();
     drawHUD();
-    if (G.serving && G.state === "play" && !G.paused) {
+    if (G.state === "play" && !G.paused && (G.serving || G.caught)) {
       const pulse = 0.5 + 0.5 * Math.sin(G.stateT * 4);
       ctx.globalAlpha = pulse;
-      neonText("TAP / SPACE TO LAUNCH", CONFIG.W / 2, CONFIG.H * 0.58, 16, "#ffe14d", 10);
+      const t = G.caught ? "瞄准后发射 — AIM & LAUNCH" : "点击/空格/A 发射 — TAP / SPACE / A TO LAUNCH";
+      neonText(t, CONFIG.W / 2, CONFIG.H * 0.58, 15, "#ffe14d", 10);
       ctx.globalAlpha = 1;
     }
   } else {
@@ -1004,12 +2136,17 @@ function render() {
   }
 
   if (G.state === "title") drawTitle();
-  else if (G.state === "gameover") drawGameOver();
-  else if (G.state === "levelclear") drawLevelClear();
+  else if (G.state === "hub") drawHub();
+  else if (G.state === "boon") drawBoonScreen();
+  else if (G.state === "nodes") drawNodeScreen();
+  else if (G.state === "shop") drawShop();
+  else if (G.state === "summary") drawSummary();
   else if (G.paused) drawPause();
 
-  // arcade link visibility (title + gameover at minimum)
-  const showLink = G.state === "title" || G.state === "gameover";
+  drawToast();
+
+  // arcade link visibility (title + hub + summary)
+  const showLink = G.state === "title" || G.state === "hub" || G.state === "summary";
   if (arcadeLink.style.display !== (showLink ? "block" : "none")) {
     arcadeLink.style.display = showLink ? "block" : "none";
   }
