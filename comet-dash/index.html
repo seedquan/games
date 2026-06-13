@@ -428,9 +428,21 @@ function placePlayer(p) {
 const keys = {};
 const touch = { left: false, right: false, jump: false, ids: {} };
 
-function inputLeft() { return keys.ArrowLeft || keys.a || keys.A || touch.left; }
-function inputRight() { return keys.ArrowRight || keys.d || keys.D || touch.right; }
-function inputJumpHeld() { return keys.ArrowUp || keys.w || keys.W || keys[" "] || touch.jump; }
+/* gamepad: digital intent flags fed by pollGamepad() each frame.
+   left/right/jump mirror touch.* ; jump is the SUSTAIN (held) state used
+   for variable jump height, identical to keys[" "]. */
+const pad = {
+  present: false,
+  left: false, right: false, jump: false,
+  prevJump: false, prevStart: false, prevAlt: false,
+  deadzone: 0.3,
+  AXIS_X: 0, BTN_JUMP: 0, BTN_ALT: 2, BTN_START: 9,
+  DPAD_L: 14, DPAD_R: 15,
+};
+
+function inputLeft() { return keys.ArrowLeft || keys.a || keys.A || touch.left || pad.left; }
+function inputRight() { return keys.ArrowRight || keys.d || keys.D || touch.right || pad.right; }
+function inputJumpHeld() { return keys.ArrowUp || keys.w || keys.W || keys[" "] || touch.jump || pad.jump; }
 
 function pressJump() {
   player.buffer = 0;
@@ -473,8 +485,74 @@ window.addEventListener("keyup", (e) => {
 window.addEventListener("blur", () => {
   for (const k in keys) keys[k] = false;
   touch.left = touch.right = touch.jump = false; touch.ids = {};
+  pad.left = pad.right = pad.jump = false;
+  pad.prevJump = pad.prevStart = pad.prevAlt = false;
   if (state === "playing") state = "paused";
 });
+
+/* ---------------- gamepad (standard Gamepad API) ---------------- */
+const padToast = { text: "", t: 0 };
+
+window.addEventListener("gamepadconnected", () => {
+  pad.present = true;
+  padToast.text = "手柄已连接 — Gamepad connected";
+  padToast.t = 2.6;
+});
+window.addEventListener("gamepaddisconnected", () => {
+  const list = navigator.getGamepads ? navigator.getGamepads() : [];
+  let anyLeft = false;
+  for (let i = 0; i < list.length; i++) if (list[i]) anyLeft = true;
+  pad.present = anyLeft;
+  pad.left = pad.right = pad.jump = false;
+  if (!anyLeft) {
+    padToast.text = "手柄已断开 — Gamepad disconnected";
+    padToast.t = 2.6;
+  }
+});
+
+/* polled once per frame; no per-frame allocations beyond the snapshot
+   array the browser returns. Feeds the same intent flags as keyboard. */
+function pollGamepad() {
+  if (!navigator.getGamepads) return;
+  const list = navigator.getGamepads();
+  let gp = null;
+  for (let i = 0; i < list.length; i++) { if (list[i] && list[i].connected !== false) { gp = list[i]; break; } }
+  if (!gp) { pad.left = pad.right = pad.jump = false; return; }
+  pad.present = true;
+
+  const ax = gp.axes && gp.axes.length > pad.AXIS_X ? gp.axes[pad.AXIS_X] : 0;
+  const btns = gp.buttons;
+  const pressed = (i) => i < btns.length && btns[i] && (btns[i].pressed || btns[i].value > 0.5);
+
+  const dl = pressed(pad.DPAD_L), dr = pressed(pad.DPAD_R);
+  pad.left = dl || ax < -pad.deadzone;
+  pad.right = dr || ax > pad.deadzone;
+
+  const jumpDown = pressed(pad.BTN_JUMP);
+  const altDown = pressed(pad.BTN_ALT);
+  const startDown = pressed(pad.BTN_START);
+
+  // JUMP sustain (held) for variable height; press edge starts the jump.
+  pad.jump = jumpDown || altDown;
+  const jumpEdge = (jumpDown && !pad.prevJump) || (altDown && !pad.prevAlt);
+  const startEdge = startDown && !pad.prevStart;
+
+  if (state === "playing") {
+    if (jumpEdge) { audio.unlock(); pressJump(); }
+    if (startEdge) state = "paused";
+  } else if (state === "paused") {
+    if (startEdge || jumpEdge) state = "playing";
+  } else {
+    // title / clear / gameover / victory: A/cross or Start confirms
+    if (jumpEdge || startEdge) anyStart();
+  }
+  // release cuts the variable-height jump (matches keyup behaviour)
+  if (!pad.jump) player.jumpHeld = false;
+
+  pad.prevJump = jumpDown;
+  pad.prevAlt = altDown;
+  pad.prevStart = startDown;
+}
 
 /* touch buttons (canvas-drawn) */
 function touchButtons() {
@@ -1515,7 +1593,7 @@ function drawTitle() {
   if (blink) glowText(touchMode ? "TAP TO START" : "PRESS SPACE TO START", cw / 2, cy + ts * 1.6, 20, "#ffe066", "center", 12);
   glowText("HIGH SCORE  " + String(highScore).padStart(6, "0"), cw / 2, cy + ts * 2.3, 15, "#ff4dd2", "center", 8);
   // HOW TO PLAY / 操作说明 panel
-  const help = touchMode ? [
+  let help = touchMode ? [
     "屏幕按钮：← → 移动 · JUMP 跳跃 — on-screen buttons: move / jump",
     "长按跳跃键跳得更高 — hold jump for higher jumps",
     "踩扁敌人 · 顶 ? 砖块 — stomp foes, bump ? blocks",
@@ -1527,6 +1605,9 @@ function drawTitle() {
     "目标：抵达终点光柱 — reach the goal beacon",
     "P 暂停 · M 静音 — pause / mute",
   ];
+  if (pad.present) help = help.concat([
+    "手柄：左摇杆/方向键移动 · A 跳跃 — gamepad: stick/d-pad move, A jump",
+  ]);
   let hy = ch - 28 - help.length * 19;
   glowText("操作说明 · HOW TO PLAY", cw / 2, hy, 12, "rgba(150,150,190,0.6)", "center", 0);
   for (const line of help) { hy += 19; glowText(line, cw / 2, hy, 13, "rgba(190,190,230,0.75)", "center", 0); }
@@ -1568,9 +1649,10 @@ function drawVictory() {
 function drawPaused() {
   dimScreen(0.55);
   glowText("PAUSED", cw / 2, ch * 0.42, 44, "#19e6ff", "center", 18);
-  glowText(touchMode ? "tap to resume" : "press P or ESC to resume", cw / 2, ch * 0.52, 15, "#9aa7ff", "center", 6);
+  glowText(pad.present ? "press P / ESC / Start to resume" : (touchMode ? "tap to resume" : "press P or ESC to resume"), cw / 2, ch * 0.52, 15, "#9aa7ff", "center", 6);
   glowText(touchMode ? "按钮：← → 移动 · JUMP 跳跃 · M 静音 — buttons move / jump · M mute"
     : "← → 移动 · 空格跳跃 · M 静音 — move / jump / mute", cw / 2, ch * 0.52 + 26, 13, "rgba(190,190,230,0.75)", "center", 0);
+  if (pad.present) glowText("手柄：左摇杆/方向键移动 · A 跳跃 · Start 暂停 — gamepad: stick/d-pad move, A jump, Start pause", cw / 2, ch * 0.52 + 46, 12, "rgba(164,246,255,0.8)", "center", 0);
 }
 
 /* ---------------- §N MAIN LOOP ---------------- */
@@ -1580,6 +1662,8 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.1, (now - lastTime) / 1000 || 0);
   lastTime = now;
+  pollGamepad();
+  if (padToast.t > 0) padToast.t -= dt;
   acc += dt;
   while (acc >= CONFIG.stepDt) {
     step(CONFIG.stepDt);
@@ -1621,6 +1705,26 @@ function render() {
   else if (state === "clear") drawClear();
   else if (state === "gameover") drawGameOver();
   else if (state === "victory") drawVictory();
+  drawPadToast();
+}
+
+function drawPadToast() {
+  if (padToast.t <= 0) return;
+  const a = Math.min(1, padToast.t / 0.4);
+  ctx.save();
+  ctx.globalAlpha = a;
+  const w = Math.min(cw - 20, 340), x = cw / 2 - w / 2, y = 14;
+  ctx.fillStyle = "rgba(8,10,28,0.82)";
+  ctx.strokeStyle = "#19e6ff";
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = "#19e6ff"; ctx.shadowBlur = 12;
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, 30, 8); ctx.fill(); ctx.stroke(); }
+  else { ctx.fillRect(x, y, w, 30); ctx.strokeRect(x, y, w, 30); }
+  ctx.restore();
+  ctx.save();
+  ctx.globalAlpha = a;
+  glowText(padToast.text, cw / 2, y + 15, 13, "#a4f6ff", "center", 0);
+  ctx.restore();
 }
 
 /* boot: show level 1 dimly behind the title */
