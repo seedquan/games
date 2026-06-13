@@ -175,7 +175,7 @@
     <button class="neon" id="btnResume">RESUME</button>
     <button class="neon pink" id="btnReset">NEW WORLD</button>
   </div>
-  <div class="controls">进度自动保存 · <b>M</b> 静音 — progress is saved automatically &middot; mute</div>
+  <div class="controls" id="pauseControls">进度自动保存 · <b>M</b> 静音 — progress is saved automatically &middot; mute</div>
 </div>
 
 <div id="glfail">
@@ -1507,11 +1507,28 @@ let joyId = -1, joyOX = 0, joyOY = 0, joyVX = 0, joyVY = 0;
 let lookId = -1, lookLX = 0, lookLY = 0, lookSX = 0, lookSY = 0, lookT0 = 0, lookMoved = 0;
 let touchJump = false, touchDown = false;
 
+/* gamepad state — analog move/look feed the same intents as keyboard/touch.
+   padMoveX/Y carry the (deadzoned) left-stick vector; held flags mirror the
+   keyboard/touch held semantics for jump/descend and break/place. */
+let gamepadActive = false;          // true once a pad is seen connected
+let padMoveX = 0, padMoveY = 0;     // left stick: strafe (+right), forward (-up)
+let padUp = false, padDown = false; // A held / down-button held (fly + jump intents)
+const padPrev = new Set();          // button indices that were down last frame (edge-detect)
+const GP = Object.freeze({          // standard-mapping button indices
+  A: 0, B: 1, X: 2, Y: 3, L1: 4, R1: 5, L2: 6, R2: 7,
+  SELECT: 8, START: 9, DUP: 12, DDOWN: 13, DLEFT: 14, DRIGHT: 15,
+});
+const PAD_DEAD = 0.2;               // stick deadzone
+const PAD_LOOK = 2.6;               // right-stick look sensitivity (rad/sec at full tilt)
+
 /* HOW TO PLAY / 操作说明 — device-aware bilingual panel on the title overlay */
 const elHowto = document.getElementById("howto");
+const HOWTO_PAD =
+  "<b>手柄</b>：左摇杆移动 · 右摇杆视角 · R2 挖 · L2 放 · A 跳/上升 · Y 飞行 · L1/R1 切换方块<br>" +
+  "gamepad: sticks move/look &middot; R2 mine &middot; L2 place &middot; A jump &middot; Y fly &middot; bumpers select &middot; Start pause";
 function renderHowTo() {
   const coarse = touchMode || (window.matchMedia && matchMedia("(pointer: coarse)").matches);
-  elHowto.innerHTML = coarse ? (
+  elHowto.innerHTML = (coarse ? (
     "<b>HOW TO PLAY / 操作说明</b><br>" +
     "无限世界，向任何方向探索、挖掘与建造 — infinite world: explore, mine and build in any direction<br>" +
     "<b>左侧摇杆</b> 移动 · <b>拖动右侧</b> 转视角 — left stick moves &middot; drag right to look<br>" +
@@ -1525,7 +1542,7 @@ function renderHowTo() {
     "<b>左键</b> 挖掘 · <b>右键</b> 放置 · <b>1-9 / 滚轮</b> 选方块 — LMB break &middot; RMB place &middot; select block<br>" +
     "<b>F</b> 或双击空格飞行 · <b>R</b> 重置世界 — F / double-space to fly &middot; R new world<br>" +
     "<b>ESC</b> 暂停 · <b>M</b> 静音 — pause / mute"
-  );
+  )) + (gamepadActive ? ("<br>" + HOWTO_PAD) : "");
 }
 renderHowTo();
 
@@ -1534,11 +1551,13 @@ function gatherInput() {
   let strafe = (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) - (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
   fwd += -joyVY;
   strafe += joyVX;
+  fwd += -padMoveY;
+  strafe += padMoveX;
   return {
     fwd: clamp(fwd, -1, 1),
     strafe: clamp(strafe, -1, 1),
-    up: keys.has("Space") || touchJump,
-    down: keys.has("ShiftLeft") || keys.has("ShiftRight") || touchDown,
+    up: keys.has("Space") || touchJump || padUp,
+    down: keys.has("ShiftLeft") || keys.has("ShiftRight") || touchDown || padDown,
   };
 }
 
@@ -1662,7 +1681,8 @@ function requestLock() {
 document.addEventListener("pointerlockchange", () => {
   const locked = document.pointerLockElement === canvas;
   elHint.style.display = "none";
-  if (!locked && state === "play" && !touchMode) pauseGame();
+  // a gamepad user can look without the mouse, so don't force-pause on unlock
+  if (!locked && state === "play" && !touchMode && !gamepadActive) pauseGame();
 });
 document.addEventListener("pointerlockerror", () => {
   if (state === "play" && !touchMode) elHint.style.display = "block";
@@ -1758,6 +1778,102 @@ function endTouch(e) {
 window.addEventListener("touchend", endTouch);
 window.addEventListener("touchcancel", endTouch);
 
+/* ---------------- §16b GAMEPAD ---------------- */
+/* Standard Gamepad API, polled once per frame from the main loop. Sticks feed
+   the same fwd/strafe/up/down intents and the same yaw/pitch the mouse drives,
+   so a controller user never needs pointer lock. Buttons that should fire once
+   are edge-detected against padPrev; move/look/break keep held semantics. */
+let padMineHeld = false, padPlaceHeld = false; // pad-owned break/place hold flags
+
+function firstGamepad() {
+  const pads = (navigator.getGamepads && navigator.getGamepads()) || [];
+  for (let i = 0; i < pads.length; i++) if (pads[i] && pads[i].connected !== false) return pads[i];
+  return null;
+}
+
+function padAxis(v) { return Math.abs(v) < PAD_DEAD ? 0 : v; }
+
+/* poll the active gamepad; dt scales analog look. No per-frame allocations. */
+function pollGamepad(dt) {
+  const gp = firstGamepad();
+  if (!gp) { padMoveX = 0; padMoveY = 0; padUp = false; padDown = false; return; }
+  const ax = gp.axes, bt = gp.buttons;
+
+  // --- left stick: move (analog magnitude preserved, deadzoned per-axis) ---
+  padMoveX = clamp(padAxis(ax[0] || 0), -1, 1);
+  padMoveY = clamp(padAxis(ax[1] || 0), -1, 1);
+
+  // --- right stick: look (yaw/pitch), no pointer lock needed ---
+  if (state === "play") {
+    const lx = padAxis(ax[2] || 0), ly = padAxis(ax[3] || 0);
+    if (lx) player.yaw += lx * PAD_LOOK * dt;
+    if (ly) player.pitch = clamp(player.pitch - ly * PAD_LOOK * dt, -1.55, 1.55);
+  }
+
+  const down = (i) => !!(bt[i] && bt[i].pressed);
+  const pressed = (i) => { const d = down(i); const was = padPrev.has(i); return d && !was; };
+
+  // A / cross: jump (held → ascend in fly). Start/A also dismiss title & begin.
+  if (state === "title") {
+    if (pressed(GP.A) || pressed(GP.START)) startGame();
+  } else if (state === "pause") {
+    if (pressed(GP.START)) resumeGame();
+    else if (pressed(GP.A)) resumeGame();
+  } else if (state === "play") {
+    padUp = down(GP.A);
+    // in fly mode, B / circle or L2 descends (mirrors keyboard shift)
+    padDown = player.fly && (down(GP.B) || down(GP.L2));
+
+    if (pressed(GP.START)) pauseGame();
+
+    // Y / triangle: toggle fly (same as F / double-space)
+    if (pressed(GP.Y)) {
+      player.fly = !player.fly; player.vy = 0;
+      toast(player.fly ? "FLY ON" : "FLY OFF");
+    }
+
+    // hotbar: L1 prev, R1 next (wrap); d-pad left/right also cycles
+    if (pressed(GP.L1) || pressed(GP.DLEFT)) selectSlot(player.sel - 1);
+    if (pressed(GP.R1) || pressed(GP.DRIGHT)) selectSlot(player.sel + 1);
+
+    // R2 = break (with held-to-repeat like the mouse hold); L2 = place.
+    // In fly mode L2 is used to descend, so don't also treat it as place.
+    // Only own mineHeld/placeHeld while (or just after) the trigger is engaged,
+    // so a connected-but-idle pad never cancels a mouse-button hold.
+    const r2 = down(GP.R2);
+    if (r2 && !padMineHeld) { doBreak(); mineTimer = CONFIG.mineRepeat; }
+    if (r2 || padMineHeld) mineHeld = r2;
+    padMineHeld = r2;
+    const l2place = down(GP.L2) && !player.fly;
+    if (l2place && !padPlaceHeld) { doPlace(); placeTimer = CONFIG.mineRepeat; }
+    if (l2place || padPlaceHeld) placeHeld = l2place;
+    padPlaceHeld = l2place;
+  }
+
+  // record this frame's button state for next-frame edge detection
+  padPrev.clear();
+  for (let i = 0; i < bt.length; i++) if (down(i)) padPrev.add(i);
+}
+
+function onGamepadConnected() {
+  gamepadActive = true;
+  padPrev.clear();
+  renderHowTo();
+  toast("手柄已连接 — Gamepad connected");
+  audio.unlock();
+}
+function onGamepadDisconnected() {
+  padMoveX = 0; padMoveY = 0; padUp = false; padDown = false;
+  padPrev.clear();
+  if (!firstGamepad()) gamepadActive = false;
+  renderHowTo();
+  toast("手柄已断开 — Gamepad disconnected");
+}
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("gamepadconnected", onGamepadConnected);
+  window.addEventListener("gamepaddisconnected", onGamepadDisconnected);
+}
+
 /* ---------------- §17 GAME FLOW / UI ---------------- */
 function startGame() {
   audio.unlock();
@@ -1769,9 +1885,12 @@ function startGame() {
   if (!touchMode) requestLock();
   audio.ui();
 }
+const elPauseControls = document.getElementById("pauseControls");
+const PAUSE_BASE = elPauseControls ? elPauseControls.innerHTML : "";
 function pauseGame() {
   if (state !== "play") return;
   state = "pause";
+  if (elPauseControls) elPauseControls.innerHTML = PAUSE_BASE + (gamepadActive ? ("<br>" + HOWTO_PAD) : "");
   elPause.style.display = "flex";
   document.body.classList.add("showLink");
   if (document.pointerLockElement === canvas && document.exitPointerLock) document.exitPointerLock();
@@ -1986,6 +2105,8 @@ function frame(tms) {
   if (dt > 0.1) dt = 0.1;
   timeNow = t;
 
+  pollGamepad(dt);
+
   if (state === "play") {
     acc += dt;
     let guard = 0;
@@ -2025,7 +2146,7 @@ function frame(tms) {
     elCoords.textContent =
       "X " + Math.floor(player.x) + "  Y " + Math.floor(player.y) + "  Z " + Math.floor(player.z) +
       (player.fly ? "  [FLY]" : "") + (player.inWater ? "  [SWIM]" : "");
-    if (state === "play" && !touchMode && document.pointerLockElement !== canvas) {
+    if (state === "play" && !touchMode && !gamepadActive && document.pointerLockElement !== canvas) {
       elHint.style.display = "block";
     } else {
       elHint.style.display = "none";
@@ -2045,6 +2166,16 @@ if (typeof globalThis !== "undefined") {
     getSeed: () => seed,
     getEdits: () => edits,
     saveAll, loadAll,
+    // gamepad test surface
+    pollGamepad, gatherInput, physicsStep, currentTarget, doBreak, doPlace,
+    selectSlot, startGame, pauseGame, resumeGame,
+    onGamepadConnected, onGamepadDisconnected,
+    getState: () => state,
+    setState: (s) => { state = s; },
+    isGamepadActive: () => gamepadActive,
+    getSel: () => player.sel,
+    HOTBAR,
+    B_AIR,
   };
 }
 
