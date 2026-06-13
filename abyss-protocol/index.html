@@ -36,12 +36,15 @@
    Single file, zero dependencies, all art & audio procedural.
 
    Controls: WASD / arrows move, mouse aims.
-             Left click / tap  = melee slash
-             Right click / Shift / E = plasma bolt (energy)
+             J / Left click / tap  = melee slash
+             Right Ctrl / Right click / Shift / E = plasma bolt (energy)
+             K (or Q) = freeze nova (ice skill, 12s CD)
              Space = dash (i-frames)
              P or Esc = pause, M = mute.
+             Keyboard-only: if the mouse hasn't moved for ~1.5s,
+             slashes/bolts auto-aim at the nearest enemy.
    Touch:    left half joystick, tap right half = slash,
-             on-screen DASH / BOLT buttons.
+             on-screen DASH / BOLT / FREEZE buttons.
    ============================================================ */
 
 /* ---------------- §B CONFIG ---------------- */
@@ -67,6 +70,10 @@ const CONFIG = Object.freeze({
   dashIfr: 0.27,
   dashCD: 0.95,
   hurtIfr: 0.75,
+  freezeCD: 12,                 // freeze nova cooldown (s)
+  freezeDur: 2.5,               // freeze duration on normals
+  freezeBossDur: 1.2,           // freeze duration on bosses
+  freezeR: 240,                 // freeze nova radius
   hitStop: 0.045,               // s frozen on melee hit
   killStop: 0.075,
   bossEvery: 6,
@@ -279,6 +286,45 @@ class AudioEngine {
     this.tone("sine", 660, 660, t, 0.12, 0.09, true);
     this.tone("sine", 990, 990, t + 0.08, 0.16, 0.08, true);
   }
+  freezeCast() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    // crystalline shimmer: rising glassy arpeggio over icy hiss
+    [1318.5, 1760, 2349.3].forEach((f, i) =>
+      this.tone("sine", f, f * 1.4, t + i * 0.045, 0.3, 0.06, true));
+    this.noise(t, 0.45, 0.09, "highpass", 2600, 7500);
+    this.tone("triangle", 340, 90, t, 0.38, 0.08, true);
+  }
+  shatter() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.15, 0.15, "highpass", 3500, 8000);
+    this.tone("square", 1500, 420, t, 0.08, 0.07, false);
+    this.tone("sine", 2300, 900, t, 0.12, 0.05, true);
+  }
+  bossRoar(kind) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    if (kind === "summoner") {
+      // eerie rising wail + shimmer
+      this.tone("sawtooth", 90, 340, t, 0.8, 0.2, true);
+      this.tone("sine", 1100, 1900, t + 0.1, 0.6, 0.06, true);
+      this.noise(t, 0.7, 0.14, "bandpass", 500, 2400);
+    } else if (kind === "artillery") {
+      // klaxon two-tone alert
+      this.tone("square", 240, 240, t, 0.22, 0.15, true);
+      this.tone("square", 170, 170, t + 0.26, 0.22, 0.15, true);
+      this.tone("square", 240, 240, t + 0.52, 0.3, 0.15, true);
+      this.noise(t, 0.9, 0.12, "lowpass", 1400, 200);
+    } else if (kind === "splitter") {
+      // guttural double bellow
+      this.tone("sawtooth", 60, 28, t, 0.9, 0.24, true);
+      this.tone("sawtooth", 88, 40, t + 0.18, 0.8, 0.2, true);
+      this.noise(t, 1.0, 0.2, "lowpass", 700, 60);
+    } else {
+      this.roar();
+    }
+  }
   death() {
     if (!this.ok()) return;
     const t = this.ctx.currentTime;
@@ -334,12 +380,20 @@ function saveMeta() {
   store.set("meta", JSON.stringify(meta));
 }
 
+/* unlimited training: no level caps; costs scale geometrically (~x1.4/level) */
 const META_UPGRADES = [
-  { id: "hp",   name: "REINFORCED CHASSIS", desc: "+15 max HP per level",        max: 5, cost: (l) => 30 + l * 30 },
-  { id: "dmg",  name: "WEAPON CALIBRATION", desc: "+10% all damage per level",   max: 5, cost: (l) => 35 + l * 35 },
-  { id: "dash", name: "AUX THRUSTER",       desc: "+1 dash charge",              max: 2, cost: (l) => 90 + l * 110 },
-  { id: "boon", name: "BOOT PROTOCOL",      desc: "Start runs with a boon choice", max: 1, cost: () => 150 },
+  { id: "hp",   name: "REINFORCED CHASSIS", desc: "+15 max HP per level",                              base: 30 },
+  { id: "dmg",  name: "WEAPON CALIBRATION", desc: "+10% all damage per level",                         base: 35 },
+  { id: "dash", name: "AUX THRUSTER",       desc: "+1 dash charge (to +4), then +5% recharge / level", base: 90 },
+  { id: "boon", name: "BOOT PROTOCOL",      desc: "Lv1: start runs with a boon choice · +1 boon reroll per extra level", base: 150 },
 ];
+function metaCost(u, lv) { return Math.round(u.base * Math.pow(1.4, lv)); }
+function fmtNum(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e4) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1).replace(/\.0$/, "") + "k";
+  return String(n);
+}
 
 /* ---------------- §F BOONS ---------------- */
 const BOONS = [
@@ -357,6 +411,8 @@ const BOONS = [
   { id: "over",  name: "OVERCHARGE",    desc: "+35% bolt damage, +40% energy regen", col: "#ff44ff", glyph: "⚡", max: 3 },
   { id: "swift", name: "SERVO BOOST",   desc: "+12% move speed",                     col: "#88ff88", glyph: "»", max: 2 },
   { id: "wind",  name: "NANO REPAIR",   desc: "Restore 12 HP on room clear",         col: "#66ff99", glyph: "+", max: 2 },
+  { id: "shatter", name: "DEEP FREEZE", desc: "Frozen enemies take +40% damage",     col: "#aaeeff", glyph: "❄", max: 2 },
+  { id: "cryo",  name: "CRYO LOOP",     desc: "Freeze nova cooldown -25%",           col: "#cfeeff", glyph: "◇", max: 2 },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -369,6 +425,10 @@ let enemies = [], pbolts = [], ebolts = [], parts = [], dnums = [], beams = [];
 let pillars = [], doors = [], pickups = [], spawnQ = [], zones = [], toasts = [];
 let waves = [], waveIdx = 0, roomClear = false, boss = null;
 let freezeT = 0, shakeT = 0, shakeA = 0, redFlash = 0, roomFade = 0;
+let mortars = [], novas = [], pedestals = [];
+let shopRoom = false, pendingShop = false, lastShopDepth = 0;
+let bossName = "", bossBarMax = 0, lastBossKind = "";
+let rerollsLeft = 0, boonReturnToPlay = false;
 let boonChoices = [], boonFromStart = false;
 let uiRects = [];
 let touchUI = window.matchMedia && matchMedia("(pointer: coarse)").matches;
@@ -388,6 +448,17 @@ let lastDir = { x: 1, y: 0 };
 let slashBuf = 0;     // buffered slash request (s)
 let boltHeld = false; // touch bolt button
 let dashBuf = 0;
+let freezeBuf = 0;    // buffered freeze nova request (s)
+const nowMs = () => performance.now();
+let lastMouseT = nowMs();
+function mouseIdle() { return nowMs() - lastMouseT > 1500; }
+/* keyboard auto-aim: nearest enemy, else last movement direction */
+function kbAutoAim() {
+  if (!player) return;
+  const ne = nearestEnemy(player.x, player.y);
+  if (ne) player.aim = angTo(player.x, player.y, ne.x, ne.y);
+  else player.aim = Math.atan2(lastDir.y, lastDir.x);
+}
 
 function anyStart() {
   audio.unlock();
@@ -399,6 +470,9 @@ function anyStart() {
 window.addEventListener("keydown", (e) => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) e.preventDefault();
+  // Right Ctrl = ranged bolt ("ControlRight" code, with location fallback)
+  const isRCtrl = e.code === "ControlRight" || (e.key === "Control" && e.location === 2);
+  if (isRCtrl) { e.preventDefault(); keys["ctrlRight"] = true; }
   audio.unlock();
   if (k === "m") { audio.toggleMute(); return; }
   if (state === "title" || state === "summary") { anyStart(); return; }
@@ -412,6 +486,7 @@ window.addEventListener("keydown", (e) => {
   if (state === "boon") {
     const n = parseInt(k, 10);
     if (n >= 1 && n <= boonChoices.length) pickBoon(n - 1);
+    if (k === "r" && rerollsLeft > 0) rerollBoons();
     return;
   }
   if (state === "shop") {
@@ -422,6 +497,8 @@ window.addEventListener("keydown", (e) => {
   }
   keys[k] = true;
   if (k === " ") dashBuf = 0.15;
+  if (k === "j") slashBuf = 0.12;
+  if (k === "k" || k === "q") freezeBuf = 0.18;
   if (state === "hub" && (k === "e" || k === "Enter")) {
     if (player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) { openShop(); return; }
   }
@@ -429,6 +506,7 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("keyup", (e) => {
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   keys[k] = false;
+  if (e.code === "ControlRight" || e.key === "Control") keys["ctrlRight"] = false;
 });
 window.addEventListener("blur", () => {
   for (const k in keys) keys[k] = false;
@@ -436,10 +514,10 @@ window.addEventListener("blur", () => {
 });
 
 canvas.addEventListener("contextmenu", (e) => e.preventDefault());
-canvas.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
+canvas.addEventListener("mousemove", (e) => { mouse.x = e.clientX; mouse.y = e.clientY; lastMouseT = nowMs(); });
 canvas.addEventListener("mousedown", (e) => {
   audio.unlock();
-  mouse.x = e.clientX; mouse.y = e.clientY;
+  mouse.x = e.clientX; mouse.y = e.clientY; lastMouseT = nowMs();
   if (state === "title" || state === "summary") { anyStart(); return; }
   if (paused) { paused = false; return; }
   if (state === "boon" || state === "shop") { uiClick(e.clientX, e.clientY); return; }
@@ -460,6 +538,7 @@ window.addEventListener("mouseup", (e) => {
 /* touch: left half joystick; right half tap = slash; on-canvas buttons */
 function dashBtnPos() { return { x: cw - 64 * us(), y: ch - 64 * us(), r: 44 * us() }; }
 function boltBtnPos() { return { x: cw - 150 * us(), y: ch - 110 * us(), r: 36 * us() }; }
+function freezeBtnPos() { return { x: cw - 236 * us(), y: ch - 60 * us(), r: 32 * us() }; }
 const touches = {}; // id -> {role, x, y}
 
 canvas.addEventListener("touchstart", (e) => {
@@ -477,6 +556,10 @@ canvas.addEventListener("touchstart", (e) => {
     }
     if (dist(x, y, bb.x, bb.y) < bb.r + 10) {
       touches[t.identifier] = { role: "bolt" }; boltHeld = true; continue;
+    }
+    const fb = freezeBtnPos();
+    if (dist(x, y, fb.x, fb.y) < fb.r + 10) {
+      touches[t.identifier] = { role: "freeze" }; freezeBuf = 0.18; continue;
     }
     if (x < cw * 0.45 && joy.id === -1) {
       joy.id = t.identifier; joy.bx = x; joy.by = y; joy.dx = 0; joy.dy = 0;
@@ -558,6 +641,7 @@ function toast(txt, col) { toasts.push({ txt, col: col || "#5ee6ff", t: 2.2 }); 
 /* ---------------- §J PLAYER ---------------- */
 function newPlayer() {
   const maxHp = CONFIG.playerHP + meta.hp * 15;
+  const dashes = 1 + Math.min(meta.dash || 0, 4); // dash charges capped; extra levels = recharge speed
   return {
     x: CONFIG.arenaW / 2, y: CONFIG.arenaH - 90,
     vx: 0, vy: 0, r: CONFIG.playerR, aim: -Math.PI / 2,
@@ -565,16 +649,19 @@ function newPlayer() {
     energy: CONFIG.energyMax, maxEnergy: CONFIG.energyMax,
     slashT: 0, slashCD: 0, slashSide: 1, slashAng: 0,
     boltCD: 0,
-    dashT: 0, dashCD: 0, dashCharges: 1 + meta.dash, dashMax: 1 + meta.dash,
+    dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
     ifr: 0, hurtT: 0, trail: [], trailT: 0,
+    freezeCD: 0, freezeCDMax: 0, buyCD: 0,
+    meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
     boons: {},
   };
 }
 function boonLv(id) { return (player && player.boons[id]) || 0; }
 function dmgMul() { return 1 + meta.dmg * 0.10; }
-function meleeDamage() { return CONFIG.meleeDmg * dmgMul() * (1 + boonLv("blade") * 0.35); }
-function boltDamage() { return CONFIG.boltDmg * dmgMul() * (1 + boonLv("over") * 0.35); }
+function dashRegenMul() { return 1 + 0.05 * Math.max(0, (meta.dash || 0) - 4); }
+function meleeDamage() { return CONFIG.meleeDmg * dmgMul() * (1 + boonLv("blade") * 0.35) * player.meleeMul; }
+function boltDamage() { return CONFIG.boltDmg * dmgMul() * (1 + boonLv("over") * 0.35) * player.boltMul; }
 function critRoll() { return Math.random() < boonLv("crit") * 0.15; }
 
 function applyBoon(id) {
@@ -599,13 +686,21 @@ function pickBoon(i) {
   if (i < 0 || i >= boonChoices.length) return;
   applyBoon(boonChoices[i].id);
   boonChoices = [];
+  if (boonReturnToPlay) { boonReturnToPlay = false; state = "play"; return; } // bought at shop
   if (boonFromStart) { boonFromStart = false; nextRoom(); }
   else nextRoom();
 }
+function rerollBoons() {
+  if (rerollsLeft <= 0) return;
+  rerollsLeft--;
+  boonChoices = rollBoons();
+  audio.uiSnd();
+}
 
 /* ---------------- §K ENEMIES ---------------- */
-function hpMul() { return 1 + (depth - 1) * 0.17; }
-function eDmgMul() { return 1 + (depth - 1) * 0.07; }
+/* difficulty keeps climbing harder past depth 12 to keep unlimited training honest */
+function hpMul() { return 1 + (depth - 1) * 0.17 + Math.max(0, depth - 12) * 0.06; }
+function eDmgMul() { return 1 + (depth - 1) * 0.07 + Math.max(0, depth - 12) * 0.03; }
 
 const ENEMY_DEFS = {
   chaser:  { r: 14, hp: 30, speed: 116, col: "#ff5577", cost: 1.5 },
@@ -623,28 +718,75 @@ function spawnEnemy(type, x, y) {
     flash: 0, kbx: 0, kby: 0,
     state: "seek", t: rand(0, 1), cd: rand(0.4, 1.4),
     dirX: 0, dirY: 0, phase: rand(0, TAU), strafe: Math.random() < 0.5 ? 1 : -1,
-    contactCD: 0, spawnT: 0.25,
+    contactCD: 0, spawnT: 0.25, frozenT: 0,
   };
   enemies.push(e);
   burst(x, y, d.col, 10, 160, 0.4, 2.5);
   return e;
 }
 
-function spawnBoss() {
+/* boss roster: rotated/randomized each boss room; depth 18+ spawns hard variants */
+const BOSS_KINDS = [
+  { kind: "warden",    name: "THE WARDEN",    col: "#ff3366", r: 44, hp: 420, speed: 60 },
+  { kind: "summoner",  name: "VOIDCALLER",    col: "#bb66ff", r: 36, hp: 360, speed: 72 },
+  { kind: "artillery", name: "LANCE-7",       col: "#ff8833", r: 38, hp: 380, speed: 55 },
+  { kind: "splitter",  name: "MITOSIS PRIME", col: "#66ff88", r: 52, hp: 470, speed: 50 },
+];
+
+function spawnBoss(forceKind) {
   const tier = Math.floor(depth / CONFIG.bossEvery);
+  const hard = depth >= 18;
+  let def = forceKind ? BOSS_KINDS.find((b) => b.kind === forceKind) : null;
+  if (!def) {
+    const pool = BOSS_KINDS.filter((b) => b.kind !== lastBossKind);
+    def = pick(pool.length ? pool : BOSS_KINDS);
+  }
+  lastBossKind = def.kind;
+  const hp = Math.round(def.hp * (1 + (tier - 1) * 0.75) * (hard ? 1.25 : 1));
   boss = {
-    type: "boss", x: CONFIG.arenaW / 2, y: 150, vx: 0, vy: 0, r: 44,
-    hp: 420 * (1 + (tier - 1) * 0.75), maxHp: 420 * (1 + (tier - 1) * 0.75),
-    col: "#ff3366", speed: 60 + tier * 6,
+    type: "boss", kind: def.kind, name: def.name,
+    x: CONFIG.arenaW / 2, y: 150, vx: 0, vy: 0, r: def.r,
+    hp, maxHp: hp,
+    col: def.col, speed: def.speed + tier * 6,
     flash: 0, kbx: 0, kby: 0,
     state: "move", t: 0, cd: 1.6, atk: 0,
     dirX: 0, dirY: 0, phase: 0, sub: 0, rot: 0,
-    contactCD: 0, spawnT: 0.4, tier,
+    contactCD: 0, spawnT: 0.4, tier, hard, gen: 0, frozenT: 0,
+    strafe: Math.random() < 0.5 ? 1 : -1, tx: 0, ty: 0,
   };
+  bossName = def.name; bossBarMax = hp;
   enemies.push(boss);
-  audio.roar();
+  audio.bossRoar(def.kind);
   shake(10, 0.5);
   bossWarnT = 2.0;
+}
+
+/* Splitter: at 50% HP it divides into two smaller copies (each splits once more) */
+function splitBoss(e) {
+  const childHp = Math.max(1, e.hp / 2);
+  for (let i = 0; i < 2; i++) {
+    const a = rand(0, TAU);
+    enemies.push({
+      type: "boss", kind: "splitter", name: e.name,
+      x: clamp(e.x + Math.cos(a) * (e.r + 14), 60, CONFIG.arenaW - 60),
+      y: clamp(e.y + Math.sin(a) * (e.r + 14), 60, CONFIG.arenaH - 60),
+      vx: Math.cos(a) * 160, vy: Math.sin(a) * 160,
+      r: Math.max(16, e.r * 0.72),
+      hp: childHp, maxHp: childHp,
+      col: e.col, speed: e.speed * 1.3,
+      flash: 0, kbx: 0, kby: 0,
+      state: "move", t: 0, cd: rand(0.8, 1.3), atk: 0,
+      dirX: 0, dirY: 0, phase: rand(0, TAU), sub: 0, rot: rand(0, TAU),
+      contactCD: 0, spawnT: 0.2, tier: e.tier, hard: e.hard,
+      gen: e.gen + 1, frozenT: 0, strafe: 1, tx: 0, ty: 0,
+    });
+  }
+  burst(e.x, e.y, e.col, 36, 320, 0.8, 4);
+  audio.bossRoar("splitter");
+  shake(9, 0.4);
+  toast("IT SPLITS!", e.col);
+  e.hp = -1;
+  if (e === boss) boss = null;
 }
 
 function nearestEnemy(x, y, maxD) {
@@ -659,7 +801,13 @@ function nearestEnemy(x, y, maxD) {
 
 function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (e.hp <= 0) return;
-  const final = Math.round(dmg * (isCrit ? 2.5 : 1));
+  let mul = isCrit ? 2.5 : 1;
+  if (e.frozenT > 0) { // shatter: frozen targets take bonus damage
+    mul *= 1.3 + 0.4 * boonLv("shatter") + (player ? player.frozenBonus : 0);
+    burst(e.x, e.y, "#cfeeff", 10, 230, 0.45, 3);
+    audio.shatter();
+  }
+  const final = Math.round(dmg * mul);
   e.hp -= final;
   e.flash = 0.12;
   const kbScale = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.3 : 1);
@@ -689,8 +837,8 @@ function killEnemy(e) {
     player.dashCharges = Math.min(player.dashMax, player.dashCharges + 1);
     player.dashCD = 0;
   }
-  // core drops
-  let n = e.type === "boss" ? randi(14, 18) : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
+  // core drops (splitter fragments drop a share each)
+  let n = e.type === "boss" ? (e.gen ? randi(3, 5) : randi(14, 18)) : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
   while (n-- > 0) {
     pickups.push({ kind: "core", x: e.x, y: e.y, vx: rand(-120, 120), vy: rand(-120, 120), t: 12 });
   }
@@ -824,11 +972,23 @@ function queueWave(list) {
 
 function genRoom() {
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
-  pickups = []; boss = null; roomClear = false; waveIdx = 0;
+  pickups = []; mortars = []; novas = []; pedestals = []; boss = null;
+  roomClear = false; waveIdx = 0; shopRoom = false;
   player.x = CONFIG.arenaW / 2; player.y = CONFIG.arenaH - 90;
   player.vx = 0; player.vy = 0;
   roomFade = 1;
-  if (isBossDepth(depth)) {
+  if (pendingShop) {
+    // Charon-style shop room: combat-free, pedestals priced in cores
+    pendingShop = false;
+    shopRoom = true;
+    lastShopDepth = depth;
+    pillars = [];
+    waves = [];
+    pedestals = makeShopStock();
+    roomClear = true;
+    openDoors(true);
+    toast("PROVISIONER — 商店 — spend cores on wares", "#ffd966");
+  } else if (isBossDepth(depth)) {
     genPillars(randi(0, 2));
     waves = [["boss"]];
     spawnBoss();
@@ -854,9 +1014,10 @@ const DOOR_REWARDS = {
   hp:     { col: "#ff6677", label: "+MAX HP" },
   energy: { col: "#ff66ee", label: "+ENERGY" },
   cores:  { col: "#ffcc44", label: "CORES" },
+  shop:   { col: "#ffd966", label: "SHOP" },
 };
 
-function openDoors() {
+function openDoors(quiet) {
   const A = CONFIG;
   const n = randi(2, 3);
   const rewards = [];
@@ -867,6 +1028,10 @@ function openDoors() {
     others.splice(others.indexOf(r), 1);
     rewards.push(r);
   }
+  // SHOP door every ~4-5 depths (never right before/at a boss room)
+  if (!shopRoom && !isBossDepth(depth + 1) && depth + 1 - lastShopDepth >= 4) {
+    if (depth + 1 - lastShopDepth >= 5 || Math.random() < 0.55) rewards[rewards.length - 1] = "shop";
+  }
   const spacing = A.arenaW / (n + 1);
   for (let i = 0; i < n; i++) {
     doors.push({
@@ -876,7 +1041,7 @@ function openDoors() {
     });
   }
   audio.door();
-  toast("ROOM CLEAR — CHOOSE A DOOR", "#5ee6ff");
+  if (!quiet) toast("ROOM CLEAR — CHOOSE A DOOR", "#5ee6ff");
 }
 
 function enterDoor(d) {
@@ -894,11 +1059,77 @@ function enterDoor(d) {
     cores += n; runCores += n; saveMeta();
     toast("+" + n + " CORES", "#ffcc44"); audio.pickupSnd();
     nextRoom();
+  } else if (r === "shop") {
+    pendingShop = true;
+    nextRoom();
   } else {
     boonChoices = rollBoons();
     if (boonChoices.length) state = "boon";
     else nextRoom();
   }
+}
+
+/* ---------------- §M2 IN-RUN SHOP (Charon style) ---------------- */
+const SHOP_ITEMS = [
+  { id: "heal",  name: "REPAIR KIT",     desc: "heal 40% HP",                col: "#66ff99", glyph: "+", price: () => 18 + Math.floor(depth * 1.6) },
+  { id: "maxhp", name: "HULL PLATING",   desc: "+20 max HP this run",        col: "#ff6677", glyph: "▣", price: () => 26 + Math.floor(depth * 1.8) },
+  { id: "boon",  name: "PROTOCOL CACHE", desc: "gain a random boon",         col: "#5ee6ff", glyph: "◆", price: () => 34 + Math.floor(depth * 2) },
+  { id: "dash",  name: "AUX CELL",       desc: "+1 dash charge this run",    col: "#5ee6ff", glyph: "»", price: () => 32 + Math.floor(depth * 2) },
+  { id: "fcd",   name: "CRYO CAPACITOR", desc: "freeze cooldown -25%",       col: "#aaeeff", glyph: "❄", price: () => 24 + Math.floor(depth * 1.6) },
+  { id: "fdmg",  name: "SHATTER EDGE",   desc: "frozen foes take +40% dmg",  col: "#aaeeff", glyph: "✸", price: () => 24 + Math.floor(depth * 1.6) },
+  { id: "bolt",  name: "BOLT AMP",       desc: "+25% bolt damage this run",  col: "#ff66ee", glyph: "⚡", price: () => 28 + Math.floor(depth * 1.8) },
+  { id: "melee", name: "EDGE AMP",       desc: "+25% melee damage this run", col: "#66ffff", glyph: "▲", price: () => 28 + Math.floor(depth * 1.8) },
+];
+
+function makeShopStock() {
+  const pool = SHOP_ITEMS.slice();
+  const n = randi(3, 4);
+  const out = [];
+  while (out.length < n && pool.length) {
+    out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  }
+  return out.map((it, i) => ({
+    x: CONFIG.arenaW * (i + 1) / (out.length + 1),
+    y: CONFIG.arenaH * 0.52,
+    item: it, price: it.price(), sold: false,
+  }));
+}
+
+function pedestalUnder() {
+  if (!player) return null;
+  for (const pd of pedestals) {
+    if (!pd.sold && dist(player.x, player.y, pd.x, pd.y) < 36) return pd;
+  }
+  return null;
+}
+
+function tryBuyPedestal(pd) {
+  const p = player;
+  if (p.buyCD > 0) return;
+  p.buyCD = 0.35;
+  if (cores < pd.price) { audio.deny(); toast("NOT ENOUGH CORES", "#ff5566"); return; }
+  cores -= pd.price;
+  saveMeta(); // sync spend with persistent store
+  pd.sold = true;
+  applyShopItem(pd.item);
+  audio.buy();
+  burst(pd.x, pd.y, pd.item.col, 22, 220, 0.6, 3);
+  toast(pd.item.name, pd.item.col);
+}
+
+function applyShopItem(it) {
+  const p = player;
+  if (it.id === "heal") p.hp = Math.min(p.maxHp, p.hp + Math.round(p.maxHp * 0.4));
+  else if (it.id === "maxhp") { p.maxHp += 20; p.hp += 20; }
+  else if (it.id === "boon") {
+    boonChoices = rollBoons().slice(0, 1);
+    if (boonChoices.length) { boonReturnToPlay = true; state = "boon"; }
+  }
+  else if (it.id === "dash") { p.dashMax++; p.dashCharges++; }
+  else if (it.id === "fcd") p.freezeCDMul *= 0.75;
+  else if (it.id === "fdmg") p.frozenBonus += 0.4;
+  else if (it.id === "bolt") p.boltMul += 0.25;
+  else if (it.id === "melee") p.meleeMul += 0.25;
 }
 
 /* ---------------- §N HUB / RUN FLOW ---------------- */
@@ -910,12 +1141,15 @@ function enterHub() {
   player.x = CONFIG.arenaW / 2; player.y = CONFIG.arenaH * 0.62;
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; pillars = []; boss = null; toasts = [];
+  mortars = []; novas = []; pedestals = []; shopRoom = false; pendingShop = false;
   roomFade = 1;
   audio.uiSnd();
 }
 
 function startRun() {
   kills = 0; runCores = 0; roomsCleared = 0; depth = 0;
+  lastShopDepth = 0; pendingShop = false; boonReturnToPlay = false;
+  rerollsLeft = Math.max(0, (meta.boon || 0) - 1);
   player = newPlayer(); // fresh boons each run
   if (meta.boon > 0) {
     boonChoices = rollBoons();
@@ -930,8 +1164,7 @@ function openShop() { state = "shop"; audio.uiSnd(); }
 function closeShop() { state = "hub"; audio.uiSnd(); }
 function buyMeta(u) {
   const lv = meta[u.id] || 0;
-  if (lv >= u.max) { audio.deny(); return; }
-  const c = u.cost(lv);
+  const c = metaCost(u, lv); // no level cap — geometric cost growth
   if (cores < c) { audio.deny(); toast("NOT ENOUGH CORES", "#ff5566"); return; }
   cores -= c;
   meta[u.id] = lv + 1;
@@ -940,7 +1173,7 @@ function buyMeta(u) {
   toast(u.name + " LV " + (lv + 1), "#ffcc44");
   // live-apply to hub player
   if (u.id === "hp") { player.maxHp += 15; player.hp += 15; }
-  if (u.id === "dash") { player.dashMax++; player.dashCharges++; }
+  if (u.id === "dash" && meta.dash <= 4) { player.dashMax++; player.dashCharges++; }
 }
 
 /* ---------------- §O COLLISION ---------------- */
@@ -982,7 +1215,12 @@ function moveInput() {
 
 function trySlash() {
   const p = player;
+  if (shopRoom && state === "play") {       // slash doubles as interact/buy in shop rooms
+    const pd = pedestalUnder();
+    if (pd) { tryBuyPedestal(pd); return; }
+  }
   if (p.slashCD > 0 || p.dashT > 0) return;
+  if (!touchUI && mouseIdle()) kbAutoAim(); // keyboard-only: snap aim to nearest enemy
   p.slashCD = CONFIG.meleeCD;
   p.slashT = CONFIG.slashDur;
   p.slashSide *= -1;
@@ -1035,8 +1273,29 @@ function tryBolt() {
   if (touchUI && !mouseActive) {
     const near = nearestEnemy(p.x, p.y, 520);
     if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
+  } else if (mouseIdle()) {
+    kbAutoAim(); // keyboard-only bolt: auto-aim
   }
   firePlayerBolt();
+}
+
+function tryFreeze() {
+  const p = player;
+  if (!p || p.hp <= 0 || p.freezeCD > 0) return;
+  freezeBuf = 0;
+  const cd = CONFIG.freezeCD * p.freezeCDMul * Math.pow(0.75, boonLv("cryo"));
+  p.freezeCD = cd; p.freezeCDMax = cd;
+  novas.push({ x: p.x, y: p.y, t: 0.5, tm: 0.5, maxR: CONFIG.freezeR });
+  audio.freezeCast();
+  shake(3, 0.15);
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    if (dist(p.x, p.y, e.x, e.y) < CONFIG.freezeR + e.r) {
+      e.frozenT = e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur;
+      e.vx = 0; e.vy = 0;
+      burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
+    }
+  }
 }
 
 function tryDash() {
@@ -1061,8 +1320,8 @@ canvas.addEventListener("mousemove", () => { mouseActive = true; });
 
 function updatePlayer(dt) {
   const p = player;
-  // aim
-  if (!touchUI || mouseActive) {
+  // aim (mouse aim only while the mouse is "recent" — keyboard auto-aim otherwise)
+  if ((!touchUI || mouseActive) && !mouseIdle()) {
     p.aim = angTo(p.x, p.y, s2wX(mouse.x), s2wY(mouse.y));
   } else if (joy.id !== -1 && Math.hypot(joy.dx, joy.dy) > 0.25) {
     const near = nearestEnemy(p.x, p.y, 380);
@@ -1075,10 +1334,13 @@ function updatePlayer(dt) {
   p.boltCD = Math.max(0, p.boltCD - dt);
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
+  p.freezeCD = Math.max(0, p.freezeCD - dt);
+  p.buyCD = Math.max(0, p.buyCD - dt);
   slashBuf = Math.max(0, slashBuf - dt);
   dashBuf = Math.max(0, dashBuf - dt);
+  freezeBuf = Math.max(0, freezeBuf - dt);
   if (p.dashCharges < p.dashMax) {
-    p.dashCD -= dt;
+    p.dashCD -= dt * dashRegenMul();
     if (p.dashCD <= 0) {
       p.dashCharges++;
       if (p.dashCharges < p.dashMax) p.dashCD = CONFIG.dashCD;
@@ -1089,9 +1351,10 @@ function updatePlayer(dt) {
 
   // actions
   if (slashBuf > 0) { trySlash(); if (p.slashT > 0) slashBuf = 0; }
-  if (mouse.left && p.slashCD <= 0) trySlash();
-  if ((mouse.right || keys["Shift"] || keys["e"] || boltHeld) && state === "play") tryBolt();
+  if ((mouse.left || keys["j"]) && p.slashCD <= 0) trySlash();
+  if ((mouse.right || keys["Shift"] || keys["ctrlRight"] || keys["e"] || boltHeld) && state === "play") tryBolt();
   if (boltHeld && state === "hub") tryBolt();
+  if (freezeBuf > 0) tryFreeze();
   if (dashBuf > 0) { const had = p.dashT; tryDash(); if (p.dashT > 0 && !had) dashBuf = 0; }
 
   // movement
@@ -1170,6 +1433,16 @@ function updateEnemy(e, dt) {
   e.flash = Math.max(0, e.flash - dt);
   e.spawnT = Math.max(0, e.spawnT - dt);
   if (e.spawnT > 0) return;
+  // frozen: no movement, no attacks — cheap early-out
+  if (e.frozenT > 0) {
+    e.frozenT -= dt;
+    e.kbx *= Math.pow(0.0001, dt); e.kby *= Math.pow(0.0001, dt);
+    if (Math.random() < dt * 5) {
+      addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: 0, vy: 26, t: 0.4, tm: 0.4, col: "#bfe8ff", r: rand(1.5, 3), drag: 0 });
+    }
+    collideArena(e);
+    return;
+  }
   // knockback decay
   e.x += e.kbx * dt; e.y += e.kby * dt;
   e.kbx *= Math.pow(0.0001, dt); e.kby *= Math.pow(0.0001, dt);
@@ -1249,7 +1522,10 @@ function updateEnemy(e, dt) {
     e.vy = (v.y + v.x * wob) * e.speed * 0.72;
     enemyContact(e, 6, dt);
   } else if (e.type === "boss") {
-    updateBoss(e, dt, d);
+    if (e.kind === "summoner") updateBossSummoner(e, dt, d);
+    else if (e.kind === "artillery") updateBossArtillery(e, dt, d);
+    else if (e.kind === "splitter") updateBossSplitter(e, dt, d);
+    else updateBoss(e, dt, d);
   }
 
   e.x += e.vx * dt; e.y += e.vy * dt;
@@ -1271,6 +1547,7 @@ function updateBoss(e, dt, d) {
   e.rot += dt * (e.state === "radial" ? 6 : 1.2);
   const p = player;
   const phase2 = e.hp < e.maxHp * 0.5;
+  const cdm = e.hard ? 0.75 : 1; // hard variant: faster pattern cycling
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     const v = seekVec(e, p.x, p.y);
@@ -1288,8 +1565,8 @@ function updateBoss(e, dt, d) {
     e.vx *= 0.92; e.vy *= 0.92;
     e.t -= dt;
     if (e.t <= 0) {
-      const volleys = phase2 ? 4 : 3;
-      const n = 16 + e.tier * 2;
+      const volleys = (phase2 ? 4 : 3) + (e.hard ? 1 : 0);
+      const n = 16 + e.tier * 2 + (e.hard ? 4 : 0);
       const baseA = e.rot + e.sub * 0.13;
       for (let i = 0; i < n; i++) {
         fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 165 + e.tier * 12, 10, "#ff3366", 7);
@@ -1297,7 +1574,7 @@ function updateBoss(e, dt, d) {
       audio.bolt();
       shake(4, 0.15);
       e.sub++;
-      if (e.sub >= volleys) { e.state = "move"; e.cd = phase2 ? 1.5 : 2.2; }
+      if (e.sub >= volleys) { e.state = "move"; e.cd = (phase2 ? 1.5 : 2.2) * cdm; }
       else e.t = 0.42;
     }
   } else if (e.state === "aim") {
@@ -1315,7 +1592,7 @@ function updateBoss(e, dt, d) {
     addPart({ x: e.x + rand(-20, 20), y: e.y + rand(-20, 20), vx: 0, vy: 0, t: 0.3, tm: 0.3, col: "#ff3366", r: rand(2, 5), drag: 1 });
     const A = CONFIG;
     if (e.x < 70 || e.x > A.arenaW - 70 || e.y < 70 || e.y > A.arenaH - 70 || e.t <= 0) {
-      e.state = "move"; e.cd = phase2 ? 1.2 : 1.9;
+      e.state = "move"; e.cd = (phase2 ? 1.2 : 1.9) * cdm;
       e.vx *= 0.2; e.vy *= 0.2;
       shake(6, 0.25);
     }
@@ -1330,10 +1607,199 @@ function updateBoss(e, dt, d) {
         const y = clamp(e.y + Math.sin(a) * 110, 50, CONFIG.arenaH - 50);
         spawnQ.push({ type: Math.random() < 0.75 ? "swarmer" : "chaser", x, y, t: 0.8 });
       }
-      e.state = "move"; e.cd = phase2 ? 2.0 : 3.0;
+      // hard pairing: a radial burst alongside the summon
+      if (e.hard) {
+        for (let i = 0; i < 12; i++) fireEbolt(e.x, e.y, (i / 12) * TAU + e.rot, 170, 9, "#ff3366", 6);
+      }
+      e.state = "move"; e.cd = (phase2 ? 2.0 : 3.0) * cdm;
     }
   }
   enemyContact(e, 14, dt);
+}
+
+/* --- VOIDCALLER: teleports, spawns adds, radial bursts --- */
+function updateBossSummoner(e, dt, d) {
+  const p = player;
+  const phase2 = e.hp < e.maxHp * 0.5;
+  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1);
+  e.rot += dt * 2.2;
+  e.cd = Math.max(0, e.cd - dt);
+  if (e.state === "move") {
+    const v = seekVec(e, p.x, p.y);
+    const want = d > 330 ? 0.8 : (d < 230 ? -0.9 : 0.1);
+    e.vx = lerp(e.vx, (v.x * want - v.y * 0.6 * e.strafe) * e.speed, 3 * dt);
+    e.vy = lerp(e.vy, (v.y * want + v.x * 0.6 * e.strafe) * e.speed, 3 * dt);
+    if (Math.random() < dt * 0.3) e.strafe *= -1;
+    if (e.cd <= 0) {
+      e.atk = (e.atk + 1) % 3;
+      e.sub = 0;
+      if (e.atk === 0) {
+        e.state = "tele"; e.t = 0.55;
+        let tx = 0, ty = 0, tries = 0;
+        do {
+          const a = rand(0, TAU), rr = rand(200, 340);
+          tx = clamp(p.x + Math.cos(a) * rr, 70, CONFIG.arenaW - 70);
+          ty = clamp(p.y + Math.sin(a) * rr, 70, CONFIG.arenaH - 70);
+        } while (pointInPillar(tx, ty, e.r) && tries++ < 20);
+        e.tx = tx; e.ty = ty;
+      } else if (e.atk === 1) {
+        e.state = "summon"; e.t = 0.9;
+        audio.bossRoar("summoner");
+      } else {
+        e.state = "burst"; e.t = 0.7;
+      }
+    }
+  } else if (e.state === "tele") {
+    e.vx *= 0.85; e.vy *= 0.85;
+    e.t -= dt;
+    if (e.t <= 0) {
+      burst(e.x, e.y, e.col, 18, 240, 0.5, 3);
+      e.x = e.tx; e.y = e.ty;
+      burst(e.x, e.y, e.col, 24, 260, 0.6, 3);
+      audio.dash();
+      const n = 8 + e.tier * 2 + (e.hard ? 4 : 0); // arrival burst (hard pairing: denser)
+      const a0 = angTo(e.x, e.y, p.x, p.y);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, a0 + (i / n) * TAU, 185 + e.tier * 10, 9, e.col, 6);
+      audio.bolt();
+      e.state = "move"; e.cd = rand(1.3, 1.8) * cdm;
+    }
+  } else if (e.state === "summon") {
+    e.vx *= 0.88; e.vy *= 0.88;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const n = (phase2 ? 4 : 3) + (e.hard ? 1 : 0);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU + e.rot;
+        const x = clamp(e.x + Math.cos(a) * 120, 50, CONFIG.arenaW - 50);
+        const y = clamp(e.y + Math.sin(a) * 120, 50, CONFIG.arenaH - 50);
+        spawnQ.push({ type: Math.random() < 0.5 ? "swarmer" : (Math.random() < 0.6 ? "chaser" : "shooter"), x, y, t: 0.8 });
+      }
+      e.state = "move"; e.cd = rand(2.2, 3.0) * cdm;
+    }
+  } else if (e.state === "burst") {
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const volleys = phase2 ? 3 : 2;
+      const n = 12 + e.tier * 2;
+      const baseA = e.rot * 3 + e.sub * 0.21;
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 170 + e.tier * 10, 10, e.col, 6);
+      audio.bolt();
+      shake(3, 0.12);
+      e.sub++;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.8, 2.4) * cdm; }
+      else e.t = 0.4;
+    }
+  }
+  enemyContact(e, 12, dt);
+}
+
+/* --- LANCE-7: long-range lance shots with laser-sight + mortar AoE circles --- */
+function updateBossArtillery(e, dt, d) {
+  const p = player;
+  const phase2 = e.hp < e.maxHp * 0.5;
+  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1);
+  e.rot += dt;
+  e.cd = Math.max(0, e.cd - dt);
+  if (e.state === "move") {
+    const v = seekVec(e, p.x, p.y);
+    const want = d < 330 ? -1 : (d > 470 ? 0.5 : 0);
+    e.vx = lerp(e.vx, (v.x * want - v.y * 0.5 * e.strafe) * e.speed, 3 * dt);
+    e.vy = lerp(e.vy, (v.y * want + v.x * 0.5 * e.strafe) * e.speed, 3 * dt);
+    if (Math.random() < dt * 0.4) e.strafe *= -1;
+    if (e.cd <= 0) {
+      e.atk = (e.atk + 1) % 2;
+      e.sub = 0;
+      if (e.atk === 0) { e.state = "aim"; e.t = 0.95; }
+      else { e.state = "mortar"; e.t = 0.6; }
+    }
+  } else if (e.state === "aim") {
+    e.vx *= 0.85; e.vy *= 0.85;
+    if (e.t > 0.28) { const v = seekVec(e, p.x, p.y); e.dirX = v.x; e.dirY = v.y; } // sight locks late
+    e.t -= dt;
+    if (e.t <= 0) {
+      const a = Math.atan2(e.dirY, e.dirX);
+      fireEbolt(e.x + e.dirX * e.r, e.y + e.dirY * e.r, a, 720 + e.tier * 30, 15, "#ffd0a0", 7);
+      audio.bolt();
+      shake(3, 0.1);
+      e.sub++;
+      const volleys = (phase2 ? 2 : 1) + (e.hard ? 1 : 0);
+      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.5, 2.1) * cdm; }
+      else e.t = 0.5;
+    }
+  } else if (e.state === "mortar") {
+    e.vx *= 0.85; e.vy *= 0.85;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const k = 3 + (phase2 ? 2 : 0) + (e.hard ? 1 : 0);
+      for (let i = 0; i < k; i++) {
+        const ox = i === 0 ? 0 : rand(-160, 160);
+        const oy = i === 0 ? 0 : rand(-130, 130);
+        const tt = 1.15 + i * 0.12;
+        mortars.push({
+          x: clamp(p.x + ox, 50, CONFIG.arenaW - 50),
+          y: clamp(p.y + oy, 50, CONFIG.arenaH - 50),
+          r: 68, t: tt, tm: tt, dmg: 16, col: e.col,
+        });
+      }
+      audio.bolt();
+      if (e.hard) { // hard pairing: a snap lance with the mortar call
+        const a = angTo(e.x, e.y, p.x, p.y);
+        fireEbolt(e.x, e.y, a, 700, 13, "#ffd0a0", 7);
+      }
+      e.state = "move"; e.cd = rand(2.0, 2.6) * cdm;
+    }
+  }
+  enemyContact(e, 12, dt);
+}
+
+/* --- MITOSIS PRIME: big brute; splits at 50% HP, fragments split once more --- */
+function updateBossSplitter(e, dt, d) {
+  if (e.gen < 2 && e.hp <= e.maxHp * 0.5) { splitBoss(e); return; }
+  const p = player;
+  const cdm = e.hard ? 0.75 : 1;
+  e.rot += dt * 0.8;
+  e.cd = Math.max(0, e.cd - dt);
+  if (e.state === "move") {
+    const v = seekVec(e, p.x, p.y);
+    e.vx = lerp(e.vx, v.x * e.speed, 4 * dt);
+    e.vy = lerp(e.vy, v.y * e.speed, 4 * dt);
+    enemyContact(e, 12, dt);
+    if (e.cd <= 0) {
+      if (d < 150) { e.state = "slam"; e.t = 0.9; }
+      else if (d < 460) { e.state = "wind"; e.t = 0.55; }
+    }
+  } else if (e.state === "wind") {
+    e.vx *= 0.86; e.vy *= 0.86;
+    if (e.t > 0.18) { const v = seekVec(e, p.x, p.y); e.dirX = v.x; e.dirY = v.y; }
+    e.t -= dt;
+    if (e.t <= 0) {
+      e.state = "lunge"; e.t = 0.42;
+      const spd = 480 + e.tier * 25;
+      e.vx = e.dirX * spd; e.vy = e.dirY * spd;
+      audio.dash();
+    }
+  } else if (e.state === "lunge") {
+    e.t -= dt;
+    enemyContact(e, 17, dt);
+    if (e.t <= 0) { e.state = "move"; e.cd = rand(1.2, 1.8) * cdm; e.vx *= 0.25; e.vy *= 0.25; }
+  } else if (e.state === "slam") {
+    e.vx *= 0.85; e.vy *= 0.85;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const R = 95 + e.r;
+      burst(e.x, e.y, e.col, 34, 360, 0.6, 4);
+      shake(8, 0.35);
+      audio.enemyDie(true);
+      if (dist(e.x, e.y, p.x, p.y) < R + p.r) {
+        damagePlayer(20 * eDmgMul(), angTo(e.x, e.y, p.x, p.y), e);
+      }
+      if (e.hard) { // hard pairing: slam shockwave ring
+        for (let i = 0; i < 10; i++) fireEbolt(e.x, e.y, (i / 10) * TAU, 200, 9, e.col, 6);
+      }
+      e.state = "move"; e.cd = rand(1.6, 2.2) * cdm;
+    }
+  }
 }
 
 /* ---------------- §R UPDATE: WORLD ---------------- */
@@ -1437,6 +1903,24 @@ function step(dt) {
     }
   }
   zones = zones.filter((z) => z.t > 0);
+
+  // mortar strikes (telegraphed AoE circles)
+  for (const m of mortars) {
+    m.t -= dt;
+    if (m.t <= 0) {
+      burst(m.x, m.y, m.col || "#ff8833", 26, 320, 0.55, 3.5);
+      shake(6, 0.25);
+      audio.enemyDie(true);
+      if (player.hp > 0 && dist(m.x, m.y, player.x, player.y) < m.r + player.r) {
+        damagePlayer(m.dmg * eDmgMul(), angTo(m.x, m.y, player.x, player.y), null);
+      }
+    }
+  }
+  mortars = mortars.filter((m) => m.t > 0);
+
+  // freeze novas (visual rings)
+  for (const nv of novas) nv.t -= dt;
+  novas = novas.filter((nv) => nv.t > 0);
 
   // beams
   for (const bm of beams) bm.t -= dt;
@@ -1560,6 +2044,11 @@ function drawDoors() {
       ctx.moveTo(d.x + 3, iy - 9); ctx.lineTo(d.x - 5, iy + 1); ctx.lineTo(d.x - 1, iy + 1);
       ctx.lineTo(d.x - 3, iy + 9); ctx.lineTo(d.x + 5, iy - 1); ctx.lineTo(d.x + 1, iy - 1);
       ctx.closePath(); ctx.fill();
+    } else if (d.reward === "shop") {
+      // pedestal + floating ware icon
+      ctx.fillRect(d.x - 8, iy + 4, 16, 4);
+      ctx.fillRect(d.x - 4, iy, 8, 4);
+      ctx.arc(d.x, iy - 6, 5, 0, TAU); ctx.fill();
     } else {
       ctx.arc(d.x, iy, 6, 0, TAU); ctx.fill();
     }
@@ -1581,6 +2070,34 @@ function drawZonesAndPickups() {
     ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, TAU); ctx.fill();
     noglow();
   }
+  // mortar AoE telegraphs (inner circle closes in as impact nears)
+  for (const m of mortars) {
+    const pr = 1 - clamp(m.t / m.tm, 0, 1);
+    const col = m.col || "#ff8833";
+    ctx.strokeStyle = col;
+    ctx.fillStyle = "rgba(255,136,51," + (0.06 + pr * 0.16) + ")";
+    glow(col, 10);
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(m.x, m.y, m.r * pr, 0, TAU); ctx.stroke();
+    noglow();
+  }
+  // freeze nova rings
+  for (const nv of novas) {
+    const pr = 1 - clamp(nv.t / nv.tm, 0, 1);
+    const r = lerp(14, nv.maxR, Math.min(1, pr * 1.15));
+    ctx.save();
+    ctx.globalAlpha = clamp(1 - pr, 0, 1) * 0.9;
+    glow("#aaeeff", 20);
+    ctx.strokeStyle = "#cfeeff";
+    ctx.lineWidth = 6 * (1 - pr) + 2;
+    ctx.beginPath(); ctx.arc(nv.x, nv.y, r, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = "rgba(170,230,255,0.4)";
+    ctx.lineWidth = 14 * (1 - pr) + 2;
+    ctx.beginPath(); ctx.arc(nv.x, nv.y, r * 0.92, 0, TAU); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
   for (const pk of pickups) {
     const bob = Math.sin(timeNow * 5 + pk.x) * 2;
     if (pk.kind === "core") {
@@ -1601,6 +2118,52 @@ function drawZonesAndPickups() {
   }
 }
 
+function drawPedestals() {
+  if (!shopRoom) return;
+  const p = player;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  for (const pd of pedestals) {
+    const it = pd.item;
+    const afford = cores >= pd.price;
+    const near = p && p.hp > 0 && dist(p.x, p.y, pd.x, pd.y) < 36;
+    const bob = Math.sin(timeNow * 2.4 + pd.x) * 4;
+    ctx.save();
+    if (pd.sold) ctx.globalAlpha = 0.3;
+    // pedestal base
+    glow(it.col, near && !pd.sold ? 18 : 8);
+    ctx.fillStyle = "rgba(20,24,60,0.9)";
+    ctx.beginPath(); ctx.arc(pd.x, pd.y + 14, 24, 0, TAU); ctx.fill();
+    ctx.strokeStyle = pd.sold ? "#556" : afford ? it.col : "rgba(130,140,180,0.6)";
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(pd.x, pd.y + 14, 24, 0, TAU); ctx.stroke();
+    noglow();
+    // floating ware glyph
+    ctx.fillStyle = pd.sold ? "#667" : afford ? it.col : "rgba(150,160,200,0.7)";
+    if (!pd.sold) glow(it.col, 12);
+    ctx.font = "bold 26px 'Courier New', monospace";
+    ctx.fillText(it.glyph, pd.x, pd.y - 16 + bob);
+    noglow();
+    // name / desc / price
+    ctx.font = "bold 11px 'Courier New', monospace";
+    ctx.fillStyle = pd.sold ? "#667" : "#dde4ff";
+    ctx.fillText(pd.sold ? "SOLD" : it.name, pd.x, pd.y + 48);
+    if (!pd.sold) {
+      ctx.font = "10px 'Courier New', monospace";
+      ctx.fillStyle = "rgba(190,210,255,0.75)";
+      ctx.fillText(it.desc, pd.x, pd.y + 62);
+      ctx.font = "bold 12px 'Courier New', monospace";
+      ctx.fillStyle = afford ? "#ffcc44" : "#ff5566";
+      ctx.fillText("◆ " + pd.price, pd.x, pd.y + 78);
+      if (near) {
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 11px 'Courier New', monospace";
+        ctx.fillText(touchUI ? "TAP TO BUY" : "[J] BUY", pd.x, pd.y - 48);
+      }
+    }
+    ctx.restore();
+  }
+}
+
 function drawSpawnTelegraphs() {
   for (const q of spawnQ) {
     const p = 1 - clamp(q.t / 1.1, 0, 1);
@@ -1618,7 +2181,8 @@ function drawSpawnTelegraphs() {
 
 function drawEnemy(e) {
   const fl = e.flash > 0;
-  const col = fl ? "#ffffff" : e.col;
+  const frozen = e.frozenT > 0;
+  const col = fl ? "#ffffff" : frozen ? "#bfe8ff" : e.col;
   ctx.save();
   if (e.spawnT > 0) ctx.globalAlpha = 1 - e.spawnT / 0.4;
   // telegraphs first (under body)
@@ -1644,15 +2208,52 @@ function drawEnemy(e) {
     ctx.setLineDash([]);
   }
   if (e.type === "boss" && e.state === "aim") {
-    const p = 1 - e.t / 0.7;
-    ctx.strokeStyle = "rgba(255,51,102," + (0.3 + p * 0.6) + ")";
-    ctx.lineWidth = 5;
+    // laser-sight telegraph (warden dash / artillery lance)
+    const p = 1 - e.t / (e.kind === "artillery" ? 0.95 : 0.7);
+    ctx.save();
+    ctx.globalAlpha *= 0.3 + clamp(p, 0, 1) * 0.6;
+    ctx.strokeStyle = e.col;
+    ctx.lineWidth = e.kind === "artillery" ? 3 : 5;
     ctx.setLineDash([12, 8]);
     ctx.beginPath();
     ctx.moveTo(e.x, e.y);
-    ctx.lineTo(e.x + e.dirX * 700, e.y + e.dirY * 700);
+    ctx.lineTo(e.x + e.dirX * 900, e.y + e.dirY * 900);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.restore();
+  }
+  if (e.type === "boss" && e.state === "wind") {
+    // splitter lunge telegraph
+    const p = 1 - e.t / 0.55;
+    ctx.strokeStyle = "rgba(102,255,136," + (0.3 + p * 0.6) + ")";
+    ctx.lineWidth = 4;
+    ctx.setLineDash([10, 7]);
+    ctx.beginPath();
+    ctx.moveTo(e.x, e.y);
+    ctx.lineTo(e.x + e.dirX * 260, e.y + e.dirY * 260);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  if (e.type === "boss" && e.state === "slam") {
+    // splitter slam AoE telegraph
+    const p = 1 - e.t / 0.9;
+    const R = 95 + e.r;
+    ctx.strokeStyle = e.col;
+    ctx.fillStyle = "rgba(102,255,136," + (0.06 + p * 0.13) + ")";
+    ctx.lineWidth = 2 + p * 2;
+    glow(e.col, 12);
+    ctx.beginPath(); ctx.arc(e.x, e.y, R, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(e.x, e.y, R * p, 0, TAU); ctx.stroke();
+    noglow();
+  }
+  if (e.type === "boss" && e.state === "tele") {
+    // summoner teleport: warning ring at the destination
+    const p = 1 - e.t / 0.55;
+    ctx.strokeStyle = "rgba(187,102,255," + (0.25 + p * 0.6) + ")";
+    ctx.lineWidth = 2.5;
+    glow("#bb66ff", 10);
+    ctx.beginPath(); ctx.arc(e.tx, e.ty, 40 * (1 - p) + 12, 0, TAU); ctx.stroke();
+    noglow();
   }
   if (e.type === "shooter" && e.state === "charge") {
     const p = 1 - e.t / 0.6;
@@ -1661,13 +2262,16 @@ function drawEnemy(e) {
     ctx.beginPath(); ctx.arc(e.x, e.y, 5 + p * 7, 0, TAU); ctx.fill();
     noglow();
   }
-  if (e.type === "boss" && (e.state === "radial" || e.state === "summon")) {
-    const p = e.state === "radial" ? 1 - clamp(e.t / 0.8, 0, 1) : 1 - clamp(e.t / 0.8, 0, 1);
-    ctx.strokeStyle = "rgba(255,51,102," + (0.2 + p * 0.5) + ")";
+  if (e.type === "boss" && ["radial", "summon", "burst", "mortar"].includes(e.state)) {
+    const p = 1 - clamp(e.t / 0.9, 0, 1);
+    ctx.save();
+    ctx.strokeStyle = e.col;
+    ctx.globalAlpha *= 0.2 + p * 0.5;
     ctx.lineWidth = 2;
-    glow("#ff3366", 10);
+    glow(e.col, 10);
     ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 14 + p * 10, 0, TAU); ctx.stroke();
     noglow();
+    ctx.restore();
   }
 
   glow(col, fl ? 22 : 13);
@@ -1720,28 +2324,104 @@ function drawEnemy(e) {
   } else if (e.type === "boss") {
     ctx.save();
     ctx.translate(e.x, e.y);
-    // outer ring
-    ctx.rotate(e.rot * 0.5);
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a0 = (i / 6) * TAU, a1 = a0 + TAU / 9;
-      ctx.moveTo(Math.cos(a0) * (e.r + 10), Math.sin(a0) * (e.r + 10));
-      ctx.arc(0, 0, e.r + 10, a0, a1);
+    if (e.kind === "summoner") {
+      // VOIDCALLER: rune triangle with orbiting orbs; fades while teleporting
+      if (e.state === "tele") ctx.globalAlpha *= clamp(e.t / 0.55, 0.15, 1);
+      for (let i = 0; i < 3; i++) {
+        const a = e.rot * 1.6 + (i / 3) * TAU;
+        ctx.beginPath(); ctx.arc(Math.cos(a) * (e.r + 16), Math.sin(a) * (e.r + 16), 6, 0, TAU); ctx.fill();
+      }
+      ctx.rotate(e.rot * 0.7);
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * TAU - Math.PI / 2;
+        if (i === 0) ctx.moveTo(Math.cos(a) * (e.r + 6), Math.sin(a) * (e.r + 6));
+        else ctx.lineTo(Math.cos(a) * (e.r + 6), Math.sin(a) * (e.r + 6));
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#070720";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.45, 0, TAU); ctx.fill();
+      ctx.fillStyle = fl ? "#ffffff" : "#e0c0ff";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.2, 0, TAU); ctx.fill();
+    } else if (e.kind === "artillery") {
+      // LANCE-7: walker turret with a long barrel
+      ctx.lineWidth = 5;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * TAU + Math.PI / 4 + Math.sin(e.rot * 2) * 0.08;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * e.r * 0.5, Math.sin(a) * e.r * 0.5);
+        ctx.lineTo(Math.cos(a) * (e.r + 12), Math.sin(a) * (e.r + 12));
+        ctx.stroke();
+      }
+      rrect(-e.r * 0.75, -e.r * 0.75, e.r * 1.5, e.r * 1.5, 8); ctx.fill();
+      const ba = e.state === "aim" ? Math.atan2(e.dirY, e.dirX) : angTo(e.x, e.y, player.x, player.y);
+      ctx.rotate(ba);
+      ctx.fillRect(0, -6, e.r + 22, 12);
+      ctx.rotate(-ba);
+      ctx.fillStyle = "#070720";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.35, 0, TAU); ctx.fill();
+      ctx.fillStyle = fl ? "#ffffff" : "#ffd0a0";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.16, 0, TAU); ctx.fill();
+    } else if (e.kind === "splitter") {
+      // MITOSIS PRIME: wobbling blob with nuclei (one per remaining split)
+      ctx.beginPath();
+      const segs = 14;
+      for (let i = 0; i <= segs; i++) {
+        const a = (i / segs) * TAU;
+        const rr = e.r * (1 + 0.09 * Math.sin(a * 3 + e.rot * 4) + 0.05 * Math.sin(a * 5 - e.rot * 3));
+        if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#070720";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.55, 0, TAU); ctx.fill();
+      ctx.fillStyle = fl ? "#ffffff" : "#caffd8";
+      const nNuc = 3 - e.gen;
+      for (let i = 0; i < nNuc; i++) {
+        const a = e.rot * 2 + (i / nNuc) * TAU;
+        ctx.beginPath(); ctx.arc(Math.cos(a) * e.r * 0.22, Math.sin(a) * e.r * 0.22, e.r * 0.16, 0, TAU); ctx.fill();
+      }
+    } else {
+      // THE WARDEN: segmented outer ring + eye
+      ctx.rotate(e.rot * 0.5);
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      for (let i = 0; i < 6; i++) {
+        const a0 = (i / 6) * TAU, a1 = a0 + TAU / 9;
+        ctx.moveTo(Math.cos(a0) * (e.r + 10), Math.sin(a0) * (e.r + 10));
+        ctx.arc(0, 0, e.r + 10, a0, a1);
+      }
+      ctx.stroke();
+      ctx.rotate(-e.rot * 0.5);
+      ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
+      ctx.fillStyle = "#070720";
+      ctx.beginPath(); ctx.arc(0, 0, e.r * 0.7, 0, TAU); ctx.fill();
+      const a = angTo(e.x, e.y, player.x, player.y);
+      ctx.fillStyle = fl ? "#ffffff" : "#ff88aa";
+      ctx.beginPath(); ctx.arc(Math.cos(a) * e.r * 0.3, Math.sin(a) * e.r * 0.3, e.r * 0.24, 0, TAU); ctx.fill();
     }
-    ctx.stroke();
-    ctx.rotate(-e.rot * 0.5);
-    // body
-    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
-    ctx.fillStyle = "#070720";
-    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.7, 0, TAU); ctx.fill();
-    // eye looks at player
-    const a = angTo(e.x, e.y, player.x, player.y);
-    ctx.fillStyle = fl ? "#ffffff" : "#ff88aa";
-    ctx.beginPath(); ctx.arc(Math.cos(a) * e.r * 0.3, Math.sin(a) * e.r * 0.3, e.r * 0.24, 0, TAU); ctx.fill();
     ctx.restore();
   }
   noglow();
+
+  // frozen overlay: ice shell + icicles
+  if (frozen) {
+    ctx.save();
+    glow("#aaeeff", 12);
+    ctx.fillStyle = "rgba(170,230,255,0.28)";
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 4, 0, TAU); ctx.fill();
+    ctx.strokeStyle = "rgba(220,245,255,0.85)";
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * TAU + 0.6;
+      const x1 = e.x + Math.cos(a) * e.r * 0.55, y1 = e.y + Math.sin(a) * e.r * 0.55;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1 - 4); ctx.lineTo(x1 + 3, y1 + 5); ctx.lineTo(x1 - 3, y1 + 5);
+      ctx.closePath(); ctx.stroke();
+    }
+    noglow();
+    ctx.restore();
+  }
 
   // small hp bar (not boss; boss has top bar)
   if (e.type !== "boss" && e.hp < e.maxHp) {
@@ -1962,6 +2642,34 @@ function drawHUD() {
     ctx.arc(bx + 7 + i * 18 * u, py, 5 * u, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashCD / CONFIG.dashCD));
     ctx.stroke();
   }
+  // freeze nova icon with radial cooldown sweep
+  {
+    const fx = bx + 7 + p.dashMax * 18 * u + 16 * u, fy = py;
+    const ready = p.freezeCD <= 0;
+    const frac = p.freezeCDMax > 0 ? 1 - clamp(p.freezeCD / p.freezeCDMax, 0, 1) : 1;
+    ctx.fillStyle = "rgba(8,10,30,0.85)";
+    rrect(fx - 9 * u, fy - 9 * u, 18 * u, 18 * u, 4); ctx.fill();
+    if (ready) glow("#aaeeff", 8);
+    ctx.strokeStyle = ready ? "#aaeeff" : "rgba(170,230,255,0.3)";
+    ctx.lineWidth = 1.5;
+    rrect(fx - 9 * u, fy - 9 * u, 18 * u, 18 * u, 4); ctx.stroke();
+    noglow();
+    ctx.fillStyle = ready ? "#aaeeff" : "rgba(170,230,255,0.4)";
+    ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("❄", fx, fy + 1);
+    if (!ready) {
+      ctx.strokeStyle = "#aaeeff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(fx, fy, 11 * u, -Math.PI / 2, -Math.PI / 2 + TAU * frac);
+      ctx.stroke();
+    } else if (!touchUI) {
+      ctx.font = 8 * u + "px 'Courier New', monospace";
+      ctx.fillStyle = "rgba(170,230,255,0.6)";
+      ctx.fillText("K", fx, fy + 15 * u);
+    }
+  }
   // boon icons
   let ix = bx, iy = by - 22 * u;
   for (const id in p.boons) {
@@ -1992,33 +2700,37 @@ function drawHUD() {
   noglow();
   ctx.fillStyle = "#ffcc44";
   ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
-  ctx.fillText("◆ " + cores, cw - 16, 44 * u);
+  ctx.fillText("◆ " + fmtNum(cores), cw - 16, 44 * u);
   if (state === "play" && !roomClear && waves.length > 1) {
     ctx.fillStyle = "rgba(204,102,255,0.8)";
     ctx.font = 11 * u + "px 'Courier New', monospace";
     ctx.fillText("wave " + waveIdx + "/" + waves.length, cw - 16, 62 * u);
   }
-  // boss bar
-  if (boss && boss.hp > 0) {
+  // boss bar (sums all boss-type entities, e.g. splitter fragments)
+  let bossHpSum = 0, bossCol = "#ff3366", bossAlive = false;
+  for (const e of enemies) {
+    if (e.type === "boss" && e.hp > 0) { bossHpSum += e.hp; bossCol = e.col; bossAlive = true; }
+  }
+  if (bossAlive && bossBarMax > 0) {
     const w = Math.min(520, cw * 0.6);
     const x = (cw - w) / 2, y = 18 * u;
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     rrect(x - 2, y - 2, w + 4, 14 * u + 4, 4); ctx.fill();
-    glow("#ff3366", 10);
-    ctx.fillStyle = "#ff3366";
-    rrect(x, y, w * clamp(boss.hp / boss.maxHp, 0, 1), 14 * u, 3); ctx.fill();
+    glow(bossCol, 10);
+    ctx.fillStyle = bossCol;
+    rrect(x, y, w * clamp(bossHpSum / bossBarMax, 0, 1), 14 * u, 3); ctx.fill();
     noglow();
-    ctx.fillStyle = "#ffd0dd";
+    ctx.fillStyle = "#ffffff";
     ctx.textAlign = "center";
     ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
-    ctx.fillText("WARDEN OF DEPTH " + depth, cw / 2, y + 7 * u);
+    ctx.fillText(bossName + " — DEPTH " + depth, cw / 2, y + 7 * u);
   }
   if (bossWarnT > 0 && Math.floor(timeNow * 4) % 2 === 0) {
     ctx.fillStyle = "#ff3366";
     ctx.textAlign = "center";
     glow("#ff3366", 16);
     ctx.font = "bold " + 30 * u + "px 'Courier New', monospace";
-    ctx.fillText("!! WARDEN DETECTED !!", cw / 2, ch * 0.3);
+    ctx.fillText("!! " + (bossName || "WARDEN") + " DETECTED !!", cw / 2, ch * 0.3);
     noglow();
   }
   // toasts
@@ -2051,7 +2763,7 @@ function drawTouchControls() {
     ctx.beginPath(); ctx.arc(joy.bx + joy.dx * 52 * u, joy.by + joy.dy * 52 * u, 20 * u, 0, TAU); ctx.fill();
   }
   // buttons
-  const db = dashBtnPos(), bb = boltBtnPos();
+  const db = dashBtnPos(), bb = boltBtnPos(), fb = freezeBtnPos();
   ctx.globalAlpha = 0.4;
   ctx.fillStyle = "rgba(94,230,255,0.16)";
   ctx.strokeStyle = "#5ee6ff"; ctx.lineWidth = 2;
@@ -2059,6 +2771,14 @@ function drawTouchControls() {
   ctx.fillStyle = "rgba(255,102,238,0.16)";
   ctx.strokeStyle = "#ff66ee";
   ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, TAU); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = "rgba(170,230,255,0.16)";
+  ctx.strokeStyle = "#aaeeff";
+  ctx.beginPath(); ctx.arc(fb.x, fb.y, fb.r, 0, TAU); ctx.fill(); ctx.stroke();
+  if (player && player.freezeCD > 0 && player.freezeCDMax > 0) {
+    ctx.beginPath();
+    ctx.arc(fb.x, fb.y, fb.r - 5, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - player.freezeCD / player.freezeCDMax));
+    ctx.stroke();
+  }
   ctx.globalAlpha = 0.85;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
@@ -2066,6 +2786,9 @@ function drawTouchControls() {
   ctx.fillText("DASH", db.x, db.y);
   ctx.fillStyle = "#ff66ee";
   ctx.fillText("BOLT", bb.x, bb.y);
+  ctx.fillStyle = "#aaeeff";
+  ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+  ctx.fillText("FREEZE", fb.x, fb.y);
   ctx.restore();
 }
 
@@ -2100,7 +2823,7 @@ function drawTitle() {
   }
   ctx.fillStyle = "rgba(255,204,68,0.9)";
   ctx.font = 13 * u + "px 'Courier New', monospace";
-  if (best > 0) ctx.fillText("BEST DEPTH: " + best + "   ◆ " + cores + " cores", cw / 2, ch * 0.7);
+  if (best > 0) ctx.fillText("BEST DEPTH: " + best + "   ◆ " + fmtNum(cores) + " cores", cw / 2, ch * 0.7);
   // HOW TO PLAY / 操作说明 — device-aware bilingual panel
   ctx.font = 12 * u + "px 'Courier New', monospace";
   const help = touchUI ? [
@@ -2108,14 +2831,17 @@ function drawTitle() {
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
-    "DASH 冲刺（无敌帧）· BOLT 等离子弹 — dash (i-frames) · plasma bolt",
+    "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
+    "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
   ] : [
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
-    "左键挥砍 · 右键/Shift/E 等离子弹（耗能量） — LMB slash · RMB/Shift/E bolt (energy)",
-    "空格冲刺（无敌帧） — Space dash with i-frames",
+    "J 近战斩击 · 右Ctrl 发射光弹 — J slash / Right-Ctrl bolt (LMB/RMB too)",
+    "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
+    "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
+    "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
     "P/Esc 暂停 · M 静音 — pause / mute",
   ];
@@ -2225,6 +2951,21 @@ function drawBoonScreen() {
     uiRects.push({ x, y, w: cwid, h: chei, act: "boon", i });
     x += cwid + 18;
   }
+  // reroll button (BOOT PROTOCOL levels beyond 1)
+  if (rerollsLeft > 0) {
+    const rw2 = 200 * u, rh2 = 36 * u;
+    const rx = cw / 2 - rw2 / 2, ry = y + chei + 22 * u;
+    glow("#ffcc44", 10);
+    ctx.fillStyle = "rgba(10,12,34,0.95)";
+    rrect(rx, ry, rw2, rh2, 8); ctx.fill();
+    ctx.strokeStyle = "#ffcc44"; ctx.lineWidth = 2;
+    rrect(rx, ry, rw2, rh2, 8); ctx.stroke();
+    noglow();
+    ctx.fillStyle = "#ffcc44";
+    ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+    ctx.fillText((touchUI ? "REROLL" : "[R] REROLL") + " ×" + rerollsLeft, cw / 2, ry + rh2 / 2 + 1);
+    uiRects.push({ x: rx, y: ry, w: rw2, h: rh2, act: "reroll" });
+  }
 }
 
 function drawShopScreen() {
@@ -2239,23 +2980,22 @@ function drawShopScreen() {
   noglow();
   ctx.fillStyle = "#ffcc44";
   ctx.font = "bold " + 15 * u + "px 'Courier New', monospace";
-  ctx.fillText("◆ " + cores + " cores", cw / 2, ch * 0.13 + 28 * u);
+  ctx.fillText("◆ " + fmtNum(cores) + " cores", cw / 2, ch * 0.13 + 28 * u);
   const w = Math.min(560 * u, cw - 40);
   const rh = 64 * u;
   let y = ch * 0.26;
   for (let i = 0; i < META_UPGRADES.length; i++) {
     const m = META_UPGRADES[i];
     const lv = meta[m.id] || 0;
-    const maxed = lv >= m.max;
-    const cost = maxed ? 0 : m.cost(lv);
-    const afford = !maxed && cores >= cost;
+    const cost = metaCost(m, lv); // unlimited levels, geometric cost
+    const afford = cores >= cost;
     const x = (cw - w) / 2;
     const hover = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh;
     ctx.save();
-    glow(afford ? "#ffcc44" : "#445", hover && !maxed ? 18 : 8);
+    glow(afford ? "#ffcc44" : "#445", hover ? 18 : 8);
     ctx.fillStyle = "rgba(10,12,34,0.95)";
     rrect(x, y, w, rh, 8); ctx.fill();
-    ctx.strokeStyle = maxed ? "rgba(110,255,170,0.7)" : afford ? "#ffcc44" : "rgba(120,130,180,0.45)";
+    ctx.strokeStyle = afford ? "#ffcc44" : "rgba(120,130,180,0.45)";
     ctx.lineWidth = 2;
     rrect(x, y, w, rh, 8); ctx.stroke();
     noglow();
@@ -2266,15 +3006,14 @@ function drawShopScreen() {
     ctx.fillStyle = "rgba(190,210,255,0.75)";
     ctx.font = 12 * u + "px 'Courier New', monospace";
     ctx.fillText(m.desc, x + 14, y + rh * 0.68);
-    // pips
+    // current level + next cost
     ctx.textAlign = "right";
-    for (let pp = 0; pp < m.max; pp++) {
-      ctx.fillStyle = pp < lv ? "#66ff99" : "rgba(255,255,255,0.15)";
-      ctx.fillRect(x + w - 120 * u + pp * 12 * u, y + rh * 0.25 - 4, 8 * u, 8 * u);
-    }
-    ctx.fillStyle = maxed ? "#66ff99" : afford ? "#ffcc44" : "#888";
+    ctx.fillStyle = lv > 0 ? "#66ff99" : "rgba(255,255,255,0.4)";
+    ctx.font = "bold " + 12 * u + "px 'Courier New', monospace";
+    ctx.fillText("LV " + fmtNum(lv), x + w - 14, y + rh * 0.32);
+    ctx.fillStyle = afford ? "#ffcc44" : "#888";
     ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
-    ctx.fillText(maxed ? "MAX" : "◆ " + cost, x + w - 14, y + rh * 0.68);
+    ctx.fillText("next ◆ " + fmtNum(cost), x + w - 14, y + rh * 0.68);
     ctx.restore();
     uiRects.push({ x, y, w, h: rh, act: "meta", i });
     y += rh + 12 * u;
@@ -2299,12 +3038,18 @@ function drawPause() {
   ctx.fillStyle = "rgba(190,210,255,0.7)";
   ctx.font = 14 * u + "px 'Courier New', monospace";
   ctx.fillText(touchUI ? "点按继续 — tap to resume" : "P/Esc/点击 继续 · M 静音 — P / Esc / click to resume · M mute", cw / 2, ch * 0.52);
+  if (!touchUI) {
+    ctx.fillStyle = "rgba(190,210,255,0.55)";
+    ctx.font = 12 * u + "px 'Courier New', monospace";
+    ctx.fillText("J 斩击 · 右Ctrl 光弹 · K 冰冻 · 空格冲刺 — J slash · R-Ctrl bolt · K freeze · Space dash", cw / 2, ch * 0.58);
+  }
 }
 
 function uiClick(x, y) {
   for (const r of uiRects) {
     if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
       if (r.act === "boon") { pickBoon(r.i); return; }
+      if (r.act === "reroll") { rerollBoons(); return; }
       if (r.act === "meta") { buyMeta(META_UPGRADES[r.i]); return; }
       if (r.act === "close") { closeShop(); return; }
     }
@@ -2337,6 +3082,7 @@ function render() {
   drawArenaFloor();
   drawZonesAndPickups();
   if (state === "hub" || (state === "shop")) drawHubObjects();
+  if (shopRoom) drawPedestals();
   if (roomClear) drawDoors();
   drawPillars();
   drawSpawnTelegraphs();
