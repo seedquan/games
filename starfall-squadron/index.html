@@ -59,7 +59,7 @@
 
 /* ---------------- §B CONFIG ---------------- */
 const CONFIG = Object.freeze({
-  playW: 460,             // logical portrait play-column width
+  playW: 720,             // logical play-column width (WIDENED for roguelike field)
   playH: 820,             // logical play-column height
   shipR: 11,              // player collision radius
   shipSpeed: 360,         // px/s player movement
@@ -85,7 +85,8 @@ const CONFIG = Object.freeze({
   comboWindow: 2.0,       // s to chain kills
   comboMax: 16,
   bucketSize: 64,         // spatial hash cell size for broad-phase
-  bossEvery: 4,           // boss appears after this many normal waves per cycle
+  bossEvery: 5,           // every Nth SECTOR is a boss sector
+  wavesPerSector: 4,      // choreographed waves in a normal sector gauntlet
   maxOptions: 4,          // hard cap on Option drones per player
   optionOrbitR: 30,       // orbit radius of Option drones
   missileCd: 3.0,         // base secondary homing-missile salvo cooldown (s)
@@ -127,7 +128,8 @@ function weaponIndex(id) { const i = WEAPONS.findIndex((w) => w.id === id); retu
    and P2 identically at spawn. Costs grow geometrically (~x1.55/level).
    All persisted under "starfallsquadron." keys with the store try/catch fallback. */
 let credits = parseInt(store.get("credits") || "0", 10) || 0;
-const META_DEFAULTS = { wlvl: 0, maxw: 0, rate: 0, opt: 0, bomb: 0, graze: 0, life: 0, start: 0 };
+const META_DEFAULTS = { wlvl: 0, maxw: 0, rate: 0, opt: 0, bomb: 0, graze: 0, life: 0, start: 0,
+  reroll: 0, randboon: 0, gateodds: 0, unlockw: 0, revive: 0 };
 let meta = Object.assign({}, META_DEFAULTS);
 try { const m = JSON.parse(store.get("meta") || "{}"); if (m && typeof m === "object") meta = Object.assign(meta, m); } catch (e) { /* fresh meta */ }
 function saveMeta() {
@@ -145,11 +147,67 @@ const META_UPGRADES = [
   { id: "graze", name: "GRAZE TUNING",    zh: "擦弹充能",   desc: "+25% bomb charge from graze",          base: 80,  max: 6 },
   { id: "life",  name: "SPARE HULL",      zh: "额外命",     desc: "+1 starting life",                    base: 300, max: 3 },
   { id: "start", name: "LOADOUT",         zh: "默认武器",   desc: "cycle the default starting weapon",   base: 150, max: 3 },
+  // --- roguelike-flavored permanent upgrades ---
+  { id: "reroll",   name: "REROLL CHIP",  zh: "重抽",       desc: "+1 blessing reroll per run",            base: 180, max: 3 },
+  { id: "randboon", name: "OMEN",         zh: "起始祝福",   desc: "start each run with a random blessing", base: 240, max: 1 },
+  { id: "gateodds", name: "FORTUNE",      zh: "命运",       desc: "better gate-reward odds (richer)",      base: 200, max: 3 },
+  { id: "unlockw",  name: "ARSENAL",      zh: "军火库",     desc: "+1 starting weapon type at level 2",    base: 220, max: 3 },
+  { id: "revive",   name: "REVIVE TOKEN", zh: "复活",       desc: "once per run, cheat death",             base: 400, max: 2 },
 ];
 function metaCost(u) { const lv = meta[u.id] || 0; return Math.round(u.base * Math.pow(1.55, lv)); }
 function metaMaxed(u) { return (meta[u.id] || 0) >= u.max; }
 /* default starting weapon index chosen by the LOADOUT upgrade level (cyclic) */
 function startWeaponIndex() { return (meta.start || 0) % WEAPONS.length; }
+
+/* ---------------- §C1c BLESSINGS / BOONS (run-temporary build) ----------------
+   Hades-style choose-1-of-3 boons applied PER PLAYER and reset every run. Each
+   blessing has a rarity tier whose color/multiplier scales the effect. Stacks
+   accumulate; the live build is read in fire/graze/kill code via blessVal(p,id).
+   Synergy lines weave across the 4 weapons + Options/missiles + graze/bomb. */
+const RARITY = [
+  { id: "common",    name: "COMMON",    zh: "普通", col: "#b9c7d6", mul: 1.0,  w: 56 },
+  { id: "rare",      name: "RARE",      zh: "稀有", col: "#5ee6ff", mul: 1.5,  w: 28 },
+  { id: "epic",      name: "EPIC",      zh: "史诗", col: "#d49bff", mul: 2.1,  w: 12 },
+  { id: "legendary", name: "LEGENDARY", zh: "传说", col: "#ffd36e", mul: 3.0,  w: 4  },
+];
+function rarityIndex(id) { return RARITY.findIndex((r) => r.id === id); }
+/* roll a rarity, biased richer with run depth */
+function rollRarity(depth) {
+  let total = 0; const ws = [];
+  for (let i = 0; i < RARITY.length; i++) {
+    // deeper runs nudge weight toward higher tiers
+    const boost = 1 + (depth || 0) * 0.05 * i;
+    const w = RARITY[i].w * boost; ws.push(w); total += w;
+  }
+  let r = Math.random() * total;
+  for (let i = 0; i < ws.length; i++) { r -= ws[i]; if (r <= 0) return i; }
+  return 0;
+}
+
+/* BLESSINGS — `per` is the per-stack base value, scaled by rarity.mul at grant.
+   `tags` documents the synergy line. `max` caps stacks. Effects are interpreted
+   by gameplay code; see blessVal(). 16 blessings across several synergy lines. */
+const BLESSINGS = [
+  { id: "spread",   name: "SCATTER ARRAY",  zh: "散射阵列", per: 1,    max: 4, desc: "+shots / extra projectiles",          tags: "vulcan/wave" },
+  { id: "pierce",   name: "PIERCING ROUNDS",zh: "穿甲弹",   per: 1,    max: 5, desc: "bullets pierce +1 enemy",             tags: "all" },
+  { id: "split",    name: "SHRAPNEL",       zh: "破片",     per: 0.18, max: 3, desc: "bullets split on hit (chance)",       tags: "all" },
+  { id: "homingAll",name: "GUIDANCE CHIP",  zh: "制导芯片", per: 1,    max: 1, desc: "ALL your shots gently home",          tags: "all" },
+  { id: "chain",    name: "ARC RELAY",      zh: "电弧中继", per: 0.30, max: 4, desc: "LASER chains lightning to foes",      tags: "laser" },
+  { id: "burn",     name: "PLASMA WAVE",    zh: "等离子",   per: 0.5,  max: 4, desc: "WAVE burns over time",                tags: "wave" },
+  { id: "slow",     name: "GRAVITY WAVE",   zh: "引力波",   per: 0.12, max: 3, desc: "WAVE slows enemies it hits",          tags: "wave" },
+  { id: "crit",     name: "TARGETING EYE",  zh: "暴击",     per: 0.08, max: 6, desc: "+crit chance",                        tags: "crit" },
+  { id: "critdmg",  name: "OVERKILL",       zh: "暴伤",     per: 0.4,  max: 6, desc: "+crit damage",                        tags: "crit" },
+  { id: "lifegraze",name: "SIPHON GRAZE",   zh: "吸取擦弹", per: 0.5,  max: 3, desc: "graze can heal / shields",            tags: "graze" },
+  { id: "grazeR",   name: "WIDE FIELD",     zh: "擦弹范围", per: 6,    max: 4, desc: "+graze radius",                       tags: "graze" },
+  { id: "optcount", name: "DRONE SWARM",    zh: "僚机群",   per: 1,    max: 3, desc: "+1 Option drone",                     tags: "option" },
+  { id: "optmsl",   name: "DRONE MISSILES", zh: "僚机导弹", per: 1,    max: 1, desc: "Options fire missiles too",           tags: "option" },
+  { id: "bombr",    name: "WIDE BLAST",     zh: "炸弹强化", per: 0.4,  max: 4, desc: "+bomb damage & charge",               tags: "bomb" },
+  { id: "vampire",  name: "VAMPIRE CORE",   zh: "嗜血核心", per: 0.06, max: 4, desc: "chance to heal on kill",              tags: "vampire" },
+  { id: "thorn",    name: "THORN FIELD",    zh: "荆棘力场", per: 0.5,  max: 3, desc: "reflect: shield blocks more, zaps",   tags: "thorn" },
+  { id: "timedil",  name: "CHRONO BOMB",    zh: "时缓",     per: 1.4,  max: 2, desc: "bomb slows time briefly",             tags: "bomb" },
+  { id: "dmgup",    name: "POWER CELL",     zh: "增伤",     per: 0.16, max: 6, desc: "+primary damage",                     tags: "all" },
+];
+function blessingDef(id) { return BLESSINGS.find((b) => b.id === id); }
 
 /* ---------------- canvas / view ---------------- */
 const canvas = document.getElementById("c");
@@ -165,8 +223,11 @@ function resize() {
   canvas.height = Math.round(ch * dpr);
   canvas.style.width = cw + "px";
   canvas.style.height = ch + "px";
-  // fit the portrait play-column into the viewport, leave side panels for HUD
-  const sx = cw / CONFIG.playW, sy = ch / CONFIG.playH;
+  // Fit the WIDER play-column. On wide screens reserve slim side rails for HUD
+  // but otherwise let the field claim most of the horizontal space.
+  const sideRail = cw > 760 ? 132 : 0;       // px reserved each side for HUD rails
+  const availW = Math.max(120, cw - sideRail * 2);
+  const sx = availW / CONFIG.playW, sy = ch / CONFIG.playH;
   viewScale = Math.min(sx, sy);
   playW = CONFIG.playW * viewScale;
   playH = CONFIG.playH * viewScale;
@@ -244,7 +305,7 @@ document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 const fsBtn = document.getElementById("fsbtn");
 function updateFsBtn() {
   if (!fsBtn) return;
-  fsBtn.style.display = (state === "title" || state === "shop" || state === "over" || paused) && fsSupported() ? "block" : "none";
+  fsBtn.style.display = (state === "title" || state === "shop" || state === "over" || state === "gates" || state === "boon" || paused) && fsSupported() ? "block" : "none";
   fsBtn.textContent = isFullscreen() ? "EXIT FULL ⛶" : "FULLSCREEN ⛶";
 }
 if (fsBtn) {
@@ -620,7 +681,8 @@ function makeBulletPool(n) {
   const a = [];
   for (let i = 0; i < n; i++)
     a.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, r: 4, dmg: 1, col: "#fff", grazed: false, kind: 0, t: 0,
-             pierce: 0, lastHit: -1, life: 0, ang: 0, owner: 0 });
+             pierce: 0, lastHit: -1, life: 0, ang: 0, owner: 0,
+             homing: false, crit: false, split: 0, burn: 0, slow: 0, chain: 0 });
   return a;
 }
 const pBullets = makeBulletPool(CONFIG.maxBullets);
@@ -635,6 +697,17 @@ function firePlayer(x, y, vx, vy, dmg, col, kind, r, pierce, life, owner) {
   p.dmg = dmg; p.col = col || "#9fefff"; p.kind = kind || 0; p.t = 0;
   p.pierce = pierce || 0; p.lastHit = -1; p.life = life || 0; p.owner = owner || 0;
   p.ang = Math.atan2(vy, vx);
+  // reset blessing-derived flags (pooled objects must not carry stale state)
+  p.homing = false; p.crit = false; p.split = 0; p.burn = 0; p.slow = 0; p.chain = 0;
+  // apply current blessing emit-modifiers (set by emitWeapon), if any
+  const m = curEmitMods;
+  if (m) {
+    p.dmg *= m.dmgMul;
+    if (m.crit) { p.crit = true; p.dmg *= m.critDmg; }
+    p.pierce += m.pierce;
+    if (m.homing) p.homing = true;
+    p.split = m.split; p.burn = m.burn; p.slow = m.slow; p.chain = m.chain;
+  }
   return p;
 }
 function fireEnemy(x, y, vx, vy, r, col, kind) {
@@ -678,7 +751,13 @@ function makePlayer(idx) {
   // per-type independent levels; the chosen starting type begins at startLvl
   const wlvl = [1, 1, 1, 1];
   wlvl[wtype] = startLvl;
-  return {
+  // ARSENAL meta: unlock extra starting weapon types at level 2
+  const unlocked = clamp(meta.unlockw || 0, 0, WEAPONS.length - 1);
+  for (let u = 0; u < unlocked; u++) {
+    const wi = (wtype + 1 + u) % WEAPONS.length;
+    if (wlvl[wi] < 2) wlvl[wi] = 2;
+  }
+  const p = {
     idx,
     alive: false,
     spectating: false,
@@ -700,8 +779,32 @@ function makePlayer(idx) {
     respawnT: 0,
     deathFlash: 0,
     col: PLAYER_COLORS[idx],
+    // roguelike run-temporary build (reset per run):
+    bless: Object.create(null),   // id -> { stacks, val, rarity } accumulated value
   };
+  // OMEN meta: start each run with one random blessing
+  if (meta.randboon) grantBlessing(p, BLESSINGS[randi(0, BLESSINGS.length - 1)].id, rollRarity(0));
+  return p;
 }
+/* grant a blessing stack to a player at a given rarity tier. Accumulates value. */
+function grantBlessing(p, id, rarityIdx) {
+  const def = blessingDef(id);
+  if (!def) return;
+  const R = RARITY[clamp(rarityIdx || 0, 0, RARITY.length - 1)];
+  let b = p.bless[id];
+  if (!b) { b = p.bless[id] = { stacks: 0, val: 0, rarity: rarityIdx || 0 }; }
+  if (b.stacks >= def.max) { b.rarity = Math.max(b.rarity, rarityIdx || 0); return; }
+  b.stacks++;
+  b.val += def.per * R.mul;
+  b.rarity = Math.max(b.rarity, rarityIdx || 0);
+  // immediate-effect blessings that change persistent state:
+  if (id === "optcount" && p.options < CONFIG.maxOptions) p.options++;
+  if (id === "grazeR") { /* read live via blessVal */ }
+}
+/* live build value for a blessing id (0 if not held) */
+function blessVal(p, id) { const b = p && p.bless && p.bless[id]; return b ? b.val : 0; }
+function blessStacks(p, id) { const b = p && p.bless && p.bless[id]; return b ? b.stacks : 0; }
+function blessHas(p, id) { return blessStacks(p, id) > 0; }
 /* derived caps (meta-modified). curLevel(p) is the level of the player's CURRENT
    weapon type (p.wlvl[p.wtype]); used by HUD/art in place of the old p.weapon. */
 function maxWeaponLevel() { return CONFIG.maxWeapon + (meta.maxw || 0); }
@@ -737,6 +840,7 @@ function spawnEnemy(type, x, y, opts) {
     targetY: opts.targetY || (60 + rand(0, 120)),
     state: 0, stateT: 0,
     drops: opts.drops || null,
+    burn: 0, burnDps: 0, slow: 0,   // blessing status effects (DoT / slowdown)
   });
 }
 
@@ -793,21 +897,47 @@ function spawnBoss() {
   showToast("⚠ WARNING — " + def.name);
 }
 
-/* ---------------- §I WAVE DIRECTOR ---------------- */
+/* ---------------- §I RUN / SECTOR DIRECTOR ----------------
+   A RUN is a sequence of SECTORS. Each normal sector is a multi-wave gauntlet
+   (CONFIG.wavesPerSector choreographed waves). Every CONFIG.bossEvery-th sector
+   is a BOSS sector. Clearing a sector opens HADES-STYLE GATES (reward doors);
+   entering one applies its reward (BLESSING gates open a choose-1-of-3 boon pick)
+   and proceeds to the next, deeper, escalating sector. Runs are endless with a
+   loop counter; difficulty scales with depth & loop. */
 function newGame(players) {
   numPlayers = players;
   reassignPads();
   game = {
     score: 0, combo: 0, comboT: 0, maxCombo: 0,
-    stage: 1, loop: 1, wave: 0,
+    depth: 0,           // sectors entered (run depth)
+    loop: 1,            // full cycles completed (endless-with-loops)
+    sectorWave: 0,      // waves dispatched within the current sector
+    sectorWaves: CONFIG.wavesPerSector,
+    isBossSector: false,
     bossesKilled: 0,
+    kills: 0,
     waveTimer: 1.4,
     waveActive: false,
     spawnQueue: [],     // {t, fn}
     spawnClock: 0,
     bossPending: false,
+    sectorCleared: false,
     players: [],
     elapsed: 0,
+    timeDil: 0,         // CHRONO BOMB slow-time timer
+    reviveTokens: (meta.revive || 0),
+    rerolls: (meta.reroll || 0),
+    creditsEarned: 0,
+    // gate / boon UI state
+    gates: null,        // array of gate offers when state === "gates"
+    gateSel: 0,
+    boon: null,         // { player, options:[...] } when state === "boon"
+    boonSel: 0,
+    boonQueue: [],      // pending blessing picks (one per player, sequential)
+    // legacy aliases kept so older HUD/scaling references still resolve
+    get stage() { return this.depth; },
+    set stage(v) { this.depth = v; },
+    get wave() { return this.sectorWave; },
   };
   for (let i = 0; i < players; i++) {
     const p = makePlayer(i);
@@ -819,54 +949,81 @@ function newGame(players) {
   for (const b of pBullets) b.on = false;
   texts.length = 0;
   boss = null;
+  startSector();
 }
 
-/* enqueue a choreographed wave */
+/* begin a fresh sector at the current depth; pick boss vs gauntlet by cadence */
+function startSector() {
+  game.depth++;
+  game.sectorWave = 0;
+  game.sectorCleared = false;
+  game.waveActive = false;
+  game.bossPending = false;
+  game.waveTimer = 1.2;
+  game.spawnQueue.length = 0;
+  game.spawnClock = 0;
+  // bigger gauntlets as the run deepens (meatier "longer levels")
+  game.sectorWaves = CONFIG.wavesPerSector + Math.min(3, Math.floor(game.depth / 4));
+  game.isBossSector = (game.depth % CONFIG.bossEvery === 0);
+  // CHALLENGE sectors (flagged by the chosen gate) ramp harder for double reward
+  if (game.challengeNext) { game.challenge = true; game.challengeNext = false; game.sectorWaves += 1; }
+  else game.challenge = false;
+  const label = game.isBossSector ? "BOSS SECTOR" : ("SECTOR " + game.depth);
+  showToast((game.challenge ? "⚔ CHALLENGE — " : "") + label + (game.loop > 1 ? "  ·  LOOP " + game.loop : ""));
+}
+
+/* enqueue the next choreographed wave of the current sector. The boss sector
+   instead flags the boss to spawn once the field is clear. Wider field => wider
+   formations (x positions span the new CONFIG.playW). */
 function buildWave() {
-  game.wave++;
+  game.sectorWave++;
   const W = CONFIG.playW;
   game.spawnQueue.length = 0;
   game.spawnClock = 0;
-  const lvl = (game.loop - 1) * 0.5 + game.stage * 0.12;
+  const lvl = (game.loop - 1) * 0.6 + game.depth * 0.14 + (game.challenge ? 0.8 : 0);
+  const cmul = game.challenge ? 1.4 : 1;   // challenge sectors spawn more
   const q = game.spawnQueue;
   const add = (t, fn) => q.push({ t, fn });
 
-  // every Nth wave -> boss
-  if (game.wave % CONFIG.bossEvery === 0) {
-    game.bossPending = true;
-    return;
-  }
-  const pat = game.wave % 6;
+  // BOSS sector: signal the boss once the (final) wave's lead-in clears
+  if (game.isBossSector) { game.bossPending = true; return; }
+
+  const pat = game.sectorWave % 6;
   if (pat === 1) {
-    // diver column
-    for (let i = 0; i < 6; i++)
-      add(i * 0.32, () => spawnEnemy(0, W * (0.2 + 0.12 * (i % 5)), -30, { speed: 150 + lvl * 8, drops: i === 5 }));
+    // diver column (spread across the wide field)
+    const n = Math.round(6 * cmul);
+    for (let i = 0; i < n; i++)
+      add(i * 0.3, () => spawnEnemy(0, W * (0.16 + 0.68 * (i / Math.max(1, n - 1))), -30, { speed: 150 + lvl * 8, drops: i === n - 1 }));
   } else if (pat === 2) {
     // weaver V
-    for (let i = 0; i < 7; i++)
-      add(i * 0.28, () => spawnEnemy(1, W * 0.5 + (i - 3) * 24, -30 - Math.abs(i - 3) * 18, { amp: 90, freq: 1.8, speed: 80 }));
+    const n = Math.round(7 * cmul);
+    for (let i = 0; i < n; i++)
+      add(i * 0.26, () => spawnEnemy(1, W * 0.5 + (i - (n - 1) / 2) * 30, -30 - Math.abs(i - (n - 1) / 2) * 18, { amp: 110, freq: 1.8, speed: 80 }));
   } else if (pat === 3) {
-    // strafers from sides
-    for (let i = 0; i < 5; i++) {
-      add(i * 0.4, () => spawnEnemy(2, -20, 80 + i * 36, { dir: 1, speed: 150, targetY: 80 + i * 36 }));
-      add(i * 0.4 + 0.2, () => spawnEnemy(2, W + 20, 120 + i * 36, { dir: -1, speed: 150, targetY: 120 + i * 36 }));
+    // strafers from both sides, deeper rows on the wide field
+    const n = Math.round(5 * cmul);
+    for (let i = 0; i < n; i++) {
+      add(i * 0.38, () => spawnEnemy(2, -20, 80 + i * 36, { dir: 1, speed: 150, targetY: 80 + i * 36 }));
+      add(i * 0.38 + 0.2, () => spawnEnemy(2, W + 20, 120 + i * 36, { dir: -1, speed: 150, targetY: 120 + i * 36 }));
     }
   } else if (pat === 4) {
-    // turret arc + divers
-    for (let i = 0; i < 3; i++)
-      add(i * 0.5, () => spawnEnemy(3, W * (0.25 + 0.25 * i), -30, { speed: 60, targetY: 70 + i * 12 }));
+    // turret arc + divers (turrets span the wider arc)
     for (let i = 0; i < 4; i++)
-      add(1.6 + i * 0.3, () => spawnEnemy(0, W * (0.3 + 0.12 * i), -30, { speed: 160 }));
+      add(i * 0.45, () => spawnEnemy(3, W * (0.18 + 0.21 * i), -30, { speed: 60, targetY: 70 + (i % 2) * 14 }));
+    for (let i = 0; i < Math.round(5 * cmul); i++)
+      add(1.6 + i * 0.28, () => spawnEnemy(0, W * (0.22 + 0.12 * i), -30, { speed: 160 }));
   } else if (pat === 5) {
-    // gunship + escorts
-    add(0, () => spawnEnemy(4, W * 0.5, -50, { speed: 50, targetY: 110, drops: true }));
-    for (let i = 0; i < 6; i++)
-      add(0.5 + i * 0.25, () => spawnEnemy(1, W * (0.15 + 0.14 * i), -30, { amp: 60, speed: 90 }));
+    // twin gunships + escorts on the wide field
+    add(0, () => spawnEnemy(4, W * 0.32, -50, { speed: 50, targetY: 110, drops: true }));
+    if (game.depth > 3 || game.challenge) add(0.4, () => spawnEnemy(4, W * 0.68, -50, { speed: 50, targetY: 130, drops: true }));
+    for (let i = 0; i < Math.round(6 * cmul); i++)
+      add(0.5 + i * 0.24, () => spawnEnemy(1, W * (0.12 + 0.13 * i), -30, { amp: 70, speed: 90 }));
   } else {
-    // mixed swarm
-    for (let i = 0; i < 8; i++) {
+    // mixed swarm across the full width
+    const n = Math.round(8 * cmul);
+    for (let i = 0; i < n; i++) {
       const ty = randi(0, 2);
-      add(i * 0.22, () => spawnEnemy(ty, rand(W * 0.12, W * 0.88), -30, { speed: 120 + lvl * 6, amp: 80, dir: i % 2 ? 1 : -1, targetY: 60 + rand(0, 100) }));
+      add(i * 0.2, () => spawnEnemy(ty, rand(W * 0.1, W * 0.9), -30, { speed: 120 + lvl * 6, amp: 90, dir: i % 2 ? 1 : -1, targetY: 60 + rand(0, 110) }));
     }
   }
   game.waveActive = true;
@@ -910,6 +1067,21 @@ function onKeyAction(k) {
     else if (k === "Escape" || k === "p") { closeShop(); }
     return;
   }
+  if (state === "gates") {
+    const n = game.gates ? game.gates.length : 0;
+    if (k === "ArrowLeft" || k === "a") { game.gateSel = (game.gateSel + n - 1) % n; audio.toast(); }
+    else if (k === "ArrowRight" || k === "d") { game.gateSel = (game.gateSel + 1) % n; audio.toast(); }
+    else if (k === "Enter" || k === " " || k === "j") { chooseGate(game.gateSel); }
+    return;
+  }
+  if (state === "boon") {
+    const n = game.boon ? game.boon.options.length : 0;
+    if (k === "ArrowLeft" || k === "a") { game.boonSel = (game.boonSel + n - 1) % n; audio.toast(); }
+    else if (k === "ArrowRight" || k === "d") { game.boonSel = (game.boonSel + 1) % n; audio.toast(); }
+    else if (k === "Enter" || k === " " || k === "j") { chooseBoon(game.boonSel); }
+    else if (k === "r") { rerollBoon(); }
+    return;
+  }
   if (state === "over") {
     if (k === "Enter" || k === " " || k === "j") { goTitle(); }
     return;
@@ -934,7 +1106,17 @@ function titleConfirm() {
   startGame();
 }
 function openShop() { state = "shop"; shopSel = 0; audio.toast(); updateFsBtn(); }
-function closeShop() { state = "title"; titleSel = 3; saveMeta(); audio.toast(); updateFsBtn(); }
+function closeShop() {
+  saveMeta(); audio.toast();
+  if (game && game.fromGate) {
+    // mid-run shop: re-sync run-temporary counters that meta feeds and resume
+    game.fromGate = false;
+    game.rerolls = Math.max(game.rerolls, meta.reroll || 0);
+    advanceSector();
+    return;
+  }
+  state = "title"; titleSel = 0; updateFsBtn();
+}
 /* shop confirm: last row is the EXIT entry; others buy the matching upgrade */
 function shopConfirm() {
   if (shopSel >= META_UPGRADES.length) { closeShop(); return; }
@@ -981,11 +1163,22 @@ canvas.addEventListener("mousedown", (e) => {
     if (row >= 0) { shopSel = row; shopConfirm(); }
     return;
   }
+  if (state === "gates") {
+    const row = hitMenuRow(gateRects, cx, cy);
+    if (row >= 0) { game.gateSel = row; chooseGate(row); }
+    return;
+  }
+  if (state === "boon") {
+    const row = hitMenuRow(boonRects, cx, cy);
+    if (row >= 0) { game.boonSel = row; chooseBoon(row); }
+    else if (rerollRect && cx >= rerollRect.x && cx <= rerollRect.x + rerollRect.w && cy >= rerollRect.y && cy <= rerollRect.y + rerollRect.h) rerollBoon();
+    return;
+  }
   if (state === "over") { goTitle(); return; }
   mouseDown = true;
 });
 /* clickable menu-row hit testing (rects in canvas px, populated at draw time) */
-let menuRects = [], shopRects = [];
+let menuRects = [], shopRects = [], gateRects = [], boonRects = [], rerollRect = null;
 function hitMenuRow(rects, cx, cy) {
   for (let i = 0; i < rects.length; i++) {
     const r = rects[i];
@@ -1020,6 +1213,22 @@ canvas.addEventListener("touchstart", (e) => {
     const t0 = e.changedTouches[0];
     const row = hitMenuRow(shopRects, t0.clientX - r.left, t0.clientY - r.top);
     if (row >= 0) { shopSel = row; shopConfirm(); }
+    return;
+  }
+  if (state === "gates") {
+    const r = canvas.getBoundingClientRect();
+    const t0 = e.changedTouches[0];
+    const row = hitMenuRow(gateRects, t0.clientX - r.left, t0.clientY - r.top);
+    if (row >= 0) { game.gateSel = row; chooseGate(row); }
+    return;
+  }
+  if (state === "boon") {
+    const r = canvas.getBoundingClientRect();
+    const t0 = e.changedTouches[0];
+    const cx = t0.clientX - r.left, cy = t0.clientY - r.top;
+    const row = hitMenuRow(boonRects, cx, cy);
+    if (row >= 0) { game.boonSel = row; chooseBoon(row); }
+    else if (rerollRect && cx >= rerollRect.x && cx <= rerollRect.x + rerollRect.w && cy >= rerollRect.y && cy <= rerollRect.y + rerollRect.h) rerollBoon();
     return;
   }
   if (state === "over") { goTitle(); return; }
@@ -1132,6 +1341,21 @@ function pollPadMenus() {
       if (padEdge(i, "down", p.down)) { shopSel = (shopSel + 1) % (n + 1); audio.toast(); }
       if (padEdge(i, "confirm", p.confirm)) shopConfirm();
       if (padEdge(i, "missile", p.missile)) closeShop();   // circle/B = back
+    } else if (state === "gates") {
+      const n = game.gates ? game.gates.length : 0;
+      if (n) {
+        if (padEdge(i, "left", p.left)) { game.gateSel = (game.gateSel + n - 1) % n; audio.toast(); }
+        if (padEdge(i, "right", p.right)) { game.gateSel = (game.gateSel + 1) % n; audio.toast(); }
+        if (padEdge(i, "confirm", p.confirm)) chooseGate(game.gateSel);
+      }
+    } else if (state === "boon") {
+      const n = game.boon ? game.boon.options.length : 0;
+      if (n) {
+        if (padEdge(i, "left", p.left)) { game.boonSel = (game.boonSel + n - 1) % n; audio.toast(); }
+        if (padEdge(i, "right", p.right)) { game.boonSel = (game.boonSel + 1) % n; audio.toast(); }
+        if (padEdge(i, "confirm", p.confirm)) chooseBoon(game.boonSel);
+        if (padEdge(i, "missile", p.missile)) rerollBoon();   // circle/B = reroll
+      }
     } else if (state === "over") {
       if (padEdge(i, "confirm", p.confirm)) goTitle();
     } else if (state === "play") {
@@ -1145,16 +1369,19 @@ function usePlayerBomb(p) {
   if (!p || !p.alive || p.bombs <= 0) return;
   p.bombs--;
   const cleared = clearEnemyBullets(true);
-  // big damage to all enemies + boss
-  for (const e of enemies) { e.hp -= 6; e.flash = 0.2; }
+  // WIDE BLAST blessing scales bomb damage; CHRONO BOMB slows time briefly
+  const bmul = 1 + blessVal(p, "bombr");
+  for (const e of enemies) { e.hp -= 6 * bmul; e.flash = 0.2; if (e.hp <= 0) killEnemy(e, p.idx); }
   if (boss) {
-    boss.hp -= 60; boss.flash = 0.2;
-    for (const part of boss.parts) if (part.alive) part.hp -= 30;
+    boss.hp -= 60 * bmul; boss.flash = 0.2;
+    for (const part of boss.parts) if (part.alive) part.hp -= 30 * bmul;
   }
+  const td = blessVal(p, "timedil");
+  if (td > 0) { game.timeDil = Math.max(game.timeDil || 0, td); }
   game.score += cleared * 5;
   audio.bomb();
   addShake(16, 0.5);
-  ring(p.x, p.y, p.col.ship, 600, 0.7);
+  ring(p.x, p.y, p.col.ship, 600 * (1 + blessVal(p, "bombr") * 0.2), 0.7);
   ring(p.x, p.y, "#ffffff", 400, 0.5);
   burst(p.x, p.y, 40, p.col.ship, 360, 0.7, 4);
   floatText(p.x, p.y - 30, "BOMB!", "#ffffff", 22);
@@ -1170,6 +1397,7 @@ function registerKill(score, x, y) {
   game.combo = Math.min(CONFIG.comboMax, game.combo + 1);
   game.comboT = CONFIG.comboWindow;
   if (game.combo > game.maxCombo) game.maxCombo = game.combo;
+  game.kills++;
   addScore(score + game.combo * 10, x, y);
 }
 
@@ -1180,6 +1408,21 @@ function damagePlayer(p) {
     burst(p.x, p.y, 20, "#aef", 220, 0.5, 3);
     ring(p.x, p.y, "#aef", 80, 0.4);
     audio.explosion(false);
+    // THORN FIELD blessing: shield break clears bullets near you & zaps foes
+    const th = blessVal(p, "thorn");
+    if (th > 0) {
+      ring(p.x, p.y, "#ff8a4a", 120, 0.4);
+      for (const e of enemies) { if (!e.dead && dist2(p.x, p.y, e.x, e.y) < 160 * 160) { e.hp -= 6 * th; e.flash = 0.15; if (e.hp <= 0) killEnemy(e, p.idx); } }
+    }
+    return;
+  }
+  // REVIVE TOKEN meta: cheat death once per token, restoring a shield buffer
+  if (game.reviveTokens > 0) {
+    game.reviveTokens--;
+    p.invuln = CONFIG.invulnTime; p.shield = true;
+    ring(p.x, p.y, "#ffd36e", 220, 0.7); burst(p.x, p.y, 30, "#ffd36e", 300, 0.8, 4);
+    floatText(p.x, p.y - 30, "REVIVE!", "#ffd36e", 18);
+    clearEnemyBullets(false); audio.extraLife();
     return;
   }
   // die
@@ -1213,11 +1456,13 @@ function checkGameOver() {
   const anyAlive = game.players.some((p) => p.lives > 0 || p.alive);
   if (!anyAlive) endGame();
 }
+let bestDepth = parseInt(store.get("bestdepth") || "0", 10) || 0;
 function endGame() {
   state = "over"; paused = false;
   if (game.score > bestScore) { bestScore = game.score; store.set("best", "" + bestScore); }
-  // bank a fraction of run score as persistent ARMORY credits
-  game.creditsEarned = Math.floor(game.score / CONFIG.creditDivisor) + game.maxCombo * 2;
+  if (game.depth > bestDepth) { bestDepth = game.depth; store.set("bestdepth", "" + bestDepth); }
+  // bank a fraction of run score + a depth bonus as persistent META credits
+  game.creditsEarned = Math.floor(game.score / CONFIG.creditDivisor) + game.maxCombo * 2 + game.depth * 8;
   credits += game.creditsEarned;
   saveMeta();
   updateFsBtn();
@@ -1343,20 +1588,27 @@ function updatePlayer(p, dt) {
     p.missileCd = CONFIG.missileCd;
   }
 
-  // graze detection (near-miss of enemy bullets)
-  const gr2 = (CONFIG.grazeR + CONFIG.enemyBulletR) * (CONFIG.grazeR + CONFIG.enemyBulletR);
+  // graze detection (near-miss of enemy bullets). WIDE FIELD blessing widens it.
+  const grR = CONFIG.grazeR + blessVal(p, "grazeR");
+  const gr2 = (grR + CONFIG.enemyBulletR) * (grR + CONFIG.enemyBulletR);
+  const chargeMul = 1 + 0.25 * (meta.graze || 0);   // GRAZE TUNING meta
   for (const b of eBullets) {
     if (!b.on || b.grazed) continue;
     const d2 = dist2(p.x, p.y, b.x, b.y);
     if (d2 < gr2) {
       b.grazed = true;
       game.score += CONFIG.grazeScore;
-      p.bombMeter += CONFIG.grazeCharge;
+      p.bombMeter += CONFIG.grazeCharge * chargeMul;
       floatText(b.x, b.y, "graze", "#9be7ff", 11);
       spawnPart(0, b.x, b.y, 0, 0, 0.3, 3, "#9be7ff", 4);
+      // SIPHON GRAZE blessing: occasional heal/shield from grazing
+      const sg = blessVal(p, "lifegraze");
+      if (sg > 0 && !p.shield && Math.random() < sg * 0.06) {
+        p.shield = true; floatText(p.x, p.y - 30, "+SHIELD", "#9be7ff", 14);
+      }
       if (p.bombMeter >= 1) {
         p.bombMeter -= 1;
-        if (p.bombs < CONFIG.maxBombs) { p.bombs++; audio.extraLife(); floatText(p.x, p.y - 30, "+BOMB", "#ffffff", 16); }
+        if (p.bombs < maxBombsFor()) { p.bombs++; audio.extraLife(); floatText(p.x, p.y - 30, "+BOMB", "#ffffff", 16); }
         else p.bombMeter = 1;
       }
     }
@@ -1378,6 +1630,25 @@ function fireWeapon(p) {
   }
 }
 
+/* current blessing emit-modifiers, set per emitWeapon call and consumed by
+   firePlayer. Single shared object — no per-frame allocation in the hot loop. */
+const curEmitMods = { dmgMul: 1, crit: false, critDmg: 1, pierce: 0, homing: false, split: 0, burn: 0, slow: 0, chain: 0 };
+function computeEmitMods(p) {
+  const m = curEmitMods;
+  m.dmgMul = 1 + blessVal(p, "dmgup");
+  // crit roll per volley
+  const cc = blessVal(p, "crit");
+  m.crit = cc > 0 && Math.random() < cc;
+  m.critDmg = 1.5 + blessVal(p, "critdmg");
+  m.pierce = Math.round(blessVal(p, "pierce"));
+  m.homing = blessHas(p, "homingAll");
+  m.split = blessVal(p, "split");
+  m.burn = blessVal(p, "burn");
+  m.slow = blessVal(p, "slow");
+  m.chain = blessVal(p, "chain");
+  return m;
+}
+
 /* Emit one volley of the current weapon type from (ox,oy). `isOption` softens
    damage and suppresses sound/muzzle for the drone mirror. */
 function emitWeapon(p, ox, oy, isOption) {
@@ -1387,11 +1658,18 @@ function emitWeapon(p, ox, oy, isOption) {
   const col = W.col;
   const sp = CONFIG.pBulletSpeed;
   const baseDmg = CONFIG.pBulletDmg * (isOption ? 0.6 : 1);
+  computeEmitMods(p);
+  const sprAdd = Math.round(blessVal(p, "spread"));   // SCATTER ARRAY extra shots
   if (!isOption) {
     spawnPart(0, ox, oy - 14, 0, -90, 0.1, 4, "#ffffff", 4);
     if (DETAIL) spawnPart(0, ox + rand(-3, 3), oy - 12, rand(-30, 30), -120, 0.12, 3, col, 4);
   }
   const which = p.idx + 1;
+  // gate weapon-specific effect riders to the right weapon type
+  const keepBurn = curEmitMods.burn, keepSlow = curEmitMods.slow, keepChain = curEmitMods.chain;
+  curEmitMods.burn = (wt === 2) ? keepBurn : 0;
+  curEmitMods.slow = (wt === 2) ? keepSlow : 0;
+  curEmitMods.chain = (wt === 1) ? keepChain : 0;
   if (wt === 0) {
     // VULCAN — original spread/stream cannon (preserved feel)
     const mk = (dx, ang) => { const a = -Math.PI / 2 + ang; firePlayer(ox + dx, oy - 10, Math.cos(a) * sp, Math.sin(a) * sp, baseDmg, col, 0, CONFIG.pBulletR, 0, 0, p.idx); };
@@ -1405,12 +1683,14 @@ function emitWeapon(p, ox, oy, isOption) {
       firePlayer(ox - 14, oy, -sp * 0.4, -sp * 0.85, baseDmg, col, 0, CONFIG.pBulletR, 0, 0, p.idx);
       firePlayer(ox + 14, oy, sp * 0.4, -sp * 0.85, baseDmg, col, 0, CONFIG.pBulletR, 0, 0, p.idx);
     }
+    // SCATTER ARRAY: extra angled rounds
+    for (let i = 0; i < sprAdd; i++) { const s = (i + 1) * 0.16; mk(-(13 + i * 4), -s); mk(13 + i * 4, s); }
     if (!isOption) audio.shot(which);
   } else if (wt === 1) {
     // LASER — narrow, fast, piercing bolts straight up. High single-target DPS.
     const dmg = baseDmg * 1.3;
     const pierce = 1 + Math.floor(lvl / 2);    // passes through more foes at level
-    const streams = lvl >= 5 ? 3 : lvl >= 3 ? 2 : 1;
+    const streams = (lvl >= 5 ? 3 : lvl >= 3 ? 2 : 1) + sprAdd;
     const lsp = sp * 1.5;
     for (let i = 0; i < streams; i++) {
       const dx = (i - (streams - 1) / 2) * 6;
@@ -1423,7 +1703,7 @@ function emitWeapon(p, ox, oy, isOption) {
     const pierce = 99;                          // pierces freely (short life caps it)
     const life = 0.32 + lvl * 0.02;             // SHORT range via lifetime
     const wsp = sp * 0.7;
-    const n = 1 + Math.min(4, Math.floor((lvl + 1) / 1.5));  // 2..5 wide arms
+    const n = (1 + Math.min(4, Math.floor((lvl + 1) / 1.5))) + sprAdd;  // 2..5 wide arms (+spread)
     const spread = 0.5 + lvl * 0.06;
     for (let i = 0; i < n; i++) {
       const t = n === 1 ? 0 : (i / (n - 1)) - 0.5;
@@ -1434,7 +1714,7 @@ function emitWeapon(p, ox, oy, isOption) {
   } else {
     // SEEKER — homing darts, lower raw DPS, track movers. More darts at level.
     const dmg = baseDmg * 0.85;
-    const n = Math.min(4, 1 + Math.floor((lvl - 1) / 1.5));
+    const n = Math.min(6, (1 + Math.floor((lvl - 1) / 1.5)) + sprAdd);
     const hsp = sp * 0.78;
     for (let i = 0; i < n; i++) {
       const a = -Math.PI / 2 + (i - (n - 1) / 2) * 0.5;
@@ -1442,16 +1722,29 @@ function emitWeapon(p, ox, oy, isOption) {
     }
     if (!isOption) audio.shot(which);
   }
+  curEmitMods.burn = keepBurn; curEmitMods.slow = keepSlow; curEmitMods.chain = keepChain;
 }
 
-/* secondary salvo: a fan of strong homing missiles (kind 4) on a cooldown */
+/* secondary salvo: a fan of strong homing missiles (kind 4) on a cooldown.
+   DRONE MISSILES blessing adds an extra missile from each Option drone. */
 function fireMissileSalvo(p) {
+  const dmgMul = 1 + blessVal(p, "dmgup");
   const n = 2 + Math.min(2, Math.floor(p.options / 2));   // more missiles with drones
   const col = "#ffe07a";
   for (let i = 0; i < n; i++) {
     const a = -Math.PI / 2 + (i - (n - 1) / 2) * 0.4;
     const sp = CONFIG.pBulletSpeed * 0.55;
-    firePlayer(p.x + (i - (n - 1) / 2) * 8, p.y - 8, Math.cos(a) * sp, Math.sin(a) * sp, CONFIG.pBulletDmg * 2.2, col, 4, CONFIG.pBulletR * 1.1, 0, 0, p.idx);
+    firePlayer(p.x + (i - (n - 1) / 2) * 8, p.y - 8, Math.cos(a) * sp, Math.sin(a) * sp, CONFIG.pBulletDmg * 2.2 * dmgMul, col, 4, CONFIG.pBulletR * 1.1, 0, 0, p.idx);
+  }
+  if (blessHas(p, "optmsl") && p.options > 0) {
+    const k = Math.min(CONFIG.maxOptions, p.options);
+    for (let i = 0; i < k; i++) {
+      const oa = p.optAng + (i / k) * TAU;
+      const oxp = p.x + Math.cos(oa) * CONFIG.optionOrbitR;
+      const oyp = p.y + Math.sin(oa) * CONFIG.optionOrbitR * 0.7 - 6;
+      const sp = CONFIG.pBulletSpeed * 0.5;
+      firePlayer(oxp, oyp, 0, -sp, CONFIG.pBulletDmg * 1.6 * dmgMul, col, 4, CONFIG.pBulletR, 0, 0, p.idx);
+    }
   }
   spawnPart(1, p.x, p.y, 0, 0, 0.3, 2, col, 0, 40);
   audio.missile();
@@ -1526,6 +1819,16 @@ function updateEnemy(e, dt) {
   if (e.flash > 0) e.flash -= dt;
   if (e.fireFlash > 0) e.fireFlash -= dt;
   if (e.recoil > 0) e.recoil = Math.max(0, e.recoil - dt * 6);
+  // blessing status effects: burn (DoT) + slow (movement scalar)
+  let sm = 1;
+  if (e.slow > 0) { e.slow -= dt; sm = 0.55; }
+  if (e.burn > 0) {
+    e.burn -= dt;
+    e.hp -= e.burnDps * dt;
+    if (Math.random() < 0.25) spawnPart(0, e.x + rand(-e.r * 0.5, e.r * 0.5), e.y, 0, -40, 0.25, 2, "#ffb066", 3);
+    if (e.hp <= 0 && !e.dead) killEnemy(e);
+  }
+  dt *= sm;
   switch (e.type) {
     case 0: // diver: straight down, slight homing drift
       e.y += e.speed * dt;
@@ -1568,8 +1871,18 @@ function updateEnemy(e, dt) {
   }
 }
 
-function killEnemy(e) {
+function killEnemy(e, ownerIdx) {
+  if (e.dead) return;
   e.dead = true;
+  // VAMPIRE CORE blessing: chance to heal the killer on kill
+  if (ownerIdx !== undefined && game && game.players[ownerIdx]) {
+    const kp = game.players[ownerIdx];
+    const vc = blessVal(kp, "vampire");
+    if (vc > 0 && kp.alive && Math.random() < vc) {
+      if (!kp.shield) { kp.shield = true; floatText(kp.x, kp.y - 26, "VAMP", "#ff6b6b", 12); }
+      else if (kp.lives < 9 && Math.random() < 0.25) { kp.lives++; floatText(kp.x, kp.y - 26, "+LIFE", "#ff6b6b", 13); }
+    }
+  }
   const big = e.type === 4;
   audio.explosion(big);
   burst(e.x, e.y, big ? 30 : 16, e.col, big ? 320 : 220, big ? 0.8 : 0.5, big ? 4 : 3);
@@ -1622,6 +1935,8 @@ function updateBoss(dt) {
       }
       game.bossesKilled++;
       boss = null;
+      // defeating a boss clears the sector -> open a STRONGER gate choice
+      if (state === "play") onSectorCleared();
     }
     return;
   }
@@ -1779,13 +2094,42 @@ function collidePlayerBullets() {
       if (b.lastHit === e.eid) return false;
       if (dist2(b.x, b.y, e.x, e.y) < (e.r + b.r) * (e.r + b.r)) {
         e.hp -= b.dmg; e.flash = 0.12;
-        spawnPart(0, b.x, b.y, 0, 0, 0.18, 3, "#fff", 4);
-        if (e.hp <= 0) killEnemy(e);
+        spawnPart(0, b.x, b.y, 0, 0, 0.18, 3, b.crit ? "#ffd36e" : "#fff", b.crit ? 6 : 4);
+        if (b.crit) floatText(e.x, e.y - 8, "CRIT", "#ffd36e", 12);
+        // blessing riders: burn (WAVE), slow (WAVE), chain (LASER), split (any)
+        if (b.burn > 0) { e.burn = Math.max(e.burn, 1.4); e.burnDps = Math.max(e.burnDps, b.burn); }
+        if (b.slow > 0) e.slow = Math.max(e.slow, 1.0);
+        if (b.chain > 0) applyChain(b, e);
+        if (b.split > 0 && Math.random() < b.split) spawnShrapnel(b, e);
+        if (e.hp <= 0) killEnemy(e, b.owner);
         b.lastHit = e.eid;
         return bulletConsume(b);   // true => stop scanning (bullet gone)
       }
       return false;
     });
+  }
+}
+/* ARC RELAY — chain a fraction of damage to the nearest OTHER live enemy. */
+function applyChain(b, from) {
+  let best = null, bd = Infinity;
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (e.dead || e.eid === from.eid) continue;
+    const d = dist2(from.x, from.y, e.x, e.y);
+    if (d < bd && d < 150 * 150) { bd = d; best = e; }
+  }
+  if (!best) return;
+  best.hp -= b.dmg * b.chain; best.flash = 0.1;
+  spawnPart(0, (from.x + best.x) / 2, (from.y + best.y) / 2, 0, 0, 0.16, 4, "#b6ff6e", 6);
+  if (best.hp <= 0 && !best.dead) killEnemy(best, b.owner);
+}
+/* SHRAPNEL — split a couple of low-damage fragments on hit (pooled). */
+function spawnShrapnel(b, e) {
+  for (let i = -1; i <= 1; i += 2) {
+    const a = -Math.PI / 2 + i * 0.7;
+    const sp = CONFIG.pBulletSpeed * 0.6;
+    const f = firePlayer(e.x, e.y, Math.cos(a) * sp, Math.sin(a) * sp, b.dmg * 0.45, b.col, 0, CONFIG.pBulletR * 0.7, 0, 0.45, b.owner);
+    f.split = 0;   // fragments don't recursively split
   }
 }
 
@@ -1890,7 +2234,8 @@ function updatePowerups(dt) {
 
 /* ---------------- §Q MAIN SIM STEP ---------------- */
 function stepWaves(dt) {
-  if (boss) return; // no new waves while boss active
+  if (game.sectorCleared) return;   // sector done, waiting for gates UI
+  if (boss) return;                 // no new waves while boss active
   if (game.bossPending) {
     // wait until field is clearish then spawn boss
     if (enemies.length === 0) { spawnBoss(); game.bossPending = false; }
@@ -1898,7 +2243,10 @@ function stepWaves(dt) {
   }
   if (!game.waveActive) {
     game.waveTimer -= dt;
-    if (game.waveTimer <= 0) buildWave();
+    if (game.waveTimer <= 0) {
+      if (game.sectorWave >= game.sectorWaves) { onSectorCleared(); return; }
+      buildWave();
+    }
     return;
   }
   // dispatch queued spawns
@@ -1911,10 +2259,172 @@ function stepWaves(dt) {
   // wave ends when queue empty + field clear
   if (q.length === 0 && enemies.length === 0) {
     game.waveActive = false;
-    game.waveTimer = 2.2;
-    game.stage++;
-    if (game.stage > 8) { game.stage = 1; game.loop++; showToast("LOOP " + game.loop + " — harder!"); }
+    game.waveTimer = 1.8;
   }
+}
+
+/* a sector is fully cleared -> open the HADES-STYLE GATE choice. Boss sectors
+   that loop back to depth divisible by full cycle bump the loop counter. */
+function onSectorCleared() {
+  game.sectorCleared = true;
+  game.waveActive = false;
+  // every full cycle of sectors (bossEvery * loopSectors) increases the loop
+  if (game.depth > 0 && game.depth % (CONFIG.bossEvery * 2) === 0) {
+    game.loop++;
+    showToast("LOOP " + game.loop + " — escalating!");
+  }
+  openGates();
+}
+
+/* ---------------- §I2 GATES (Hades-style reward doors) ---------------- */
+const GATE_TYPES = {
+  blessing: { name: "BLESSING", zh: "祝福",   col: "#d49bff", icon: "✦" },
+  weapon:   { name: "WEAPON",   zh: "武器",   col: "#b6ff6e", icon: "W" },
+  option:   { name: "DRONE",    zh: "僚机",   col: "#aef0ff", icon: "O" },
+  heal:     { name: "REPAIR",   zh: "维修",   col: "#7affc4", icon: "+" },
+  credits:  { name: "CREDITS",  zh: "点数",   col: "#ffe98a", icon: "$" },
+  bomb:     { name: "BOMB",     zh: "炸弹",   col: "#ffd36e", icon: "B" },
+  shop:     { name: "SHOP",     zh: "商店",   col: "#5ee6ff", icon: "⚙" },
+  challenge:{ name: "CHALLENGE",zh: "试炼",   col: "#ff6b6b", icon: "⚔" },
+};
+/* pick a sane, varied spread of gate offers. Boss-cleared sectors get richer
+   offers (always a blessing + a strong pick). FORTUNE meta improves odds. */
+function rollGates(boss) {
+  const pool = ["weapon", "option", "heal", "credits", "bomb"];
+  const offers = [];
+  // first slot: a blessing (the heart of the build) — guaranteed most sectors
+  if (boss || Math.random() < 0.85) offers.push("blessing");
+  // shop / challenge appear occasionally
+  if (Math.random() < 0.22 + (meta.gateodds || 0) * 0.04) offers.push("shop");
+  if (Math.random() < 0.18) offers.push("challenge");
+  // fill remaining slots from the pool, no dupes, up to 3 total
+  const want = boss ? 3 : (2 + (Math.random() < 0.5 ? 1 : 0));
+  const shuffled = pool.slice().sort(() => Math.random() - 0.5);
+  for (const t of shuffled) { if (offers.length >= want) break; if (offers.indexOf(t) < 0) offers.push(t); }
+  while (offers.length > 3) offers.pop();
+  if (offers.length < 2) offers.push("credits");
+  // build offer objects (rarity preview for blessing scaled by depth + FORTUNE)
+  return offers.map((type) => ({
+    type,
+    rarity: type === "blessing" ? rollRarity(game.depth + (meta.gateodds || 0) * 2 + (boss ? 4 : 0)) : 0,
+    bossReward: !!boss,
+  }));
+}
+function openGates() {
+  game.gates = rollGates(game.isBossSector);
+  game.gateSel = 0;
+  state = "gates";
+  audio.toast();
+  updateFsBtn();
+}
+/* the player flies into / selects a gate; apply its reward then advance */
+function chooseGate(idx) {
+  if (!game.gates || idx < 0 || idx >= game.gates.length) return;
+  const g = game.gates[idx];
+  const mult = g.bossReward ? 2 : 1;     // boss gates are stronger
+  audio.purchase();
+  switch (g.type) {
+    case "blessing":
+      // queue a choose-1-of-3 boon pick per player
+      game.gates = null;
+      beginBoonPicks(g.rarity, g.bossReward);
+      return;
+    case "weapon":
+      for (const p of game.players) {
+        const maxL = maxWeaponLevel();
+        if (p.wlvl[p.wtype] < maxL) p.wlvl[p.wtype]++;
+        else { const wi = (p.wtype + 1) % WEAPONS.length; p.wtype = wi; p.wlvl[wi] = Math.max(p.wlvl[wi], 2); }
+      }
+      showToast("WEAPON UP / 武器强化");
+      break;
+    case "option":
+      for (const p of game.players) if (p.options < CONFIG.maxOptions) p.options++;
+      showToast("DRONE / 僚机 +1");
+      break;
+    case "heal":
+      for (const p of game.players) { if (p.lives < 9) p.lives += mult; p.shield = true; if (!p.alive && p.lives > 0 && p.spectating) { p.spectating = false; respawnPlayer(p); } }
+      showToast("REPAIR / 维修");
+      break;
+    case "credits": {
+      const amt = (40 + game.depth * 12) * mult;
+      credits += amt; saveMeta();
+      showToast("+" + amt + " CR");
+      break;
+    }
+    case "bomb":
+      for (const p of game.players) p.bombs = Math.min(maxBombsFor(), p.bombs + mult);
+      showToast("BOMB / 炸弹 +" + mult);
+      break;
+    case "shop":
+      // mid-run shop reuses the ARMORY; return to run after
+      game.gates = null;
+      state = "shop"; shopSel = 0; game.fromGate = true; updateFsBtn();
+      return;
+    case "challenge":
+      game.challengeNext = true;
+      showToast("⚔ CHALLENGE — double reward next");
+      break;
+  }
+  game.gates = null;
+  advanceSector();
+}
+function advanceSector() {
+  // clear the field & enter the next sector
+  enemies.length = 0; clearEnemyBullets(false);
+  for (const b of pBullets) b.on = false;
+  state = "play"; paused = false;
+  startSector();
+  updateFsBtn();
+}
+
+/* ---------------- §I3 BOON PICKS (choose-1-of-3, per player) ---------------- */
+function beginBoonPicks(baseRarity, bossReward) {
+  game.boonQueue = game.players.filter((p) => p.lives > 0 || p.alive).map((p) => p.idx);
+  game.boonBaseRarity = baseRarity || 0;
+  game.boonBoss = !!bossReward;
+  nextBoonPick();
+}
+function nextBoonPick() {
+  if (!game.boonQueue || game.boonQueue.length === 0) { game.boon = null; advanceSector(); return; }
+  const pidx = game.boonQueue.shift();
+  const p = game.players[pidx];
+  game.boon = { pidx, options: rollBoonOptions(p), rerollsLeft: game.rerolls };
+  game.boonSel = 0;
+  state = "boon";
+  updateFsBtn();
+}
+/* roll 3 distinct blessing options for a player, each with its own rarity tier
+   (>= the gate's base rarity). Avoids offering maxed-out blessings when possible. */
+function rollBoonOptions(p) {
+  const avail = BLESSINGS.filter((b) => blessStacks(p, b.id) < b.max);
+  const src = avail.length >= 3 ? avail : BLESSINGS;
+  const pool = src.slice().sort(() => Math.random() - 0.5);
+  const out = [];
+  for (let i = 0; i < pool.length && out.length < 3; i++) {
+    let rr = rollRarity(game.depth + (game.boonBoss ? 4 : 0));
+    if (rr < (game.boonBaseRarity || 0)) rr = game.boonBaseRarity;
+    out.push({ id: pool[i].id, rarity: rr });
+  }
+  return out;
+}
+function chooseBoon(idx) {
+  if (!game.boon || idx < 0 || idx >= game.boon.options.length) return;
+  const o = game.boon.options[idx];
+  const p = game.players[game.boon.pidx];
+  grantBlessing(p, o.id, o.rarity);
+  const def = blessingDef(o.id), R = RARITY[o.rarity];
+  audio.powerup("weapon");
+  showToast(R.name + " " + def.name);
+  nextBoonPick();
+}
+function rerollBoon() {
+  if (!game.boon || game.rerolls <= 0) { audio.denied(); return; }
+  game.rerolls--;
+  const p = game.players[game.boon.pidx];
+  game.boon.options = rollBoonOptions(p);
+  game.boon.rerollsLeft = game.rerolls;
+  game.boonSel = 0;
+  audio.toast();
 }
 
 function simStep(dt) {
@@ -1922,30 +2432,34 @@ function simStep(dt) {
   game.elapsed += dt;
   // combo decay
   if (game.comboT > 0) { game.comboT -= dt; if (game.comboT <= 0) game.combo = 0; }
+  // CHRONO BOMB time-dilation: slows hostiles (not the player) briefly
+  if (game.timeDil > 0) game.timeDil -= dt;
+  const hostileDt = game.timeDil > 0 ? dt * 0.4 : dt;
 
   updateStars(dt);
 
-  // players
+  // players (always full-speed)
   for (const p of game.players) updatePlayer(p, dt);
 
-  // enemies
+  // enemies (slowed under time-dilation)
   for (let i = enemies.length - 1; i >= 0; i--) {
     const e = enemies[i];
-    updateEnemy(e, dt);
+    updateEnemy(e, hostileDt);
     if (e.dead || e.y > CONFIG.playH + 60 || e.x < -80 || e.x > CONFIG.playW + 80) {
       enemies.splice(i, 1);
     }
   }
 
-  // boss
-  updateBoss(dt);
+  // boss (slowed under time-dilation)
+  updateBoss(hostileDt);
 
   // bullets
   for (const b of pBullets) {
     if (!b.on) continue;
     b.t += dt;
-    // homing kinds steer toward nearest target (3 = seeker dart, 4 = missile)
-    if (b.kind === 3 || b.kind === 4) {
+    // homing kinds steer toward nearest target (3 = seeker dart, 4 = missile),
+    // plus any bullet flagged by the GUIDANCE CHIP blessing (gentle homing).
+    if (b.kind === 3 || b.kind === 4 || b.homing) {
       const tgt = findHomingTarget(b.x, b.y);
       if (tgt) {
         const sp = Math.hypot(b.vx, b.vy) || 1;
@@ -1954,7 +2468,9 @@ function simStep(dt) {
         let diff = desired - cur;
         while (diff > Math.PI) diff -= TAU;
         while (diff < -Math.PI) diff += TAU;
-        const turn = (b.kind === 4 ? 3.2 : 5.0) * dt;   // rad/s cap
+        // blessing-homing on non-seeker kinds turns gently so feel stays "shmup"
+        const turnRate = b.kind === 4 ? 3.2 : (b.kind === 3 ? 5.0 : 2.2);
+        const turn = turnRate * dt;   // rad/s cap
         cur += clamp(diff, -turn, turn);
         b.vx = Math.cos(cur) * sp; b.vy = Math.sin(cur) * sp;
         b.ang = cur;
@@ -1968,7 +2484,7 @@ function simStep(dt) {
   for (const b of eBullets) {
     if (!b.on) continue;
     b.t += dt;
-    b.x += b.vx * dt; b.y += b.vy * dt;
+    b.x += b.vx * hostileDt; b.y += b.vy * hostileDt;
     if (b.y < -30 || b.y > CONFIG.playH + 30 || b.x < -30 || b.x > CONFIG.playW + 30) b.on = false;
   }
 
@@ -2639,8 +3155,9 @@ function drawHUD() {
   ctx.shadowBlur = 0;
   neonText("SCORE " + game.score, playX + playW / 2, playY + 18, Math.max(13, ps(15)), "#cfeaff");
   neonText("BEST " + Math.max(bestScore, game.score), playX + playW / 2, playY + 38, Math.max(10, ps(11)), "rgba(180,210,255,0.7)");
-  // stage / loop
-  neonText("STAGE " + game.stage + "  LOOP " + game.loop, playX + playW / 2, playY + playH - 14, Math.max(9, ps(10)), "rgba(150,180,230,0.6)");
+  // sector / depth / loop (+ time-dilation cue)
+  const secLbl = "SECTOR " + game.depth + (game.isBossSector ? " ⚠BOSS" : (" · wave " + Math.min(game.sectorWave, game.sectorWaves) + "/" + game.sectorWaves)) + "  LOOP " + game.loop;
+  neonText(secLbl, playX + playW / 2, playY + playH - 14, Math.max(9, ps(10)), game.timeDil > 0 ? "#caa0ff" : "rgba(150,180,230,0.6)");
   // combo
   if (game.combo > 1) {
     neonText("x" + game.combo + " COMBO", playX + playW / 2, playY + 58, Math.max(11, ps(13)), "#ffd36e");
@@ -2703,15 +3220,40 @@ function drawPlayerPanel(p, x, y, align) {
     ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(bx, yy + 2, bw, 5);
     ctx.fillStyle = "#9be7ff"; ctx.fillRect(bx, yy + 2, bw * clamp(p.bombMeter, 0, 1), 5);
     if (p.shield) { ctx.fillStyle = "#9be7ff"; ctx.fillText("⛨", align === "left" ? x + bw + 8 : x - bw - 8, yy - 2); }
+    yy += 16;
+    drawBlessingIcons(p, x, yy, align);
+  }
+}
+/* held blessings as small coloured icons with stack counts (rarity-tinted),
+   wrapping across rows so they never overflow the slim HUD rail. */
+function drawBlessingIcons(p, x, y, align) {
+  const ids = Object.keys(p.bless).filter((id) => p.bless[id] && p.bless[id].stacks > 0);
+  if (!ids.length) return;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const sz = 16, gap = 2, perRow = 6;
+  for (let i = 0; i < ids.length; i++) {
+    const b = p.bless[ids[i]], R = RARITY[b.rarity] || RARITY[0], def = blessingDef(ids[i]);
+    const col = i % perRow, row = Math.floor(i / perRow);
+    const rowCount = Math.min(perRow, ids.length - row * perRow);
+    const bx = (align === "left" ? x + col * (sz + gap) : x - (rowCount - col) * (sz + gap));
+    const by = y + row * (sz + gap);
+    ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.fillRect(bx, by - sz / 2, sz, sz);
+    ctx.strokeStyle = R.col; ctx.lineWidth = 1; ctx.strokeRect(bx, by - sz / 2, sz, sz);
+    ctx.fillStyle = R.col; ctx.shadowBlur = 4; ctx.shadowColor = R.col;
+    ctx.font = "700 9px 'Courier New', monospace";
+    ctx.fillText((def && def.name ? def.name[0] : "✦"), bx + 3, by - 1);
+    ctx.shadowBlur = 0;
+    if (b.stacks > 1) { ctx.fillStyle = "#fff"; ctx.font = "700 8px 'Courier New', monospace"; ctx.fillText(String(b.stacks), bx + sz - 6, by + 4); }
   }
 }
 function drawPlayerPanelCompact(p, x, y, align) {
   ctx.textAlign = align; ctx.textBaseline = "bottom";
   ctx.font = "700 12px 'Courier New', monospace";
   ctx.shadowBlur = 6; ctx.shadowColor = p.col.ship;
+  const nb = Object.keys(p.bless).filter((id) => p.bless[id] && p.bless[id].stacks > 0).length;
   const txt = p.spectating && p.lives <= 0
     ? p.col.tag + " OUT"
-    : p.col.tag + " ♥" + p.lives + " ✦" + p.bombs + " " + curWeaponDef(p).icon + curLevel(p) + (p.options > 0 ? " O" + p.options : "");
+    : p.col.tag + " ♥" + p.lives + " ✦" + p.bombs + " " + curWeaponDef(p).icon + curLevel(p) + (p.options > 0 ? " O" + p.options : "") + (nb > 0 ? " ✦" + nb : "");
   ctx.fillStyle = p.col.ship;
   ctx.fillText(txt, x, y);
   ctx.shadowBlur = 0;
@@ -2758,24 +3300,24 @@ function howToLines() {
   if (touchUI) {
     return [
       "拖动移动 · 自动开火 — drag to move, auto-fire",
-      "拾取武器：V火神/L镭射/W波动/H追踪 — grab V/L/W/H weapons",
-      "同色升级 · 异色切换 — same colour levels up, other switches",
-      "O 僚机环绕并同步开火 — O Options orbit & mirror fire",
-      "MSL 键：追踪导弹齐射 — MSL: homing-missile salvo",
-      "点炸弹键：清屏炸弹 · 擦弹充能 — BOMB clears screen, graze charges",
-      "武器升级商店在标题页 — ARMORY shop on the title screen",
+      "清剿每个扇区的波次 — clear each SECTOR's waves",
+      "扇区后选门扉获得奖励 — pick a GATE for a reward",
+      "祝福门：三选一构筑 build — BLESSING gate: choose 1 of 3",
+      "每5扇区是 BOSS 战 — every 5th sector is a BOSS",
+      "MSL 导弹 · 点炸弹清屏 · 擦弹充能 — MSL / BOMB / graze",
+      "死亡结束 run，点数进 META 大厅 — death banks CR to the HUB",
     ];
   }
   return [
     "移动：方向键/摇杆 — move: arrows / stick · auto-fire",
-    "武器 V火神 L镭射 W波动 H追踪 — V/L/W/H weapon types",
-    "同色升级 · 异色切换武器 — same colour levels up, other switches",
-    "O 僚机环绕并同步开火 — O Options orbit & mirror fire",
-    "Shift/X · 圆圈键 · 逗号(P2)：导弹齐射 — missile salvo",
-    "空格/△：清屏炸弹 · 擦弹充能 — bomb / graze charges",
-    "标题页 ARMORY 武器升级（永久）— ARMORY: permanent upgrades",
-    "双人：P2 手柄或第二套键盘 — 2P: gamepad / 2nd keyboard",
-    "P 暂停 · M 静音 · F 全屏 — pause / mute / fullscreen",
+    "清剿扇区波次，再选门扉 — clear SECTOR waves, then pick a GATE",
+    "门扉：祝福/武器/僚机/维修/点数/炸弹 — gate rewards",
+    "祝福三选一，按稀有度构筑 — BLESSING: choose 1 of 3 (rarity)",
+    "每5扇区 BOSS，更强奖励 — every 5th sector BOSS, richer gate",
+    "Shift/X/圆圈 导弹 · 空格/△ 炸弹 · 擦弹充能 — missile / bomb / graze",
+    "META HUB：永久升级（跨 run）— META HUB: permanent upgrades",
+    "宽广战场 · 双人 P2 手柄/第二键盘 — wider field · 2P co-op",
+    "R 重抽祝福 · P 暂停 · M 静音 · F 全屏 — reroll / pause / mute / fs",
   ];
 }
 
@@ -2786,17 +3328,17 @@ function drawTitle() {
   neonText("STARFALL", cx, y, Math.max(34, ps(56)), "#5ee6ff"); y += Math.max(40, ps(58));
   neonText("SQUADRON", cx, y, Math.max(28, ps(46)), "#ff8adf"); y += Math.max(34, ps(48));
   ctx.shadowBlur = 0;
-  neonText("打飞机 · neon shoot-'em-up", cx, y, Math.max(11, ps(14)), "rgba(180,210,255,0.7)");
-  y += Math.max(28, ps(40));
-  neonText("BEST  " + bestScore, cx, y, Math.max(13, ps(16)), "#ffe98a");
-  y += Math.max(36, ps(48));
+  neonText("打飞机 · roguelike shoot-'em-up", cx, y, Math.max(11, ps(14)), "rgba(180,210,255,0.7)");
+  y += Math.max(26, ps(36));
+  neonText("BEST DEPTH  " + bestDepth + "   ·   BEST  " + bestScore, cx, y, Math.max(12, ps(15)), "#ffe98a");
+  y += Math.max(34, ps(46));
 
   // menu items
   const items = [
-    { label: "▶  START / 开始", sel: titleSel === 0 },
+    { label: "▶  BEGIN RUN / 开始挑战", sel: titleSel === 0 },
     { label: (numPlayers === 1 ? "◂ 1P 单人 ▸" : "◂ 2P 双人 ▸"), sel: titleSel === 1 },
     { label: "AUTO-FULLSCREEN: " + (FS.auto ? "ON" : "OFF"), sel: titleSel === 2 },
-    { label: "⚙ ARMORY / 武器升级  [" + credits + " CR]", sel: titleSel === 3 },
+    { label: "⚙ META HUB / 永久升级  [" + credits + " CR]", sel: titleSel === 3 },
   ];
   menuRects = [];
   const rowH = Math.max(28, ps(36));
@@ -2825,17 +3367,19 @@ function drawShop() {
   const cx = playX + playW / 2;
   let y = playY + Math.max(34, ps(46));
   ctx.shadowBlur = 18; ctx.shadowColor = "#5ee6ff";
-  neonText("ARMORY / 武器升级", cx, y, Math.max(20, ps(26)), "#5ee6ff");
+  neonText(game && game.fromGate ? "MID-RUN SHOP / 商店" : "META HUB / 永久升级", cx, y, Math.max(20, ps(26)), "#5ee6ff");
   ctx.shadowBlur = 0;
   y += Math.max(26, ps(34));
   neonText("CREDITS / 点数: " + credits + " CR", cx, y, Math.max(13, ps(16)), "#ffe98a");
   y += Math.max(20, ps(26));
-  neonText("(shared squadron meta — applies to P1 & P2)", cx, y, Math.max(9, ps(11)), "rgba(150,200,255,0.6)");
+  neonText("permanent upgrades — shared P1 & P2, persist between runs", cx, y, Math.max(9, ps(11)), "rgba(150,200,255,0.6)");
   y += Math.max(22, ps(28));
 
   shopRects = [];
-  const rowH = Math.max(30, ps(38));
-  const fs = Math.max(11, ps(13));
+  // fit all rows + a BACK row into the remaining column height
+  const avail = (playY + playH) - y - Math.max(30, ps(40));
+  const rowH = clamp(avail / (META_UPGRADES.length + 1), Math.max(20, ps(26)), Math.max(30, ps(38)));
+  const fs = clamp(rowH * 0.36, 9, Math.max(11, ps(13)));
   ctx.textAlign = "left"; ctx.textBaseline = "middle";
   const lx = playX + playW * 0.06;
   for (let i = 0; i < META_UPGRADES.length; i++) {
@@ -2871,6 +3415,118 @@ function drawShop() {
   neonText(touchUI ? "tap a row to buy · tap BACK to exit" : "↑↓ select · Enter/× buy · Esc/B back", cx, y, Math.max(9, ps(11)), "rgba(150,200,255,0.65)");
 }
 
+/* ---------------- §S2 GATE / BOON OVERLAYS ---------------- */
+function drawGateCard(g, gx, gy, gw, gh, sel) {
+  const T = GATE_TYPES[g.type] || GATE_TYPES.credits;
+  const col = (g.type === "blessing" && g.rarity >= 0) ? RARITY[g.rarity].col : T.col;
+  ctx.save();
+  // card body
+  ctx.fillStyle = sel ? "rgba(20,30,50,0.92)" : "rgba(10,16,30,0.82)";
+  ctx.strokeStyle = col; ctx.lineWidth = sel ? ps(3) : ps(1.5);
+  ctx.shadowBlur = sel ? ps(20) : ps(8); ctx.shadowColor = col;
+  ctx.beginPath(); ctx.rect(gx, gy, gw, gh); ctx.fill(); ctx.stroke();
+  ctx.shadowBlur = 0;
+  const cxc = gx + gw / 2;
+  // icon disc
+  ctx.fillStyle = col; ctx.shadowBlur = ps(14); ctx.shadowColor = col;
+  ctx.beginPath(); ctx.arc(cxc, gy + gh * 0.3, gw * 0.2, 0, TAU); ctx.fill();
+  ctx.fillStyle = "#06121a"; ctx.shadowBlur = 0;
+  ctx.font = "700 " + Math.max(18, ps(26)) + "px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText(T.icon, cxc, gy + gh * 0.3);
+  // name + zh
+  neonText(T.name, cxc, gy + gh * 0.62, Math.max(13, ps(16)), col);
+  neonText(T.zh, cxc, gy + gh * 0.74, Math.max(10, ps(12)), "rgba(200,220,255,0.7)");
+  if (g.type === "blessing") neonText(RARITY[g.rarity].name, cxc, gy + gh * 0.87, Math.max(9, ps(11)), col);
+  else if (g.bossReward) neonText("x2 REWARD", cxc, gy + gh * 0.87, Math.max(9, ps(11)), "#ffd36e");
+  ctx.restore();
+}
+function drawGates() {
+  ctx.fillStyle = "rgba(5,5,20,0.82)"; ctx.fillRect(playX, playY, playW, playH);
+  const cx = playX + playW / 2;
+  let y = playY + Math.max(40, ps(56));
+  neonText("SECTOR " + game.depth + " CLEAR", cx, y, Math.max(22, ps(30)), "#7affc4");
+  y += Math.max(26, ps(34));
+  neonText("CHOOSE A GATE / 选择门扉", cx, y, Math.max(13, ps(16)), "rgba(200,225,255,0.8)");
+  y += Math.max(34, ps(46));
+  const gates = game.gates || [];
+  const n = gates.length || 1;
+  const gw = Math.min(ps(150), (playW * 0.92) / n - ps(10));
+  const gh = gw * 1.25;
+  const totalW = gw * n + ps(14) * (n - 1);
+  let gxs = cx - totalW / 2;
+  gateRects = [];
+  for (let i = 0; i < gates.length; i++) {
+    const gx = gxs + i * (gw + ps(14));
+    drawGateCard(gates[i], gx, y, gw, gh, game.gateSel === i);
+    gateRects.push({ idx: i, x: gx, y, w: gw, h: gh });
+  }
+  y += gh + Math.max(26, ps(34));
+  neonText(touchUI ? "tap a gate to enter" : "← → select · Enter/× enter", cx, y, Math.max(10, ps(12)), "rgba(150,200,255,0.7)");
+}
+
+function blessRowText(p) { return p && numPlayers === 2 ? (p.col.tag + "  ") : ""; }
+function drawBoon() {
+  ctx.fillStyle = "rgba(5,5,20,0.85)"; ctx.fillRect(playX, playY, playW, playH);
+  const cx = playX + playW / 2;
+  let y = playY + Math.max(38, ps(52));
+  const p = game.players[game.boon.pidx];
+  const tagCol = p ? p.col.ship : "#5ee6ff";
+  neonText(blessRowText(p) + "BLESSING / 祝福", cx, y, Math.max(20, ps(28)), tagCol);
+  y += Math.max(24, ps(32));
+  neonText("CHOOSE ONE / 三选一", cx, y, Math.max(12, ps(15)), "rgba(200,225,255,0.8)");
+  y += Math.max(30, ps(40));
+  const opts = game.boon.options || [];
+  const n = opts.length || 1;
+  const cw2 = Math.min(ps(170), (playW * 0.94) / n - ps(10));
+  const chh = cw2 * 1.35;
+  const totalW = cw2 * n + ps(12) * (n - 1);
+  let gxs = cx - totalW / 2;
+  boonRects = [];
+  for (let i = 0; i < opts.length; i++) {
+    const o = opts[i], def = blessingDef(o.id), R = RARITY[o.rarity];
+    const gx = gxs + i * (cw2 + ps(12));
+    const sel = game.boonSel === i;
+    ctx.save();
+    ctx.fillStyle = sel ? "rgba(24,18,42,0.95)" : "rgba(12,10,26,0.82)";
+    ctx.strokeStyle = R.col; ctx.lineWidth = sel ? ps(3) : ps(1.5);
+    ctx.shadowBlur = sel ? ps(20) : ps(8); ctx.shadowColor = R.col;
+    ctx.beginPath(); ctx.rect(gx, y, cw2, chh); ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0;
+    const c2 = gx + cw2 / 2;
+    neonText(R.name, c2, y + chh * 0.12, Math.max(10, ps(12)), R.col);
+    // icon: stack count of existing + name
+    ctx.fillStyle = R.col; ctx.shadowBlur = ps(12); ctx.shadowColor = R.col;
+    ctx.beginPath(); ctx.arc(c2, y + chh * 0.32, cw2 * 0.16, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#100018"; ctx.shadowBlur = 0;
+    ctx.font = "700 " + Math.max(13, ps(18)) + "px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("✦", c2, y + chh * 0.32);
+    neonText(def.name, c2, y + chh * 0.55, Math.max(11, ps(13)), "#ffffff");
+    neonText(def.zh, c2, y + chh * 0.66, Math.max(9, ps(11)), "rgba(200,220,255,0.7)");
+    // wrap desc
+    ctx.fillStyle = "rgba(190,215,255,0.8)"; ctx.font = "500 " + Math.max(8, ps(10)) + "px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(def.desc, c2, y + chh * 0.80);
+    const have = blessStacks(p, o.id);
+    if (have > 0) neonText("held x" + have, c2, y + chh * 0.92, Math.max(8, ps(10)), "rgba(150,200,255,0.7)");
+    ctx.restore();
+    boonRects.push({ idx: i, x: gx, y, w: cw2, h: chh });
+  }
+  y += chh + Math.max(22, ps(30));
+  // reroll button
+  rerollRect = null;
+  if (game.rerolls > 0) {
+    const rw = ps(180), rx = cx - rw / 2, rh = Math.max(26, ps(32));
+    ctx.fillStyle = "rgba(20,30,50,0.8)"; ctx.strokeStyle = "#5ee6ff"; ctx.lineWidth = ps(1.5);
+    ctx.beginPath(); ctx.rect(rx, y - rh / 2, rw, rh); ctx.fill(); ctx.stroke();
+    neonText("REROLL (" + game.rerolls + ")  [R]", cx, y, Math.max(11, ps(13)), "#5ee6ff");
+    rerollRect = { x: rx, y: y - rh / 2, w: rw, h: rh };
+    y += Math.max(26, ps(34));
+  }
+  neonText(touchUI ? "tap a card to take it" : "← → select · Enter/× take · R reroll", cx, y, Math.max(10, ps(12)), "rgba(150,200,255,0.7)");
+}
+
 function drawPause() {
   ctx.fillStyle = "rgba(5,5,20,0.72)"; ctx.fillRect(playX, playY, playW, playH);
   const cx = playX + playW / 2;
@@ -2888,13 +3544,14 @@ function drawOver() {
   ctx.fillStyle = "rgba(5,5,20,0.78)"; ctx.fillRect(playX, playY, playW, playH);
   const cx = playX + playW / 2;
   let y = playY + playH * 0.30;
-  neonText("GAME OVER", cx, y, Math.max(28, ps(42)), "#ff6b6b"); y += Math.max(44, ps(58));
-  neonText("SCORE  " + game.score, cx, y, Math.max(16, ps(22)), "#cfeaff"); y += Math.max(28, ps(36));
-  neonText("BEST   " + bestScore, cx, y, Math.max(14, ps(18)), "#ffe98a"); y += Math.max(24, ps(32));
-  neonText("MAX COMBO  x" + game.maxCombo, cx, y, Math.max(12, ps(15)), "#ffd36e"); y += Math.max(28, ps(36));
+  neonText("RUN OVER / 阵亡", cx, y, Math.max(26, ps(38)), "#ff6b6b"); y += Math.max(40, ps(54));
+  neonText("DEPTH  " + game.depth + (game.loop > 1 ? "  (LOOP " + game.loop + ")" : ""), cx, y, Math.max(16, ps(22)), "#7affc4"); y += Math.max(26, ps(34));
+  neonText("KILLS  " + game.kills + "   ·   SCORE  " + game.score, cx, y, Math.max(13, ps(17)), "#cfeaff"); y += Math.max(24, ps(30));
+  neonText("BEST DEPTH " + bestDepth + "   ·   BEST " + bestScore, cx, y, Math.max(12, ps(15)), "#ffe98a"); y += Math.max(22, ps(28));
+  neonText("MAX COMBO  x" + game.maxCombo, cx, y, Math.max(11, ps(14)), "#ffd36e"); y += Math.max(26, ps(34));
   neonText("+" + (game.creditsEarned || 0) + " CR  →  " + credits + " CR", cx, y, Math.max(13, ps(16)), "#7affc4"); y += Math.max(20, ps(26));
-  neonText("spend in ARMORY / 武器升级", cx, y, Math.max(10, ps(12)), "rgba(150,200,255,0.6)"); y += Math.max(36, ps(46));
-  neonText(touchUI ? "tap to continue / 点击继续" : "ENTER / × — title / 标题", cx, y, Math.max(13, ps(16)), "rgba(180,210,255,0.8)");
+  neonText("spend in META HUB / 永久升级", cx, y, Math.max(10, ps(12)), "rgba(150,200,255,0.6)"); y += Math.max(34, ps(44));
+  neonText(touchUI ? "tap to continue / 点击继续" : "ENTER / × — hub / 大厅", cx, y, Math.max(13, ps(16)), "rgba(180,210,255,0.8)");
 }
 
 function drawToast() {
@@ -2918,7 +3575,7 @@ function render() {
 
   drawBackground();
 
-  if (state === "play" || state === "over") {
+  if (state === "play" || state === "over" || state === "gates" || state === "boon") {
     ctx.save();
     ctx.beginPath(); ctx.rect(playX, playY, playW, playH); ctx.clip();
     for (const pu of powerups) drawPowerup(pu);
@@ -2935,6 +3592,8 @@ function render() {
 
   if (state === "title") drawTitle();
   else if (state === "shop") { ctx.fillStyle = "rgba(5,5,20,0.82)"; ctx.fillRect(playX, playY, playW, playH); drawShop(); }
+  else if (state === "gates") drawGates();
+  else if (state === "boon") drawBoon();
   else if (state === "play" && paused) drawPause();
   else if (state === "over") drawOver();
 
@@ -2990,6 +3649,19 @@ if (typeof window !== "undefined") {
     pollPadMenus, saveMeta,
     setPlayers(n) { numPlayers = n; },
     startGame, goTitle,
+    // roguelike layer
+    BLESSINGS, RARITY, GATE_TYPES, blessingDef, rollRarity,
+    startSector, onSectorCleared, openGates, rollGates, chooseGate,
+    beginBoonPicks, nextBoonPick, rollBoonOptions, chooseBoon, rerollBoon,
+    grantBlessing, blessVal, blessStacks, blessHas, computeEmitMods,
+    advanceSector,
+    get bestDepth() { return bestDepth; }, set bestDepth(v) { bestDepth = v; },
+    render,   // exposed for headless render-path smoke testing
+    // screen<->world transform helpers (for the wider-field round-trip test)
+    px, py, ps, get viewScale() { return viewScale; },
+    get playX() { return playX; }, get playY() { return playY; },
+    get playW() { return playW; }, get playH() { return playH; },
+    resize,
   };
 }
 </script>
