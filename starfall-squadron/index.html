@@ -86,6 +86,10 @@ const CONFIG = Object.freeze({
   comboMax: 16,
   bucketSize: 64,         // spatial hash cell size for broad-phase
   bossEvery: 4,           // boss appears after this many normal waves per cycle
+  maxOptions: 4,          // hard cap on Option drones per player
+  optionOrbitR: 30,       // orbit radius of Option drones
+  missileCd: 3.0,         // base secondary homing-missile salvo cooldown (s)
+  creditDivisor: 250,     // run score -> credits banked on game over (score/this)
 });
 
 /* ---------------- §C UTIL ---------------- */
@@ -101,6 +105,51 @@ const store = {
   get(k) { try { return localStorage.getItem("starfallsquadron." + k); } catch (e) { return this._m && this._m[k]; } },
   set(k, v) { try { localStorage.setItem("starfallsquadron." + k, v); } catch (e) { (this._m = this._m || {})[k] = v; } },
 };
+
+/* ---------------- §C1 WEAPON TYPES ----------------
+   Four selectable PRIMARY weapon types, each with its own independent level
+   (1..maxWeapon), visual & behaviour. VULCAN is the default — it preserves the
+   original spread/stream cannon exactly. Levels widen / add streams / raise rate.
+   Bullet "kind" routes both the simulation (pierce / homing / range) and the
+   render. Player bullet kinds: 0 vulcan, 1 laser, 2 wave, 3 homing, 4 missile. */
+const WEAPONS = [
+  { id: "vulcan", name: "VULCAN", zh: "火神炮", col: "#bff4ff", icon: "V", kind: 0 },
+  { id: "laser",  name: "LASER",  zh: "镭射",   col: "#b6ff6e", icon: "L", kind: 1 },
+  { id: "wave",   name: "WAVE",   zh: "波动",   col: "#ffb066", icon: "W", kind: 2 },
+  { id: "homing", name: "SEEKER", zh: "追踪",   col: "#d49bff", icon: "H", kind: 3 },
+];
+function weaponIndex(id) { const i = WEAPONS.findIndex((w) => w.id === id); return i < 0 ? 0 : i; }
+
+/* ---------------- §C1b PERSISTENT META / ARMORY ----------------
+   Between-runs upgrade shop. Persistent "credits" currency is banked from a
+   fraction of run score on game over. Upgrades are SHARED across both players
+   (simpler & symmetric for co-op — a single squadron loadout) and apply to P1
+   and P2 identically at spawn. Costs grow geometrically (~x1.55/level).
+   All persisted under "starfallsquadron." keys with the store try/catch fallback. */
+let credits = parseInt(store.get("credits") || "0", 10) || 0;
+const META_DEFAULTS = { wlvl: 0, maxw: 0, rate: 0, opt: 0, bomb: 0, graze: 0, life: 0, start: 0 };
+let meta = Object.assign({}, META_DEFAULTS);
+try { const m = JSON.parse(store.get("meta") || "{}"); if (m && typeof m === "object") meta = Object.assign(meta, m); } catch (e) { /* fresh meta */ }
+function saveMeta() {
+  store.set("credits", String(credits));
+  try { store.set("meta", JSON.stringify(meta)); } catch (e) { /* noop */ }
+}
+/* META_UPGRADES — id keys into `meta`; max caps a level (0 = uncapped-ish but
+   we keep sane caps). `apply` semantics are read at spawn / fire time. */
+const META_UPGRADES = [
+  { id: "wlvl",  name: "WARM CORE",       zh: "初始等级",   desc: "+1 starting weapon level",            base: 120, max: 5 },
+  { id: "maxw",  name: "OVERCHARGE",      zh: "等级上限",   desc: "+1 max weapon level",                 base: 200, max: 4 },
+  { id: "rate",  name: "TRIGGER MOD",     zh: "射速",       desc: "+6% fire rate",                       base: 90,  max: 8 },
+  { id: "opt",   name: "DRONE BAY",       zh: "僚机",       desc: "+1 starting Option drone",            base: 260, max: CONFIG.maxOptions },
+  { id: "bomb",  name: "BOMB RACK",       zh: "炸弹容量",   desc: "+1 bomb capacity & starting bomb",    base: 110, max: 4 },
+  { id: "graze", name: "GRAZE TUNING",    zh: "擦弹充能",   desc: "+25% bomb charge from graze",          base: 80,  max: 6 },
+  { id: "life",  name: "SPARE HULL",      zh: "额外命",     desc: "+1 starting life",                    base: 300, max: 3 },
+  { id: "start", name: "LOADOUT",         zh: "默认武器",   desc: "cycle the default starting weapon",   base: 150, max: 3 },
+];
+function metaCost(u) { const lv = meta[u.id] || 0; return Math.round(u.base * Math.pow(1.55, lv)); }
+function metaMaxed(u) { return (meta[u.id] || 0) >= u.max; }
+/* default starting weapon index chosen by the LOADOUT upgrade level (cyclic) */
+function startWeaponIndex() { return (meta.start || 0) % WEAPONS.length; }
 
 /* ---------------- canvas / view ---------------- */
 const canvas = document.getElementById("c");
@@ -195,7 +244,7 @@ document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 const fsBtn = document.getElementById("fsbtn");
 function updateFsBtn() {
   if (!fsBtn) return;
-  fsBtn.style.display = (state === "title" || state === "over" || paused) && fsSupported() ? "block" : "none";
+  fsBtn.style.display = (state === "title" || state === "shop" || state === "over" || paused) && fsSupported() ? "block" : "none";
   fsBtn.textContent = isFullscreen() ? "EXIT FULL ⛶" : "FULLSCREEN ⛶";
 }
 if (fsBtn) {
@@ -328,6 +377,41 @@ class AudioEngine {
     const t = this.ctx.currentTime;
     this.tone("sine", 880, 880, t, 0.08, 0.06, false);
     this.tone("sine", 1175, 1175, t + 0.07, 0.1, 0.06, false);
+  }
+  /* --- new weapon / option / shop SFX (cheap, throttled by callers) --- */
+  laserHum(which) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    const f = which === 1 ? 1320 : 1560;
+    this.tone("sawtooth", f, f * 1.04, t, 0.05, 0.035, false);
+  }
+  waveWhomp(which) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    const f = which === 1 ? 220 : 260;
+    this.tone("sine", f * 2, f, t, 0.12, 0.05, true);
+    this.noise(t, 0.08, 0.04, "bandpass", 600, 300);
+  }
+  missile() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.3, 0.12, "highpass", 400, 1800);
+    this.tone("sawtooth", 180, 520, t, 0.22, 0.08, true);
+  }
+  optionAttach() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [784, 1046, 1318].forEach((f, i) => this.tone("triangle", f, f, t + i * 0.04, 0.1, 0.08, true));
+  }
+  purchase() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [659, 988, 1318].forEach((f, i) => this.tone("square", f, f, t + i * 0.05, 0.12, 0.08, true));
+  }
+  denied() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 220, 160, t, 0.12, 0.07, false);
   }
   /* --- music: driving arcade loop, look-ahead scheduled --- */
   startMusic() {
@@ -535,17 +619,22 @@ function drawBackground() {
 function makeBulletPool(n) {
   const a = [];
   for (let i = 0; i < n; i++)
-    a.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, r: 4, dmg: 1, col: "#fff", grazed: false, kind: 0, t: 0 });
+    a.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, r: 4, dmg: 1, col: "#fff", grazed: false, kind: 0, t: 0,
+             pierce: 0, lastHit: -1, life: 0, ang: 0, owner: 0 });
   return a;
 }
 const pBullets = makeBulletPool(CONFIG.maxBullets);
 const eBullets = makeBulletPool(CONFIG.maxBullets);
 let pbIdx = 0, ebIdx = 0;
-function firePlayer(x, y, vx, vy, dmg, col) {
-  // find a free slot (round-robin, skip-on tolerated since cap is huge)
+/* generic player-bullet spawner. kind: 0 vulcan,1 laser,2 wave,3 homing,4 missile.
+   pierce = how many enemies it can pass through (0 = pops on first hit).
+   life = optional max lifetime in s (0 = unlimited until off-screen). owner = player idx. */
+function firePlayer(x, y, vx, vy, dmg, col, kind, r, pierce, life, owner) {
   let p = pBullets[pbIdx = (pbIdx + 1) % pBullets.length];
-  p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.r = CONFIG.pBulletR;
-  p.dmg = dmg; p.col = col || "#9fefff"; p.kind = 0;
+  p.on = true; p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.r = r || CONFIG.pBulletR;
+  p.dmg = dmg; p.col = col || "#9fefff"; p.kind = kind || 0; p.t = 0;
+  p.pierce = pierce || 0; p.lastHit = -1; p.life = life || 0; p.owner = owner || 0;
+  p.ang = Math.atan2(vy, vx);
   return p;
 }
 function fireEnemy(x, y, vx, vy, r, col, kind) {
@@ -584,6 +673,11 @@ const PLAYER_COLORS = [
 
 /* ---------------- §H1 PLAYER ---------------- */
 function makePlayer(idx) {
+  const startLvl = clamp(1 + (meta.wlvl || 0), 1, maxWeaponLevel());
+  const wtype = startWeaponIndex();
+  // per-type independent levels; the chosen starting type begins at startLvl
+  const wlvl = [1, 1, 1, 1];
+  wlvl[wtype] = startLvl;
   return {
     idx,
     alive: false,
@@ -591,10 +685,14 @@ function makePlayer(idx) {
     x: CONFIG.playW * (idx === 0 ? 0.38 : 0.62),
     y: CONFIG.playH * 0.82,
     vx: 0, vy: 0,
-    lives: CONFIG.startLives,
-    bombs: CONFIG.startBombs,
+    lives: CONFIG.startLives + (meta.life || 0),
+    bombs: Math.min(maxBombsFor(), CONFIG.startBombs + (meta.bomb || 0)),
     bombMeter: 0,
-    weapon: 1,
+    wtype,                 // current PRIMARY weapon type index (into WEAPONS)
+    wlvl,                  // per-type levels (array, independent)
+    options: meta.opt || 0,// Option drone count
+    optAng: 0,             // orbit phase for Options
+    missileCd: 0,          // secondary salvo cooldown
     shield: false,
     speedBoost: 0,       // s remaining
     invuln: 0,
@@ -604,6 +702,12 @@ function makePlayer(idx) {
     col: PLAYER_COLORS[idx],
   };
 }
+/* derived caps (meta-modified). curLevel(p) is the level of the player's CURRENT
+   weapon type (p.wlvl[p.wtype]); used by HUD/art in place of the old p.weapon. */
+function maxWeaponLevel() { return CONFIG.maxWeapon + (meta.maxw || 0); }
+function maxBombsFor() { return CONFIG.maxBombs + (meta.bomb || 0); }
+function curLevel(p) { return p.wlvl[p.wtype]; }
+function curWeaponDef(p) { return WEAPONS[p.wtype]; }
 
 /* ---------------- §H2 ENEMY DEFINITIONS ---------------- */
 /* type ids: 0 diver, 1 weaver, 2 strafer, 3 turret, 4 gunship */
@@ -615,11 +719,13 @@ const ENEMY_DEF = [
   { hp: 12, r: 24, score: 480, col: "#ff6b6b", name: "gunship" },
 ];
 const enemies = [];
+let enemyUID = 1;
 function spawnEnemy(type, x, y, opts) {
   opts = opts || {};
   const d = ENEMY_DEF[type];
   const hpScale = game ? (1 + (game.loop - 1) * 0.45 + game.stage * 0.04) : 1;
   enemies.push({
+    eid: enemyUID++,
     type, x, y, vx: 0, vy: 0,
     r: d.r, hp: Math.ceil(d.hp * hpScale), maxhp: Math.ceil(d.hp * hpScale),
     score: d.score, col: d.col,
@@ -634,19 +740,28 @@ function spawnEnemy(type, x, y, opts) {
   });
 }
 
-/* ---------------- §H3 POWERUPS ---------------- */
-/* kind: weapon | bomb | gem | shield | speed */
+/* ---------------- §H3 POWERUPS ----------------
+   kind: "weapon" carries a `wt` weapon-type index (colored letter icon: V/L/W/H).
+   Picking up your CURRENT type levels it; a DIFFERENT type switches to it.
+   kind "option" grants an Option drone. Plus bomb | gem | shield | speed. */
 const powerups = [];
-function spawnPowerup(x, y, kind) {
-  powerups.push({ x, y, vx: rand(-20, 20), vy: 70, kind, t: 0, r: 13 });
+function spawnPowerup(x, y, kind, wt) {
+  powerups.push({ x, y, vx: rand(-20, 20), vy: 70, kind, wt: wt || 0, t: 0, r: 13 });
+}
+/* spawn a weapon capsule — random type, biased so VULCAN (default) stays common */
+function spawnWeaponDrop(x, y) {
+  const r = Math.random();
+  const wt = r < 0.4 ? 0 : r < 0.6 ? 1 : r < 0.8 ? 2 : 3;
+  spawnPowerup(x, y, "weapon", wt);
 }
 function rollDrop(x, y) {
   const r = Math.random();
-  if (r < 0.10) spawnPowerup(x, y, "weapon");
-  else if (r < 0.16) spawnPowerup(x, y, "bomb");
-  else if (r < 0.20) spawnPowerup(x, y, "shield");
-  else if (r < 0.235) spawnPowerup(x, y, "speed");
-  else if (r < 0.45) spawnPowerup(x, y, "gem");
+  if (r < 0.10) spawnWeaponDrop(x, y);
+  else if (r < 0.13) spawnPowerup(x, y, "option");
+  else if (r < 0.19) spawnPowerup(x, y, "bomb");
+  else if (r < 0.23) spawnPowerup(x, y, "shield");
+  else if (r < 0.265) spawnPowerup(x, y, "speed");
+  else if (r < 0.47) spawnPowerup(x, y, "gem");
 }
 
 /* ---------------- §H4 BOSS ---------------- */
@@ -775,14 +890,24 @@ window.addEventListener("keyup", (e) => {
   keys[k] = false;
 });
 
+const TITLE_ITEMS = 4;   // START · 1P/2P · AUTO-FS · ARMORY
+let shopSel = 0;         // selection within the ARMORY shop
 function onKeyAction(k) {
   if (k === "m") { audio.toggleMute(); showToast(audio.muted ? "muted" : "sound on"); return; }
   if (k === "f") { toggleFullscreen(); updateFsBtn(); return; }
   if (state === "title") {
-    if (k === "ArrowUp" || k === "w") { titleSel = (titleSel + 2) % 3; }
-    else if (k === "ArrowDown" || k === "s") { titleSel = (titleSel + 1) % 3; }
+    if (k === "ArrowUp" || k === "w") { titleSel = (titleSel + TITLE_ITEMS - 1) % TITLE_ITEMS; audio.toast(); }
+    else if (k === "ArrowDown" || k === "s") { titleSel = (titleSel + 1) % TITLE_ITEMS; audio.toast(); }
     else if (k === "ArrowLeft" || k === "ArrowRight" || k === "a" || k === "d") { titleAdjust(); }
     else if (k === "Enter" || k === " " || k === "j") { titleConfirm(); }
+    return;
+  }
+  if (state === "shop") {
+    const n = META_UPGRADES.length;
+    if (k === "ArrowUp" || k === "w") { shopSel = (shopSel + n) % (n + 1); audio.toast(); }
+    else if (k === "ArrowDown" || k === "s") { shopSel = (shopSel + 1) % (n + 1); audio.toast(); }
+    else if (k === "Enter" || k === " " || k === "j") { shopConfirm(); }
+    else if (k === "Escape" || k === "p") { closeShop(); }
     return;
   }
   if (state === "over") {
@@ -805,7 +930,25 @@ function titleAdjust() {
 function titleConfirm() {
   if (titleSel === 1) { titleAdjust(); return; }
   if (titleSel === 2) { titleAdjust(); return; }
+  if (titleSel === 3) { openShop(); return; }
   startGame();
+}
+function openShop() { state = "shop"; shopSel = 0; audio.toast(); updateFsBtn(); }
+function closeShop() { state = "title"; titleSel = 3; saveMeta(); audio.toast(); updateFsBtn(); }
+/* shop confirm: last row is the EXIT entry; others buy the matching upgrade */
+function shopConfirm() {
+  if (shopSel >= META_UPGRADES.length) { closeShop(); return; }
+  buyMeta(META_UPGRADES[shopSel]);
+}
+function buyMeta(u) {
+  if (metaMaxed(u)) { audio.denied(); showToast("MAXED / 已满级"); return; }
+  const c = metaCost(u);
+  if (credits < c) { audio.denied(); showToast("NEED " + c + " CR"); return; }
+  credits -= c;
+  meta[u.id] = (meta[u.id] || 0) + 1;
+  saveMeta();
+  audio.purchase();
+  showToast(u.name + " Lv" + meta[u.id]);
 }
 function startGame() {
   autoRequestFullscreen();
@@ -825,27 +968,66 @@ canvas.addEventListener("mousemove", (e) => {
 });
 canvas.addEventListener("mousedown", (e) => {
   audio.unlock();
-  if (state === "title") { titleConfirm(); return; }
+  const r = canvas.getBoundingClientRect();
+  const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  if (state === "title") {
+    const row = hitMenuRow(menuRects, cx, cy);
+    if (row >= 0) { titleSel = row; titleConfirm(); }
+    else titleConfirm();
+    return;
+  }
+  if (state === "shop") {
+    const row = hitMenuRow(shopRects, cx, cy);
+    if (row >= 0) { shopSel = row; shopConfirm(); }
+    return;
+  }
   if (state === "over") { goTitle(); return; }
   mouseDown = true;
 });
+/* clickable menu-row hit testing (rects in canvas px, populated at draw time) */
+let menuRects = [], shopRects = [];
+function hitMenuRow(rects, cx, cy) {
+  for (let i = 0; i < rects.length; i++) {
+    const r = rects[i];
+    if (r && cx >= r.x && cx <= r.x + r.w && cy >= r.y && cy <= r.y + r.h) return r.idx;
+  }
+  return -1;
+}
 window.addEventListener("mouseup", () => { mouseDown = false; });
 
 /* touch */
-const touches = { move: null, bomb: false };
+const touches = { move: null, bomb: false, missile: false };
 let bombBtnRect = { x: 0, y: 0, r: 0 };
+let missileBtnRect = { x: 0, y: 0, r: 0 };
 function ptInBomb(cx, cy) {
   return dist2(cx, cy, bombBtnRect.x, bombBtnRect.y) < bombBtnRect.r * bombBtnRect.r;
+}
+function ptInMissile(cx, cy) {
+  return dist2(cx, cy, missileBtnRect.x, missileBtnRect.y) < missileBtnRect.r * missileBtnRect.r;
 }
 canvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
   audio.unlock();
-  if (state === "title") { titleConfirm(); return; }
+  if (state === "title") {
+    const r = canvas.getBoundingClientRect();
+    const t0 = e.changedTouches[0];
+    const row = hitMenuRow(menuRects, t0.clientX - r.left, t0.clientY - r.top);
+    if (row >= 0) { titleSel = row; titleConfirm(); } else titleConfirm();
+    return;
+  }
+  if (state === "shop") {
+    const r = canvas.getBoundingClientRect();
+    const t0 = e.changedTouches[0];
+    const row = hitMenuRow(shopRects, t0.clientX - r.left, t0.clientY - r.top);
+    if (row >= 0) { shopSel = row; shopConfirm(); }
+    return;
+  }
   if (state === "over") { goTitle(); return; }
   for (const t of e.changedTouches) {
     const r = canvas.getBoundingClientRect();
     const cx = t.clientX - r.left, cy = t.clientY - r.top;
     if (ptInBomb(cx, cy)) { if (game) usePlayerBomb(game.players[0]); touches.bomb = true; }
+    else if (ptInMissile(cx, cy)) { touches.missile = true; }
     else { touches.move = { id: t.identifier, x: (cx - playX) / viewScale, y: (cy - playY) / viewScale }; }
   }
 }, { passive: false });
@@ -865,6 +1047,7 @@ function endTouch(e) {
     if (touches.move && t.identifier === touches.move.id) touches.move = null;
   }
   touches.bomb = false;
+  touches.missile = false;
 }
 canvas.addEventListener("touchend", endTouch, { passive: false });
 canvas.addEventListener("touchcancel", endTouch, { passive: false });
@@ -917,6 +1100,7 @@ function readPad(idx) {
   return {
     mx, my,
     bomb: pressed(3) || pressed(0) || pressed(2),  // triangle / A(cross) / square
+    missile: pressed(1) || pressed(5) || pressed(7), // circle/B / RB / RT
     start: pressed(9),
     confirm: pressed(0) || pressed(9),
     up: pressed(12) || (ax[1] || 0) < -0.6,
@@ -938,10 +1122,16 @@ function pollPadMenus() {
     const p = readPad(i);
     if (!p) continue;
     if (state === "title") {
-      if (padEdge(i, "up", p.up)) titleSel = (titleSel + 2) % 3;
-      if (padEdge(i, "down", p.down)) titleSel = (titleSel + 1) % 3;
-      if (padEdge(i, "left", p.left) || padEdge(i, "right", p.right)) { if (titleSel) titleAdjust(); }
+      if (padEdge(i, "up", p.up)) { titleSel = (titleSel + TITLE_ITEMS - 1) % TITLE_ITEMS; audio.toast(); }
+      if (padEdge(i, "down", p.down)) { titleSel = (titleSel + 1) % TITLE_ITEMS; audio.toast(); }
+      if (padEdge(i, "left", p.left) || padEdge(i, "right", p.right)) { if (titleSel === 1 || titleSel === 2) titleAdjust(); }
       if (padEdge(i, "confirm", p.confirm)) titleConfirm();
+    } else if (state === "shop") {
+      const n = META_UPGRADES.length;
+      if (padEdge(i, "up", p.up)) { shopSel = (shopSel + n) % (n + 1); audio.toast(); }
+      if (padEdge(i, "down", p.down)) { shopSel = (shopSel + 1) % (n + 1); audio.toast(); }
+      if (padEdge(i, "confirm", p.confirm)) shopConfirm();
+      if (padEdge(i, "missile", p.missile)) closeShop();   // circle/B = back
     } else if (state === "over") {
       if (padEdge(i, "confirm", p.confirm)) goTitle();
     } else if (state === "play") {
@@ -1015,8 +1205,9 @@ function respawnPlayer(p) {
   p.y = CONFIG.playH * 0.88;
   p.vx = 0; p.vy = 0;
   p.invuln = CONFIG.invulnTime;
-  // soften the loss: drop a weapon level but keep min 1
-  p.weapon = Math.max(1, p.weapon - 1);
+  // soften the loss: drop the current weapon a level (keep min 1) & lose an Option
+  p.wlvl[p.wtype] = Math.max(1, p.wlvl[p.wtype] - 1);
+  if (p.options > 0) p.options--;
 }
 function checkGameOver() {
   const anyAlive = game.players.some((p) => p.lives > 0 || p.alive);
@@ -1025,6 +1216,10 @@ function checkGameOver() {
 function endGame() {
   state = "over"; paused = false;
   if (game.score > bestScore) { bestScore = game.score; store.set("best", "" + bestScore); }
+  // bank a fraction of run score as persistent ARMORY credits
+  game.creditsEarned = Math.floor(game.score / CONFIG.creditDivisor) + game.maxCombo * 2;
+  credits += game.creditsEarned;
+  saveMeta();
   updateFsBtn();
 }
 
@@ -1063,6 +1258,20 @@ function readPlayerInput(p) {
     }
   }
   return { ix, iy, wantsMouse };
+}
+
+/* secondary missile-salvo trigger: held / pressed. P1 = Shift or X (keyboard),
+   touch MISSILE button; P2 = comma; gamepad = circle/B (button 1) or RB (5). */
+function wantsMissile(p) {
+  if (p.idx === 0) {
+    if (keys["Shift"] || keys["x"]) return true;
+    if (touchUI && touches.missile) return true;
+  } else {
+    if (keys[","]) return true;
+  }
+  const pad = readPad(padAssign[p.idx]);
+  if (pad && pad.missile) return true;
+  return false;
 }
 
 function updatePlayer(p, dt) {
@@ -1109,12 +1318,29 @@ function updatePlayer(p, dt) {
       Math.random() < 0.5 ? p.col.ship : "#ffffff", 3);
   }
 
+  // Option drones: orbit phase advances; they trail above/around the ship
+  if (p.options > 0) p.optAng += dt * 2.4;
+
   // auto-fire
   p.fireCd -= dt;
   if (p.fireCd <= 0) {
     fireWeapon(p);
-    const rate = lerp(CONFIG.fireBase, CONFIG.fireMin, (p.weapon - 1) / (CONFIG.maxWeapon - 1));
+    const lvl = curLevel(p);
+    const maxL = maxWeaponLevel();
+    // per-type base rate (homing & wave are a touch slower; laser is fast)
+    const wt = p.wtype;
+    const base = wt === 1 ? CONFIG.fireBase * 0.6 : wt === 2 ? CONFIG.fireBase * 1.1 : wt === 3 ? CONFIG.fireBase * 1.25 : CONFIG.fireBase;
+    const minR = wt === 1 ? CONFIG.fireMin * 0.55 : CONFIG.fireMin;
+    let rate = lerp(base, minR, (lvl - 1) / (maxL - 1 || 1));
+    rate *= Math.pow(0.94, meta.rate || 0);   // TRIGGER MOD meta upgrade
     p.fireCd = rate;
+  }
+
+  // secondary homing-missile salvo (manual, on cooldown)
+  if (p.missileCd > 0) p.missileCd -= dt;
+  if (p.alive && wantsMissile(p) && p.missileCd <= 0) {
+    fireMissileSalvo(p);
+    p.missileCd = CONFIG.missileCd;
   }
 
   // graze detection (near-miss of enemy bullets)
@@ -1137,30 +1363,114 @@ function updatePlayer(p, dt) {
   }
 }
 
+/* Fire the player's current weapon from the ship AND mirror it through each
+   Option drone (offset above/around the ship). Keeps fire purely pooled. */
 function fireWeapon(p) {
-  const lvl = p.weapon;
-  const sp = CONFIG.pBulletSpeed;
-  const col = p.col.bullet;
-  const dmg = CONFIG.pBulletDmg;
-  audio.shot(p.idx + 1);
-  // muzzle flash — white core + player-tinted spark (within particle pool)
-  spawnPart(0, p.x, p.y - 14, 0, -90, 0.1, 4, "#ffffff", 4);
-  if (DETAIL) spawnPart(0, p.x + rand(-3, 3), p.y - 12, rand(-30, 30), -120, 0.12, 3, p.col.ship, 4);
-  const mk = (dx, ang) => {
-    const a = -Math.PI / 2 + ang;
-    firePlayer(p.x + dx, p.y - 10, Math.cos(a) * sp, Math.sin(a) * sp, dmg, col);
-  };
-  if (lvl === 1) { mk(0, 0); }
-  else if (lvl === 2) { mk(-5, 0); mk(5, 0); }
-  else if (lvl === 3) { mk(0, 0); mk(-7, -0.12); mk(7, 0.12); }
-  else if (lvl === 4) { mk(-5, 0); mk(5, 0); mk(-10, -0.18); mk(10, 0.18); }
-  else if (lvl === 5) { mk(0, 0); mk(-6, -0.1); mk(6, 0.1); mk(-12, -0.24); mk(12, 0.24); }
-  else { // 6: side guns + dense spread
-    mk(0, 0); mk(-6, -0.08); mk(6, 0.08); mk(-12, -0.2); mk(12, 0.2);
-    // side guns angled outward-forward
-    firePlayer(p.x - 14, p.y, -sp * 0.4, -sp * 0.85, dmg, col);
-    firePlayer(p.x + 14, p.y, sp * 0.4, -sp * 0.85, dmg, col);
+  emitWeapon(p, p.x, p.y, false);
+  if (p.options > 0) {
+    const n = Math.min(CONFIG.maxOptions, p.options);
+    for (let i = 0; i < n; i++) {
+      const a = p.optAng + (i / n) * TAU;
+      const ox = p.x + Math.cos(a) * CONFIG.optionOrbitR;
+      const oy = p.y + Math.sin(a) * CONFIG.optionOrbitR * 0.7 - 6;
+      emitWeapon(p, ox, oy, true);   // options fire straight, at reduced dmg
+    }
   }
+}
+
+/* Emit one volley of the current weapon type from (ox,oy). `isOption` softens
+   damage and suppresses sound/muzzle for the drone mirror. */
+function emitWeapon(p, ox, oy, isOption) {
+  const wt = p.wtype;
+  const lvl = curLevel(p);
+  const W = WEAPONS[wt];
+  const col = W.col;
+  const sp = CONFIG.pBulletSpeed;
+  const baseDmg = CONFIG.pBulletDmg * (isOption ? 0.6 : 1);
+  if (!isOption) {
+    spawnPart(0, ox, oy - 14, 0, -90, 0.1, 4, "#ffffff", 4);
+    if (DETAIL) spawnPart(0, ox + rand(-3, 3), oy - 12, rand(-30, 30), -120, 0.12, 3, col, 4);
+  }
+  const which = p.idx + 1;
+  if (wt === 0) {
+    // VULCAN — original spread/stream cannon (preserved feel)
+    const mk = (dx, ang) => { const a = -Math.PI / 2 + ang; firePlayer(ox + dx, oy - 10, Math.cos(a) * sp, Math.sin(a) * sp, baseDmg, col, 0, CONFIG.pBulletR, 0, 0, p.idx); };
+    if (lvl === 1) { mk(0, 0); }
+    else if (lvl === 2) { mk(-5, 0); mk(5, 0); }
+    else if (lvl === 3) { mk(0, 0); mk(-7, -0.12); mk(7, 0.12); }
+    else if (lvl === 4) { mk(-5, 0); mk(5, 0); mk(-10, -0.18); mk(10, 0.18); }
+    else if (lvl === 5) { mk(0, 0); mk(-6, -0.1); mk(6, 0.1); mk(-12, -0.24); mk(12, 0.24); }
+    else {
+      mk(0, 0); mk(-6, -0.08); mk(6, 0.08); mk(-12, -0.2); mk(12, 0.2);
+      firePlayer(ox - 14, oy, -sp * 0.4, -sp * 0.85, baseDmg, col, 0, CONFIG.pBulletR, 0, 0, p.idx);
+      firePlayer(ox + 14, oy, sp * 0.4, -sp * 0.85, baseDmg, col, 0, CONFIG.pBulletR, 0, 0, p.idx);
+    }
+    if (!isOption) audio.shot(which);
+  } else if (wt === 1) {
+    // LASER — narrow, fast, piercing bolts straight up. High single-target DPS.
+    const dmg = baseDmg * 1.3;
+    const pierce = 1 + Math.floor(lvl / 2);    // passes through more foes at level
+    const streams = lvl >= 5 ? 3 : lvl >= 3 ? 2 : 1;
+    const lsp = sp * 1.5;
+    for (let i = 0; i < streams; i++) {
+      const dx = (i - (streams - 1) / 2) * 6;
+      firePlayer(ox + dx, oy - 12, 0, -lsp, dmg, col, 1, CONFIG.pBulletR * 0.7, pierce, 0, p.idx);
+    }
+    if (!isOption) audio.laserHum(which);
+  } else if (wt === 2) {
+    // WAVE — wide short-range piercing crescents. Strong vs crowds, fades fast.
+    const dmg = baseDmg * 0.9;
+    const pierce = 99;                          // pierces freely (short life caps it)
+    const life = 0.32 + lvl * 0.02;             // SHORT range via lifetime
+    const wsp = sp * 0.7;
+    const n = 1 + Math.min(4, Math.floor((lvl + 1) / 1.5));  // 2..5 wide arms
+    const spread = 0.5 + lvl * 0.06;
+    for (let i = 0; i < n; i++) {
+      const t = n === 1 ? 0 : (i / (n - 1)) - 0.5;
+      const a = -Math.PI / 2 + t * spread;
+      firePlayer(ox, oy - 6, Math.cos(a) * wsp, Math.sin(a) * wsp, dmg, col, 2, CONFIG.pBulletR * 1.4, pierce, life, p.idx);
+    }
+    if (!isOption) audio.waveWhomp(which);
+  } else {
+    // SEEKER — homing darts, lower raw DPS, track movers. More darts at level.
+    const dmg = baseDmg * 0.85;
+    const n = Math.min(4, 1 + Math.floor((lvl - 1) / 1.5));
+    const hsp = sp * 0.78;
+    for (let i = 0; i < n; i++) {
+      const a = -Math.PI / 2 + (i - (n - 1) / 2) * 0.5;
+      firePlayer(ox + (i - (n - 1) / 2) * 5, oy - 8, Math.cos(a) * hsp, Math.sin(a) * hsp, dmg, col, 3, CONFIG.pBulletR * 0.85, 0, 0, p.idx);
+    }
+    if (!isOption) audio.shot(which);
+  }
+}
+
+/* secondary salvo: a fan of strong homing missiles (kind 4) on a cooldown */
+function fireMissileSalvo(p) {
+  const n = 2 + Math.min(2, Math.floor(p.options / 2));   // more missiles with drones
+  const col = "#ffe07a";
+  for (let i = 0; i < n; i++) {
+    const a = -Math.PI / 2 + (i - (n - 1) / 2) * 0.4;
+    const sp = CONFIG.pBulletSpeed * 0.55;
+    firePlayer(p.x + (i - (n - 1) / 2) * 8, p.y - 8, Math.cos(a) * sp, Math.sin(a) * sp, CONFIG.pBulletDmg * 2.2, col, 4, CONFIG.pBulletR * 1.1, 0, 0, p.idx);
+  }
+  spawnPart(1, p.x, p.y, 0, 0, 0.3, 2, col, 0, 40);
+  audio.missile();
+}
+
+/* find the nearest live enemy / boss to (x,y) for homing steering */
+function findHomingTarget(x, y) {
+  let bx = 0, by = 0, bd = Infinity, found = false;
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (e.dead) continue;
+    const d = dist2(x, y, e.x, e.y);
+    if (d < bd) { bd = d; bx = e.x; by = e.y; found = true; }
+  }
+  if (boss && !boss.dead && !boss.entering) {
+    const d = dist2(x, y, boss.x, boss.y);
+    if (d < bd) { bx = boss.x; by = boss.y; found = true; }
+  }
+  return found ? { x: bx, y: by } : null;
 }
 
 /* ---------------- §M UPDATE: ENEMIES ---------------- */
@@ -1303,7 +1613,13 @@ function updateBoss(dt) {
       addShake(22, 0.7);
       registerKill(4000 + game.bossesKilled * 1000, boss.x, boss.y);
       // generous drops
-      for (let i = 0; i < 4; i++) spawnPowerup(boss.x + rand(-50, 50), boss.y + rand(-20, 20), i === 0 ? "weapon" : i === 1 ? "bomb" : "gem");
+      for (let i = 0; i < 4; i++) {
+        const bx = boss.x + rand(-50, 50), by = boss.y + rand(-20, 20);
+        if (i === 0) spawnWeaponDrop(bx, by);
+        else if (i === 1) spawnPowerup(bx, by, "bomb");
+        else if (i === 2) spawnPowerup(bx, by, "option");
+        else spawnPowerup(bx, by, "gem");
+      }
       game.bossesKilled++;
       boss = null;
     }
@@ -1428,37 +1744,45 @@ function queryEnemies(x, y, r, cb) {
     }
 }
 
+/* consume one hit of bullet b; returns true if the bullet should stop (no
+   pierce left). Pierce bullets keep going and won't re-hit the same target. */
+function bulletConsume(b) {
+  if (b.pierce > 0) { b.pierce--; return false; }
+  b.on = false; return true;
+}
 function collidePlayerBullets() {
   buildEnemyGrid();
   for (const b of pBullets) {
     if (!b.on) continue;
-    let hit = false;
     // boss hit
-    if (boss && !boss.dead && !boss.entering) {
-      // parts
+    if (boss && !boss.dead && !boss.entering && b.lastHit !== -2) {
+      let bhit = false;
       for (const part of boss.parts) {
         if (!part.alive) continue;
         const ppx = boss.x + part.dx, ppy = boss.y + part.dy;
         if (dist2(b.x, b.y, ppx, ppy) < (part.r + b.r) * (part.r + b.r)) {
-          part.hp -= b.dmg; part.flash = 0.12; b.on = false; hit = true;
+          part.hp -= b.dmg; part.flash = 0.12; bhit = true;
           spawnPart(0, b.x, b.y, 0, 0, 0.2, 3, "#fff", 4);
           if (part.hp <= 0) { part.alive = false; burst(ppx, ppy, 16, boss.col, 220, 0.6, 3); audio.explosion(false); addScore(300, ppx, ppy); }
           break;
         }
       }
-      if (!hit && dist2(b.x, b.y, boss.x, boss.y) < (boss.r + b.r) * (boss.r + b.r)) {
-        damageBoss(boss, b.dmg, b.x, b.y); b.on = false; hit = true;
+      if (!bhit && dist2(b.x, b.y, boss.x, boss.y) < (boss.r + b.r) * (boss.r + b.r)) {
+        damageBoss(boss, b.dmg, b.x, b.y); bhit = true;
       }
+      if (bhit) { b.lastHit = -2; if (bulletConsume(b)) continue; }
     }
-    if (hit) continue;
-    // enemies (broad-phase)
+    if (!b.on) continue;
+    // enemies (broad-phase). For pierce bullets, lastHit guards re-hitting one foe.
     queryEnemies(b.x, b.y, b.r + 26, (e) => {
       if (e.dead) return false;
+      if (b.lastHit === e.eid) return false;
       if (dist2(b.x, b.y, e.x, e.y) < (e.r + b.r) * (e.r + b.r)) {
-        e.hp -= b.dmg; e.flash = 0.12; b.on = false;
+        e.hp -= b.dmg; e.flash = 0.12;
         spawnPart(0, b.x, b.y, 0, 0, 0.18, 3, "#fff", 4);
         if (e.hp <= 0) killEnemy(e);
-        return true;
+        b.lastHit = e.eid;
+        return bulletConsume(b);   // true => stop scanning (bullet gone)
       }
       return false;
     });
@@ -1501,15 +1825,29 @@ function collideEnemyBulletsAndBodies() {
 }
 
 /* ---------------- §P UPDATE: POWERUPS ---------------- */
-function applyPowerup(p, kind) {
+function applyPowerup(p, kind, wt) {
   switch (kind) {
-    case "weapon":
-      if (p.weapon < CONFIG.maxWeapon) { p.weapon++; floatText(p.x, p.y - 26, "POWER UP", "#7affc4", 16); }
-      else { game.score += 1000; floatText(p.x, p.y - 26, "+1000", "#7affc4", 16); }
+    case "weapon": {
+      const maxL = maxWeaponLevel();
+      if (wt === p.wtype) {
+        // same type — level it up
+        if (p.wlvl[wt] < maxL) { p.wlvl[wt]++; floatText(p.x, p.y - 26, WEAPONS[wt].name + " " + p.wlvl[wt], WEAPONS[wt].col, 15); }
+        else { game.score += 1000; floatText(p.x, p.y - 26, "+1000", WEAPONS[wt].col, 16); }
+      } else {
+        // different type — switch; bump it to a sane level on switch
+        p.wtype = wt;
+        p.wlvl[wt] = Math.min(maxL, Math.max(p.wlvl[wt], 2));
+        floatText(p.x, p.y - 26, WEAPONS[wt].name + " / " + WEAPONS[wt].zh, WEAPONS[wt].col, 15);
+      }
       audio.powerup("weapon");
       break;
+    }
+    case "option":
+      if (p.options < CONFIG.maxOptions) { p.options++; floatText(p.x, p.y - 26, "OPTION x" + p.options, "#aef", 15); audio.optionAttach(); }
+      else { game.score += 800; floatText(p.x, p.y - 26, "+800", "#aef", 16); audio.powerup("gem"); }
+      break;
     case "bomb":
-      if (p.bombs < CONFIG.maxBombs) p.bombs++;
+      if (p.bombs < maxBombsFor()) p.bombs++;
       else game.score += 500;
       floatText(p.x, p.y - 26, "+BOMB", "#ffd36e", 16);
       audio.powerup("bomb");
@@ -1541,7 +1879,7 @@ function updatePowerups(dt) {
     for (const p of game.players) {
       if (!p.alive) continue;
       if (dist2(p.x, p.y, pu.x, pu.y) < (CONFIG.shipR + pu.r + 6) * (CONFIG.shipR + pu.r + 6)) {
-        applyPowerup(p, pu.kind);
+        applyPowerup(p, pu.kind, pu.wt);
         burst(pu.x, pu.y, 10, "#fff", 140, 0.4, 3);
         taken = true; break;
       }
@@ -1605,7 +1943,26 @@ function simStep(dt) {
   // bullets
   for (const b of pBullets) {
     if (!b.on) continue;
+    b.t += dt;
+    // homing kinds steer toward nearest target (3 = seeker dart, 4 = missile)
+    if (b.kind === 3 || b.kind === 4) {
+      const tgt = findHomingTarget(b.x, b.y);
+      if (tgt) {
+        const sp = Math.hypot(b.vx, b.vy) || 1;
+        const desired = Math.atan2(tgt.y - b.y, tgt.x - b.x);
+        let cur = Math.atan2(b.vy, b.vx);
+        let diff = desired - cur;
+        while (diff > Math.PI) diff -= TAU;
+        while (diff < -Math.PI) diff += TAU;
+        const turn = (b.kind === 4 ? 3.2 : 5.0) * dt;   // rad/s cap
+        cur += clamp(diff, -turn, turn);
+        b.vx = Math.cos(cur) * sp; b.vy = Math.sin(cur) * sp;
+        b.ang = cur;
+      }
+    }
     b.x += b.vx * dt; b.y += b.vy * dt;
+    // wave (kind 2) self-expires for SHORT range; same for any timed bullet
+    if (b.life > 0 && b.t >= b.life) { b.on = false; continue; }
     if (b.y < -20 || b.y > CONFIG.playH + 20 || b.x < -20 || b.x > CONFIG.playW + 20) b.on = false;
   }
   for (const b of eBullets) {
@@ -1701,20 +2058,21 @@ function drawShip(p) {
   }
 
   // weapon-level side pods / extra barrels (more as it powers up)
+  const wlevel = curLevel(p);
   ctx.shadowBlur = ps(8); ctx.shadowColor = glow;
-  if (p.weapon >= 2) {
+  if (wlevel >= 2) {
     ctx.fillStyle = dark;
     for (const sx of [-1, 1]) {
       ctx.fillRect(sx * ps(8) - ps(2), -ps(6), ps(4), ps(11));
     }
   }
-  if (p.weapon >= 4) {
+  if (wlevel >= 4) {
     ctx.fillStyle = col;
     for (const sx of [-1, 1]) ctx.fillRect(sx * ps(12) - ps(1.5), -ps(2), ps(3), ps(9));
   }
   // muzzle barrels (grow with level)
   ctx.fillStyle = "#ffffff";
-  const nb = Math.min(3, 1 + Math.floor((p.weapon - 1) / 2));
+  const nb = Math.min(3, 1 + Math.floor((wlevel - 1) / 2));
   for (let i = 0; i < nb; i++) {
     const bx = (i - (nb - 1) / 2) * ps(4);
     ctx.fillRect(bx - ps(1), -ps(16), ps(2), ps(5));
@@ -1788,6 +2146,26 @@ function drawShip(p) {
     ctx.fillText(p.col.tag, x, y + ps(24));
   }
   ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+  // Option drones — small spinning orbs orbiting the ship, tinted to player
+  if (p.options > 0) {
+    const n = Math.min(CONFIG.maxOptions, p.options);
+    const orr = ps(CONFIG.optionOrbitR);
+    for (let i = 0; i < n; i++) {
+      const a = p.optAng + (i / n) * TAU;
+      const ox = x + Math.cos(a) * orr;
+      const oy = y + Math.sin(a) * orr * 0.7 - ps(6);
+      ctx.save();
+      ctx.translate(ox, oy);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = col; ctx.shadowBlur = ps(10); ctx.shadowColor = glow;
+      ctx.beginPath(); ctx.arc(0, 0, ps(4.2), 0, TAU); ctx.fill();
+      ctx.fillStyle = "#fff"; ctx.shadowBlur = ps(4);
+      ctx.beginPath(); ctx.arc(0, 0, ps(2), 0, TAU); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  }
 }
 
 /* per-type hostile accent (darker hull tone) — keeps friend/foe coding clear */
@@ -2130,21 +2508,51 @@ function drawBossDread(b, r, flash, lit, charge) {
 }
 
 function drawBullets() {
-  // PLAYER — bright vertical plasma bolt: glowing core + white-hot center, tapered.
-  // Distinct from enemies by: cool colour, elongated vertical shape, upward travel.
+  // PLAYER bullets — each weapon type has a distinct shape, all cool/player-tinted
+  // and clearly NOT the warm enemy orbs. kind: 0 vulcan,1 laser,2 wave,3 homing,4 missile
   for (const b of pBullets) {
     if (!b.on) continue;
     const bx = px(b.x), by = py(b.y), r = ps(b.r);
-    ctx.fillStyle = b.col; ctx.shadowBlur = ps(10); ctx.shadowColor = b.col;
-    // tapered bolt
-    ctx.beginPath();
-    ctx.moveTo(bx, by - r * 2.0);
-    ctx.lineTo(bx + r * 0.6, by + r * 1.4);
-    ctx.lineTo(bx - r * 0.6, by + r * 1.4);
-    ctx.closePath(); ctx.fill();
-    // white-hot core
-    ctx.fillStyle = "#ffffff"; ctx.shadowBlur = ps(4);
-    ctx.fillRect(bx - r * 0.28, by - r * 1.4, r * 0.56, r * 2.4);
+    if (b.kind === 1) {
+      // LASER — slim elongated beam-bolt, bright white core
+      ctx.fillStyle = b.col; ctx.shadowBlur = ps(12); ctx.shadowColor = b.col;
+      ctx.fillRect(bx - r * 0.5, by - r * 3.2, r, r * 5.0);
+      ctx.fillStyle = "#ffffff"; ctx.shadowBlur = ps(4);
+      ctx.fillRect(bx - r * 0.22, by - r * 3.0, r * 0.44, r * 4.6);
+    } else if (b.kind === 2) {
+      // WAVE — crescent arc travelling outward
+      ctx.strokeStyle = b.col; ctx.lineWidth = ps(3); ctx.shadowBlur = ps(12); ctx.shadowColor = b.col;
+      ctx.beginPath();
+      ctx.arc(bx, by, r * 1.3, b.ang - 1.1, b.ang + 1.1);
+      ctx.stroke();
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = ps(1); ctx.shadowBlur = ps(3);
+      ctx.beginPath(); ctx.arc(bx, by, r * 1.3, b.ang - 0.7, b.ang + 0.7); ctx.stroke();
+    } else if (b.kind === 3 || b.kind === 4) {
+      // HOMING dart / MISSILE — pointed shape oriented to travel, glowing tail
+      ctx.save();
+      ctx.translate(bx, by); ctx.rotate(b.ang + Math.PI / 2);
+      const big = b.kind === 4;
+      ctx.fillStyle = b.col; ctx.shadowBlur = ps(big ? 12 : 9); ctx.shadowColor = b.col;
+      ctx.beginPath();
+      ctx.moveTo(0, -r * (big ? 2.4 : 2.0));
+      ctx.lineTo(r * 0.7, r * 1.2);
+      ctx.lineTo(-r * 0.7, r * 1.2);
+      ctx.closePath(); ctx.fill();
+      // exhaust tail
+      ctx.fillStyle = "#fff"; ctx.shadowBlur = ps(6);
+      ctx.beginPath(); ctx.arc(0, r * 1.3, r * 0.5, 0, TAU); ctx.fill();
+      ctx.restore();
+    } else {
+      // VULCAN — original tapered plasma bolt (preserved look)
+      ctx.fillStyle = b.col; ctx.shadowBlur = ps(10); ctx.shadowColor = b.col;
+      ctx.beginPath();
+      ctx.moveTo(bx, by - r * 2.0);
+      ctx.lineTo(bx + r * 0.6, by + r * 1.4);
+      ctx.lineTo(bx - r * 0.6, by + r * 1.4);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#ffffff"; ctx.shadowBlur = ps(4);
+      ctx.fillRect(bx - r * 0.28, by - r * 1.4, r * 0.56, r * 2.4);
+    }
   }
   // ENEMY — hostile orb: warm/red glow ring + dark rim + bright center pip.
   for (const b of eBullets) {
@@ -2169,11 +2577,16 @@ function drawBullets() {
 const POWERUP_MAP = {
   weapon: { c: "#7affc4", t: "P" }, bomb: { c: "#ffd36e", t: "B" },
   shield: { c: "#9be7ff", t: "S" }, speed: { c: "#caa0ff", t: ">" }, gem: { c: "#ffe98a", t: "◆" },
+  option: { c: "#aef0ff", t: "O" },
 };
+function powerupVisual(pu) {
+  if (pu.kind === "weapon") { const w = WEAPONS[pu.wt] || WEAPONS[0]; return { c: w.col, t: w.icon }; }
+  return POWERUP_MAP[pu.kind] || POWERUP_MAP.gem;
+}
 function drawPowerup(pu) {
   const x = px(pu.x), y = py(pu.y);
   const bob = Math.sin(pu.t * 4) * ps(2.5);
-  const m = POWERUP_MAP[pu.kind];
+  const m = powerupVisual(pu);
   const r = ps(pu.r);
   // gentle spin: squash X by cos to fake a rotating capsule
   const spin = Math.cos(pu.t * 2.6);
@@ -2281,8 +2694,10 @@ function drawPlayerPanel(p, x, y, align) {
     ctx.fillText("♥ " + p.lives, x, yy); yy += 18;
     ctx.fillStyle = "#ffd36e";
     ctx.fillText("✦ " + p.bombs, x, yy); yy += 18;
-    ctx.fillStyle = "#7affc4";
-    ctx.fillText("PWR " + p.weapon, x, yy); yy += 18;
+    const W = curWeaponDef(p);
+    ctx.fillStyle = W.col;
+    ctx.fillText(W.icon + " " + W.name + " " + curLevel(p), x, yy); yy += 18;
+    if (p.options > 0) { ctx.fillStyle = "#aef"; ctx.fillText("OPT x" + p.options, x, yy); yy += 18; }
     // bomb charge bar
     const bw = 54, bx = align === "left" ? x : x - bw;
     ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.fillRect(bx, yy + 2, bw, 5);
@@ -2296,7 +2711,7 @@ function drawPlayerPanelCompact(p, x, y, align) {
   ctx.shadowBlur = 6; ctx.shadowColor = p.col.ship;
   const txt = p.spectating && p.lives <= 0
     ? p.col.tag + " OUT"
-    : p.col.tag + " ♥" + p.lives + " ✦" + p.bombs + " P" + p.weapon;
+    : p.col.tag + " ♥" + p.lives + " ✦" + p.bombs + " " + curWeaponDef(p).icon + curLevel(p) + (p.options > 0 ? " O" + p.options : "");
   ctx.fillStyle = p.col.ship;
   ctx.fillText(txt, x, y);
   ctx.shadowBlur = 0;
@@ -2319,6 +2734,23 @@ function drawTouchControls() {
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.fillText("BOMB", bombBtnRect.x, bombBtnRect.y);
   ctx.restore();
+  // missile button (above the bomb button)
+  missileBtnRect.x = playX + playW - ps(50);
+  missileBtnRect.y = playY + playH - ps(132);
+  missileBtnRect.r = ps(34);
+  const mp = game && game.players[0];
+  const ready = mp && mp.missileCd <= 0;
+  ctx.save();
+  ctx.globalAlpha = ready ? 0.7 : 0.35;
+  ctx.strokeStyle = "#ffe07a"; ctx.lineWidth = ps(2);
+  ctx.shadowBlur = ps(10); ctx.shadowColor = "#ffe07a";
+  ctx.beginPath(); ctx.arc(missileBtnRect.x, missileBtnRect.y, missileBtnRect.r, 0, TAU); ctx.stroke();
+  ctx.fillStyle = "rgba(0,0,0,0.4)"; ctx.beginPath(); ctx.arc(missileBtnRect.x, missileBtnRect.y, missileBtnRect.r, 0, TAU); ctx.fill();
+  ctx.fillStyle = "#ffe07a"; ctx.shadowBlur = 0;
+  ctx.font = "700 " + ps(11) + "px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.fillText("MSL", missileBtnRect.x, missileBtnRect.y);
+  ctx.restore();
 }
 
 /* HOW-TO lines (bilingual, device-aware) */
@@ -2326,18 +2758,23 @@ function howToLines() {
   if (touchUI) {
     return [
       "拖动移动 · 自动开火 — drag to move, auto-fire",
-      "点炸弹键：清屏炸弹 — tap BOMB: screen-clear",
-      "擦弹得分并充能 — graze bullets for score & bomb charge",
-      "目标：击落敌机，挑战高分 — shoot down enemies, chase high score",
+      "拾取武器：V火神/L镭射/W波动/H追踪 — grab V/L/W/H weapons",
+      "同色升级 · 异色切换 — same colour levels up, other switches",
+      "O 僚机环绕并同步开火 — O Options orbit & mirror fire",
+      "MSL 键：追踪导弹齐射 — MSL: homing-missile salvo",
+      "点炸弹键：清屏炸弹 · 擦弹充能 — BOMB clears screen, graze charges",
+      "武器升级商店在标题页 — ARMORY shop on the title screen",
     ];
   }
   return [
-    "移动：方向键/摇杆 — move: arrows / stick",
-    "自动开火 — auto-fire",
-    "空格/△：清屏炸弹 — space / triangle: bomb",
-    "擦弹得分并充能 — graze bullets for score & bomb charge",
-    "目标：击落敌机，挑战高分 — shoot down enemies, chase high score",
-    "双人：P2 用手柄或第二套键盘 — 2P: gamepad or second keyboard",
+    "移动：方向键/摇杆 — move: arrows / stick · auto-fire",
+    "武器 V火神 L镭射 W波动 H追踪 — V/L/W/H weapon types",
+    "同色升级 · 异色切换武器 — same colour levels up, other switches",
+    "O 僚机环绕并同步开火 — O Options orbit & mirror fire",
+    "Shift/X · 圆圈键 · 逗号(P2)：导弹齐射 — missile salvo",
+    "空格/△：清屏炸弹 · 擦弹充能 — bomb / graze charges",
+    "标题页 ARMORY 武器升级（永久）— ARMORY: permanent upgrades",
+    "双人：P2 手柄或第二套键盘 — 2P: gamepad / 2nd keyboard",
     "P 暂停 · M 静音 · F 全屏 — pause / mute / fullscreen",
   ];
 }
@@ -2359,13 +2796,18 @@ function drawTitle() {
     { label: "▶  START / 开始", sel: titleSel === 0 },
     { label: (numPlayers === 1 ? "◂ 1P 单人 ▸" : "◂ 2P 双人 ▸"), sel: titleSel === 1 },
     { label: "AUTO-FULLSCREEN: " + (FS.auto ? "ON" : "OFF"), sel: titleSel === 2 },
+    { label: "⚙ ARMORY / 武器升级  [" + credits + " CR]", sel: titleSel === 3 },
   ];
-  for (const it of items) {
+  menuRects = [];
+  const rowH = Math.max(28, ps(36));
+  for (let idx = 0; idx < items.length; idx++) {
+    const it = items[idx];
     const col = it.sel ? "#ffffff" : "rgba(180,210,255,0.6)";
     if (it.sel) { ctx.shadowBlur = 14; ctx.shadowColor = "#5ee6ff"; }
     neonText((it.sel ? "› " : "  ") + it.label, cx, y, Math.max(15, ps(19)), col);
     ctx.shadowBlur = 0;
-    y += Math.max(28, ps(36));
+    menuRects.push({ idx, x: cx - playW * 0.45, y: y - rowH * 0.45, w: playW * 0.9, h: rowH });
+    y += rowH;
   }
   y += Math.max(8, ps(14));
   neonText(touchUI ? "tap to start / 点击开始" : "press ENTER / × to start", cx, y, Math.max(11, ps(13)), "rgba(150,200,255,0.7)");
@@ -2379,14 +2821,64 @@ function drawTitle() {
   for (const ln of lines) { ctx.fillText(ln, cx, y); y += Math.max(16, ps(18)); }
 }
 
+function drawShop() {
+  const cx = playX + playW / 2;
+  let y = playY + Math.max(34, ps(46));
+  ctx.shadowBlur = 18; ctx.shadowColor = "#5ee6ff";
+  neonText("ARMORY / 武器升级", cx, y, Math.max(20, ps(26)), "#5ee6ff");
+  ctx.shadowBlur = 0;
+  y += Math.max(26, ps(34));
+  neonText("CREDITS / 点数: " + credits + " CR", cx, y, Math.max(13, ps(16)), "#ffe98a");
+  y += Math.max(20, ps(26));
+  neonText("(shared squadron meta — applies to P1 & P2)", cx, y, Math.max(9, ps(11)), "rgba(150,200,255,0.6)");
+  y += Math.max(22, ps(28));
+
+  shopRects = [];
+  const rowH = Math.max(30, ps(38));
+  const fs = Math.max(11, ps(13));
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const lx = playX + playW * 0.06;
+  for (let i = 0; i < META_UPGRADES.length; i++) {
+    const u = META_UPGRADES[i];
+    const sel = shopSel === i;
+    const lv = meta[u.id] || 0;
+    const maxed = metaMaxed(u);
+    const cost = metaCost(u);
+    const affordable = !maxed && credits >= cost;
+    const col = sel ? "#ffffff" : (maxed ? "rgba(150,255,180,0.7)" : affordable ? "rgba(200,230,255,0.85)" : "rgba(180,180,200,0.5)");
+    if (sel) { ctx.fillStyle = "rgba(94,230,255,0.12)"; ctx.fillRect(playX + playW * 0.04, y - rowH * 0.45, playW * 0.92, rowH * 0.9); }
+    ctx.shadowBlur = sel ? 10 : 0; ctx.shadowColor = "#5ee6ff";
+    ctx.fillStyle = col;
+    ctx.font = "700 " + fs + "px 'Courier New', monospace";
+    ctx.fillText((sel ? "› " : "  ") + u.name + " " + u.zh + "  Lv" + lv + "/" + u.max, lx, y - fs * 0.55);
+    ctx.font = "500 " + Math.max(9, ps(10)) + "px 'Courier New', monospace";
+    ctx.fillStyle = sel ? "rgba(230,245,255,0.9)" : "rgba(170,200,240,0.55)";
+    const tail = maxed ? "MAX" : (cost + " CR");
+    ctx.fillText(u.desc + "  —  " + tail, lx, y + fs * 0.6);
+    ctx.shadowBlur = 0;
+    shopRects.push({ idx: i, x: playX + playW * 0.04, y: y - rowH * 0.45, w: playW * 0.92, h: rowH });
+    y += rowH;
+  }
+  // EXIT row
+  y += Math.max(4, ps(6));
+  const exitSel = shopSel >= META_UPGRADES.length;
+  ctx.textAlign = "center";
+  if (exitSel) { ctx.shadowBlur = 12; ctx.shadowColor = "#5ee6ff"; }
+  neonText((exitSel ? "› " : "  ") + "BACK / 返回", cx, y, Math.max(14, ps(17)), exitSel ? "#ffffff" : "rgba(180,210,255,0.6)");
+  ctx.shadowBlur = 0;
+  shopRects.push({ idx: META_UPGRADES.length, x: cx - playW * 0.3, y: y - rowH * 0.45, w: playW * 0.6, h: rowH });
+  y += Math.max(22, ps(28));
+  neonText(touchUI ? "tap a row to buy · tap BACK to exit" : "↑↓ select · Enter/× buy · Esc/B back", cx, y, Math.max(9, ps(11)), "rgba(150,200,255,0.65)");
+}
+
 function drawPause() {
   ctx.fillStyle = "rgba(5,5,20,0.72)"; ctx.fillRect(playX, playY, playW, playH);
   const cx = playX + playW / 2;
   let y = playY + playH * 0.36;
   neonText("PAUSED / 暂停", cx, y, Math.max(22, ps(30)), "#5ee6ff"); y += Math.max(36, ps(46));
   const lines = touchUI
-    ? ["tap to resume — 点击继续", "拖动移动 · 点炸弹 — drag / tap BOMB"]
-    : ["P / Esc / Start: resume — 继续", "M 静音 · F 全屏 — mute / fullscreen", "空格/△ 炸弹 · 擦弹充能 — bomb / graze"];
+    ? ["tap to resume — 点击继续", "拖动移动 · 点炸弹 · MSL 导弹 — drag / BOMB / MSL", "V/L/W/H 切换武器 · O 僚机 — weapon types & Options"]
+    : ["P / Esc / Start: resume — 继续", "M 静音 · F 全屏 — mute / fullscreen", "Shift/X/圆圈 导弹 · 空格/△ 炸弹 — missile / bomb", "V/L/W/H 武器 · O 僚机 · ARMORY 升级 — weapons / Options / shop"];
   ctx.font = "500 " + Math.max(11, ps(13)) + "px 'Courier New', monospace";
   ctx.fillStyle = "rgba(180,210,255,0.8)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
   for (const ln of lines) { ctx.fillText(ln, cx, y); y += Math.max(20, ps(24)); }
@@ -2399,7 +2891,9 @@ function drawOver() {
   neonText("GAME OVER", cx, y, Math.max(28, ps(42)), "#ff6b6b"); y += Math.max(44, ps(58));
   neonText("SCORE  " + game.score, cx, y, Math.max(16, ps(22)), "#cfeaff"); y += Math.max(28, ps(36));
   neonText("BEST   " + bestScore, cx, y, Math.max(14, ps(18)), "#ffe98a"); y += Math.max(24, ps(32));
-  neonText("MAX COMBO  x" + game.maxCombo, cx, y, Math.max(12, ps(15)), "#ffd36e"); y += Math.max(40, ps(52));
+  neonText("MAX COMBO  x" + game.maxCombo, cx, y, Math.max(12, ps(15)), "#ffd36e"); y += Math.max(28, ps(36));
+  neonText("+" + (game.creditsEarned || 0) + " CR  →  " + credits + " CR", cx, y, Math.max(13, ps(16)), "#7affc4"); y += Math.max(20, ps(26));
+  neonText("spend in ARMORY / 武器升级", cx, y, Math.max(10, ps(12)), "rgba(150,200,255,0.6)"); y += Math.max(36, ps(46));
   neonText(touchUI ? "tap to continue / 点击继续" : "ENTER / × — title / 标题", cx, y, Math.max(13, ps(16)), "rgba(180,210,255,0.8)");
 }
 
@@ -2440,6 +2934,7 @@ function render() {
   }
 
   if (state === "title") drawTitle();
+  else if (state === "shop") { ctx.fillStyle = "rgba(5,5,20,0.82)"; ctx.fillRect(playX, playY, playW, playH); drawShop(); }
   else if (state === "play" && paused) drawPause();
   else if (state === "over") drawOver();
 
@@ -2483,11 +2978,18 @@ if (typeof window !== "undefined") {
     get paused() { return paused; }, set paused(v) { paused = v; },
     enemies, pBullets, eBullets, powerups, parts,
     keys, padPrev,
-    CONFIG, ENEMY_DEF,
-    newGame, simStep, spawnEnemy, spawnBoss, spawnPowerup, fireEnemy, firePlayer,
+    CONFIG, ENEMY_DEF, WEAPONS, META_UPGRADES,
+    newGame, simStep, spawnEnemy, spawnBoss, spawnPowerup, spawnWeaponDrop, fireEnemy, firePlayer,
     usePlayerBomb, buildWave, countActive, clearEnemyBullets,
+    applyPowerup, fireWeapon, fireMissileSalvo, emitWeapon,
+    get credits() { return credits; }, set credits(v) { credits = v; },
+    get meta() { return meta; }, set meta(v) { meta = v; },
+    metaCost, buyMeta, openShop, closeShop, shopConfirm, endGame,
+    get shopSel() { return shopSel; }, set shopSel(v) { shopSel = v; },
+    get titleSel() { return titleSel; }, set titleSel(v) { titleSel = v; },
+    pollPadMenus, saveMeta,
     setPlayers(n) { numPlayers = n; },
-    startGame,
+    startGame, goTitle,
   };
 }
 </script>
