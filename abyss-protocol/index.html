@@ -79,6 +79,9 @@ const CONFIG = Object.freeze({
   bossEvery: 6,
   maxParticles: 520,
   step: 1 / 120,                // fixed physics timestep
+  challengeTime: 45,            // challenge room gauntlet timer (s)
+  burnDur: 4,                   // burn DoT duration (s), halved on bosses
+  shockStun: 0.7,               // shock stun (s), reduced on bosses
 });
 
 /* ---------------- §C UTIL ---------------- */
@@ -302,6 +305,59 @@ class AudioEngine {
     this.tone("square", 1500, 420, t, 0.08, 0.07, false);
     this.tone("sine", 2300, 900, t, 0.12, 0.05, true);
   }
+  heatClunk() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 130, 55, t, 0.13, 0.14, false);
+    this.noise(t, 0.1, 0.12, "lowpass", 1400, 200);
+    this.tone("sine", 70, 50, t + 0.05, 0.12, 0.1, false);
+  }
+  challengeTick() {
+    if (!this.ok()) return;
+    this.tone("square", 940, 940, this.ctx.currentTime, 0.05, 0.055, false);
+  }
+  challengeWin() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [659.25, 880, 1318.5].forEach((f, i) =>
+      this.tone("square", f, f, t + i * 0.09, 0.22, 0.08, true));
+    this.noise(t, 0.3, 0.06, "highpass", 2500, 6000);
+  }
+  burnCrackle() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.09, 0.06, "bandpass", rand(1800, 3200), 500);
+    this.noise(t + 0.04, 0.07, 0.04, "bandpass", rand(900, 1600), 300);
+  }
+  shockZap() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 1500, 220, t, 0.07, 0.07, false);
+    this.noise(t, 0.06, 0.08, "highpass", 4000, 7000);
+  }
+  comboSnap() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.22, 0.18, "lowpass", 3600, 300);
+    this.tone("sine", 520, 90, t, 0.18, 0.12, true);
+    this.noise(t, 0.3, 0.07, "highpass", 2400, 5000);
+  }
+  bombBeep() {
+    if (!this.ok()) return;
+    this.tone("square", 1240, 1240, this.ctx.currentTime, 0.07, 0.09, false);
+  }
+  clank() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 320, 250, t, 0.08, 0.1, false);
+    this.noise(t, 0.09, 0.13, "bandpass", 2200, 900);
+  }
+  phantomCue() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sine", 980, 620, t, 0.3, 0.06, true);
+    this.noise(t, 0.25, 0.04, "highpass", 3000, 6500);
+  }
   bossRoar(kind) {
     if (!this.ok()) return;
     const t = this.ctx.currentTime;
@@ -372,7 +428,7 @@ const audio = new AudioEngine();
 /* ---------------- §E PERSISTENCE / META ---------------- */
 let cores = parseInt(store.get("cores") || "0", 10) || 0;
 let best = parseInt(store.get("best") || "0", 10) || 0;
-let meta = { hp: 0, dmg: 0, dash: 0, boon: 0 };
+let meta = { hp: 0, dmg: 0, dash: 0, boon: 0, luck: 0 };
 try { const m = JSON.parse(store.get("meta") || "{}"); meta = Object.assign(meta, m); } catch (e) { /* noop */ }
 function saveMeta() {
   store.set("cores", String(cores));
@@ -386,7 +442,45 @@ const META_UPGRADES = [
   { id: "dmg",  name: "WEAPON CALIBRATION", desc: "+10% all damage per level",                         base: 35 },
   { id: "dash", name: "AUX THRUSTER",       desc: "+1 dash charge (to +4), then +5% recharge / level", base: 90 },
   { id: "boon", name: "BOOT PROTOCOL",      desc: "Lv1: start runs with a boon choice · +1 boon reroll per extra level", base: 150 },
+  { id: "luck", name: "LUCK CIRCUITS",      desc: "better boon rarity odds per level (rare/epic/legendary)", base: 55 },
 ];
+
+/* ---------------- §E2 HEAT (难度契约) ---------------- */
+/* optional difficulty contracts toggled at the hub HEAT terminal.
+   each point of heat grants +25% core income during the run. */
+const HEAT_MODS = [
+  { id: "ehp",    name: "HARDENED HULLS",   zh: "敌人生命+20%",        desc: "enemies +20% HP",            pts: 1, max: 3 },
+  { id: "edmg",   name: "LETHAL PROTOCOLS", zh: "敌人伤害+15%",        desc: "enemies +15% damage",        pts: 1, max: 3 },
+  { id: "elite",  name: "ELITE PATROLS",    zh: "精英房间更频繁",      desc: "elite rooms far more frequent", pts: 2, max: 1 },
+  { id: "enrage", name: "BERSERK CORES",    zh: "Boss 30%血量时狂暴",  desc: "bosses enrage at 30% HP",    pts: 2, max: 1 },
+  { id: "shopUp", name: "INFLATION",        zh: "商店价格+50%",        desc: "shop prices +50%",           pts: 1, max: 1 },
+  { id: "lowhp",  name: "FRAGILE FRAME",    zh: "初始最大生命-25%",    desc: "start with -25% max HP",     pts: 2, max: 1 },
+];
+let heat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
+try {
+  const h = JSON.parse(store.get("heat") || "{}");
+  for (const m of HEAT_MODS) {
+    const v = parseInt(h[m.id], 10);
+    if (v >= 0) heat[m.id] = Math.min(m.max, v);
+  }
+} catch (e) { /* fresh heat loadout */ }
+function saveHeat() { store.set("heat", JSON.stringify(heat)); }
+function heatTotal(h) {
+  h = h || heat;
+  let t = 0;
+  for (const m of HEAT_MODS) t += (h[m.id] || 0) * m.pts;
+  return t;
+}
+/* heat snapshot for the active run + fractional core accumulator */
+let runHeat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
+let runHeatPts = 0, coreFrac = 0;
+function coreGain(n) {
+  const g = n * (1 + 0.25 * runHeatPts) + coreFrac;
+  const whole = Math.floor(g);
+  coreFrac = g - whole;
+  cores += whole; runCores += whole;
+  return whole;
+}
 function metaCost(u, lv) { return Math.round(u.base * Math.pow(1.4, lv)); }
 function fmtNum(n) {
   if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
@@ -413,11 +507,29 @@ const BOONS = [
   { id: "wind",  name: "NANO REPAIR",   desc: "Restore 12 HP on room clear",         col: "#66ff99", glyph: "+", max: 2 },
   { id: "shatter", name: "DEEP FREEZE", desc: "Frozen enemies take +40% damage",     col: "#aaeeff", glyph: "❄", max: 2 },
   { id: "cryo",  name: "CRYO LOOP",     desc: "Freeze nova cooldown -25%",           col: "#cfeeff", glyph: "◇", max: 2 },
+  { id: "ignite",name: "IGNITION EDGE", desc: "Slashes set foes burning (stacks x3)",col: "#ff8844", glyph: "❋", max: 2 },
+  { id: "volt",  name: "VOLT ROUNDS",   desc: "Bolt crits shock and chain to 2 foes",col: "#ffee55", glyph: "↯", max: 2 },
+  { id: "sdash", name: "STATIC DASH",   desc: "Dash trail shocks nearby enemies",    col: "#99eeff", glyph: "⌁", max: 2 },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
+/* boon rarity: weights improve slightly with depth and LUCK CIRCUITS levels */
+const RARITIES = [
+  { id: "common",    name: "COMMON",    zh: "普通", col: "#e8ecf5", mul: 1 },
+  { id: "rare",      name: "RARE",      zh: "稀有", col: "#5599ff", mul: 1.5 },
+  { id: "epic",      name: "EPIC",      zh: "史诗", col: "#cc66ff", mul: 2.2 },
+  { id: "legendary", name: "LEGENDARY", zh: "传说", col: "#ffcc44", mul: 3 },
+];
+function rollRarity() {
+  const shift = Math.min(34, depth * 0.7 + (meta.luck || 0) * 1.8);
+  const w = [Math.max(10, 62 - shift), 26 + shift * 0.45, 9 + shift * 0.38, 3 + shift * 0.17];
+  let r = Math.random() * (w[0] + w[1] + w[2] + w[3]);
+  for (let i = 0; i < 4; i++) { if (r < w[i]) return i; r -= w[i]; }
+  return 0;
+}
+
 /* ---------------- §G GAME STATE ---------------- */
-let state = "title";   // title | hub | play | boon | shop | summary
+let state = "title";   // title | hub | play | boon | shop | heat | summary
 let paused = false;
 let depth = 0, kills = 0, runCores = 0, roomsCleared = 0;
 let player = null;
@@ -426,7 +538,11 @@ let pillars = [], doors = [], pickups = [], spawnQ = [], zones = [], toasts = []
 let waves = [], waveIdx = 0, roomClear = false, boss = null;
 let freezeT = 0, shakeT = 0, shakeA = 0, redFlash = 0, roomFade = 0;
 let mortars = [], novas = [], pedestals = [];
-let shopRoom = false, pendingShop = false, lastShopDepth = 0;
+let shopRoom = false, pendingRoom = null, lastShopDepth = 0;
+let roomType = "normal";   // normal | boss | shop | treasure | fountain | challenge
+let challengeT = 0, challengeFailed = false, fountainUsed = false;
+let lastFountainDepth = 0, lastSpecialDepth = 0;
+let eliteRoom = false, eliteSpawned = false;
 let bossName = "", bossBarMax = 0, lastBossKind = "";
 let rerollsLeft = 0, boonReturnToPlay = false;
 let boonChoices = [], boonFromStart = false;
@@ -437,6 +553,7 @@ let bossWarnT = 0;
 
 const HUB = {
   termX: CONFIG.arenaW * 0.74, termY: CONFIG.arenaH * 0.52, termR: 52,
+  heatX: CONFIG.arenaW * 0.26, heatY: CONFIG.arenaH * 0.52, heatR: 52,
   exitX: CONFIG.arenaW / 2, exitY: 52, exitW: 130, exitH: 36,
 };
 
@@ -478,6 +595,7 @@ window.addEventListener("keydown", (e) => {
   if (state === "title" || state === "summary") { anyStart(); return; }
   if (k === "p" || k === "Escape") {
     if (state === "shop") { closeShop(); return; }
+    if (state === "heat") { closeHeat(); return; }
     if (state === "boon") return; // must choose
     if (state === "play" || state === "hub") { paused = !paused; audio.uiSnd(); }
     return;
@@ -495,12 +613,19 @@ window.addEventListener("keydown", (e) => {
     if (k === "e" || k === "Enter") closeShop();
     return;
   }
+  if (state === "heat") {
+    const n = parseInt(k, 10);
+    if (n >= 1 && n <= HEAT_MODS.length) toggleHeat(n - 1);
+    if (k === "e" || k === "Enter") closeHeat();
+    return;
+  }
   keys[k] = true;
   if (k === " ") dashBuf = 0.15;
   if (k === "j") slashBuf = 0.12;
   if (k === "k" || k === "q") freezeBuf = 0.18;
   if (state === "hub" && (k === "e" || k === "Enter")) {
     if (player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) { openShop(); return; }
+    if (player && dist(player.x, player.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) { openHeat(); return; }
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -520,11 +645,14 @@ canvas.addEventListener("mousedown", (e) => {
   mouse.x = e.clientX; mouse.y = e.clientY; lastMouseT = nowMs();
   if (state === "title" || state === "summary") { anyStart(); return; }
   if (paused) { paused = false; return; }
-  if (state === "boon" || state === "shop") { uiClick(e.clientX, e.clientY); return; }
+  if (state === "boon" || state === "shop" || state === "heat") { uiClick(e.clientX, e.clientY); return; }
   if (e.button === 0) {
     mouse.left = true;
     if (state === "hub" && player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) {
       openShop(); mouse.left = false; return;
+    }
+    if (state === "hub" && player && dist(player.x, player.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) {
+      openHeat(); mouse.left = false; return;
     }
     slashBuf = 0.12;
   }
@@ -549,7 +677,7 @@ canvas.addEventListener("touchstart", (e) => {
     const x = t.clientX, y = t.clientY;
     if (state === "title" || state === "summary") { anyStart(); continue; }
     if (paused) { paused = false; continue; }
-    if (state === "boon" || state === "shop") { uiClick(x, y); continue; }
+    if (state === "boon" || state === "shop" || state === "heat") { uiClick(x, y); continue; }
     const db = dashBtnPos(), bb = boltBtnPos();
     if (dist(x, y, db.x, db.y) < db.r + 10) {
       touches[t.identifier] = { role: "dash" }; dashBuf = 0.15; continue;
@@ -570,6 +698,9 @@ canvas.addEventListener("touchstart", (e) => {
     touches[t.identifier] = { role: "tap" };
     if (state === "hub" && player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) {
       openShop(); continue;
+    }
+    if (state === "hub" && player && dist(player.x, player.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) {
+      openHeat(); continue;
     }
     if (player) {
       const tx = s2wX(x), ty = s2wY(y);
@@ -654,23 +785,34 @@ function newPlayer() {
     ifr: 0, hurtT: 0, trail: [], trailT: 0,
     freezeCD: 0, freezeCDMax: 0, buyCD: 0,
     meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
-    boons: {},
+    boons: {}, boonPow: {}, boonBest: {},
   };
 }
 function boonLv(id) { return (player && player.boons[id]) || 0; }
+/* rarity-scaled boon power: sum of rarity multipliers across picks of this boon */
+function boonPow(id) { return (player && player.boonPow && player.boonPow[id]) || 0; }
 function dmgMul() { return 1 + meta.dmg * 0.10; }
 function dashRegenMul() { return 1 + 0.05 * Math.max(0, (meta.dash || 0) - 4); }
-function meleeDamage() { return CONFIG.meleeDmg * dmgMul() * (1 + boonLv("blade") * 0.35) * player.meleeMul; }
-function boltDamage() { return CONFIG.boltDmg * dmgMul() * (1 + boonLv("over") * 0.35) * player.boltMul; }
-function critRoll() { return Math.random() < boonLv("crit") * 0.15; }
+function meleeDamage() { return CONFIG.meleeDmg * dmgMul() * (1 + boonPow("blade") * 0.35) * player.meleeMul; }
+function boltDamage() {
+  const splitX = Math.max(0, boonPow("split") - boonLv("split")); // tri-cannon rarity bonus
+  return CONFIG.boltDmg * dmgMul() * (1 + boonPow("over") * 0.35) * (1 + splitX * 0.06) * player.boltMul;
+}
+function critRoll() { return Math.random() < Math.min(0.8, boonPow("crit") * 0.15); }
+function meleeRangeNow() { return CONFIG.meleeRange + Math.min(64, boonPow("arc") * 12); }
+function meleeArcNow() { return CONFIG.meleeArc * Math.min(2.4, 1 + boonPow("arc") * 0.35); }
 
-function applyBoon(id) {
+function applyBoon(id, rar) {
+  rar = rar || 0;
+  const R = RARITIES[rar];
   player.boons[id] = (player.boons[id] || 0) + 1;
+  player.boonPow[id] = (player.boonPow[id] || 0) + R.mul;
+  player.boonBest[id] = Math.max(player.boonBest[id] || 0, rar);
   const b = boonById(id);
-  toast(b.name + (player.boons[id] > 1 ? " " + "II III".split(" ")[player.boons[id] - 2] : ""), b.col);
+  toast((rar > 0 ? R.name + " " : "") + b.name + (player.boons[id] > 1 ? " " + "II III".split(" ")[player.boons[id] - 2] : ""), rar > 0 ? R.col : b.col);
   if (id === "wind") { /* passive */ }
   audio.boon();
-  burst(player.x, player.y, b.col, 26, 220, 0.7, 3);
+  burst(player.x, player.y, R.col, 26, 220, 0.7, 3);
 }
 function rollBoons() {
   const avail = BOONS.filter((b) => boonLv(b.id) < b.max);
@@ -678,13 +820,13 @@ function rollBoons() {
   const pool = avail.slice();
   while (out.length < 3 && pool.length) {
     const i = Math.floor(Math.random() * pool.length);
-    out.push(pool.splice(i, 1)[0]);
+    out.push({ b: pool.splice(i, 1)[0], rar: rollRarity() });
   }
   return out;
 }
 function pickBoon(i) {
   if (i < 0 || i >= boonChoices.length) return;
-  applyBoon(boonChoices[i].id);
+  applyBoon(boonChoices[i].b.id, boonChoices[i].rar);
   boonChoices = [];
   if (boonReturnToPlay) { boonReturnToPlay = false; state = "play"; return; } // bought at shop
   if (boonFromStart) { boonFromStart = false; nextRoom(); }
@@ -699,14 +841,18 @@ function rerollBoons() {
 
 /* ---------------- §K ENEMIES ---------------- */
 /* difficulty keeps climbing harder past depth 12 to keep unlimited training honest */
-function hpMul() { return 1 + (depth - 1) * 0.17 + Math.max(0, depth - 12) * 0.06; }
-function eDmgMul() { return 1 + (depth - 1) * 0.07 + Math.max(0, depth - 12) * 0.03; }
+function hpMul() { return (1 + (depth - 1) * 0.17 + Math.max(0, depth - 12) * 0.06) * (1 + 0.2 * (runHeat.ehp || 0)); }
+function eDmgMul() { return (1 + (depth - 1) * 0.07 + Math.max(0, depth - 12) * 0.03) * (1 + 0.15 * (runHeat.edmg || 0)); }
 
 const ENEMY_DEFS = {
   chaser:  { r: 14, hp: 30, speed: 116, col: "#ff5577", cost: 1.5 },
   shooter: { r: 13, hp: 26, speed: 88,  col: "#cc66ff", cost: 2.0 },
   tank:    { r: 24, hp: 95, speed: 44,  col: "#ffaa33", cost: 3.5 },
   swarmer: { r: 8,  hp: 10, speed: 178, col: "#66ff88", cost: 0.55 },
+  bomber:  { r: 12, hp: 22, speed: 150, col: "#ff8844", cost: 1.8 },  // scuttles in, beeping fuse, AoE blast hurts everyone
+  shield:  { r: 17, hp: 60, speed: 70,  col: "#88aaff", cost: 2.8 },  // frontal energy shield blocks bolts & slashes
+  medic:   { r: 11, hp: 18, speed: 95,  col: "#66ffcc", cost: 2.2 },  // hovers behind, beam-heals most damaged ally
+  phantom: { r: 13, hp: 26, speed: 130, col: "#bb99ff", cost: 2.4 },  // cloaked stalker, decloaks before dash-strike
 };
 
 function spawnEnemy(type, x, y) {
@@ -719,9 +865,21 @@ function spawnEnemy(type, x, y) {
     state: "seek", t: rand(0, 1), cd: rand(0.4, 1.4),
     dirX: 0, dirY: 0, phase: rand(0, TAU), strafe: Math.random() < 0.5 ? 1 : -1,
     contactCD: 0, spawnT: 0.25, frozenT: 0,
+    burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0,
+    shieldA: 0, exposeT: 0, healTgt: null, beeped: false, elite: false,
   };
+  if (type === "shield") e.shieldA = player ? angTo(x, y, player.x, player.y) : -Math.PI / 2;
+  if (type === "phantom") e.state = "cloak";
+  if (eliteRoom && !eliteSpawned && type !== "swarmer" && type !== "medic") {
+    eliteSpawned = true;
+    e.elite = true;
+    e.r = Math.round(e.r * 1.25);
+    e.hp *= 2.6; e.maxHp *= 2.6;
+    e.speed *= 1.08;
+  }
   enemies.push(e);
-  burst(x, y, d.col, 10, 160, 0.4, 2.5);
+  burst(x, y, d.col, e.elite ? 18 : 10, 160, 0.4, 2.5);
+  if (e.elite) toast("ELITE — 精英出现", "#ffcc44");
   return e;
 }
 
@@ -752,6 +910,7 @@ function spawnBoss(forceKind) {
     state: "move", t: 0, cd: 1.6, atk: 0,
     dirX: 0, dirY: 0, phase: 0, sub: 0, rot: 0,
     contactCD: 0, spawnT: 0.4, tier, hard, gen: 0, frozenT: 0,
+    burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
     strafe: Math.random() < 0.5 ? 1 : -1, tx: 0, ty: 0,
   };
   bossName = def.name; bossBarMax = hp;
@@ -779,6 +938,7 @@ function splitBoss(e) {
       dirX: 0, dirY: 0, phase: rand(0, TAU), sub: 0, rot: rand(0, TAU),
       contactCD: 0, spawnT: 0.2, tier: e.tier, hard: e.hard,
       gen: e.gen + 1, frozenT: 0, strafe: 1, tx: 0, ty: 0,
+      burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
     });
   }
   burst(e.x, e.y, e.col, 36, 320, 0.8, 4);
@@ -803,13 +963,14 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (e.hp <= 0) return;
   let mul = isCrit ? 2.5 : 1;
   if (e.frozenT > 0) { // shatter: frozen targets take bonus damage
-    mul *= 1.3 + 0.4 * boonLv("shatter") + (player ? player.frozenBonus : 0);
+    mul *= 1.3 + 0.4 * boonPow("shatter") + (player ? player.frozenBonus : 0);
     burst(e.x, e.y, "#cfeeff", 10, 230, 0.45, 3);
     audio.shatter();
   }
   const final = Math.round(dmg * mul);
   e.hp -= final;
   e.flash = 0.12;
+  if (e.type === "phantom" && e.state === "cloak") { e.state = "recover"; e.t = 1.0; } // tagging a phantom rips its cloak
   const kbScale = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.3 : 1);
   e.kbx += kx * kbScale; e.kby += ky * kbScale;
   dnum(e.x, e.y - e.r, String(final), isCrit ? "#ffee55" : "#ffffff", isCrit);
@@ -818,10 +979,105 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (melee) {
     freezeT = Math.max(freezeT, CONFIG.hitStop);
     if (boonLv("steal")) {
-      player.hp = Math.min(player.maxHp, player.hp + boonLv("steal"));
+      player.hp = Math.min(player.maxHp, player.hp + Math.max(1, Math.round(boonPow("steal"))));
     }
   }
   if (e.hp <= 0) killEnemy(e);
+}
+
+/* ---------------- §K2 ELEMENTAL STATUS (burn / shock / combos) ---------------- */
+/* lightweight damage path for DoTs/AoEs: no knockback, no hit SFX spam */
+function statusDamage(e, dmg, col) {
+  if (e.hp <= 0) return;
+  const final = Math.max(1, Math.round(dmg));
+  e.hp -= final;
+  e.flash = Math.max(e.flash, 0.05);
+  dnum(e.x, e.y - e.r, String(final), col, false);
+  if (e.hp <= 0) killEnemy(e);
+}
+
+function applyBurn(e, dps) {
+  if (!e || e.hp <= 0) return;
+  if (e.frozenT > 0) { thermalSnap(e); return; } // BURN + FREEZE combo
+  e.burnStacks = Math.min(3, (e.burnStacks || 0) + 1);
+  e.burnDps = Math.max(e.burnDps || 0, dps);
+  e.burnT = e.type === "boss" ? CONFIG.burnDur * 0.5 : CONFIG.burnDur;
+  if (!(e.burnTick > 0)) e.burnTick = 0.5;
+  if (Math.random() < 0.6) audio.burnCrackle();
+}
+
+function applyShock(e, dmg, chains) {
+  if (!e || e.hp <= 0) return;
+  if (e.frozenT > 0) { shatterCombo(e); return; } // FREEZE + SHOCK combo
+  e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? CONFIG.shockStun * 0.4 : CONFIG.shockStun);
+  sparkLine(e.x - e.r, e.y - e.r, e.x + e.r, e.y + e.r, "#ffee55", 5);
+  audio.shockZap();
+  statusDamage(e, dmg, "#ffee55");
+  if (chains > 0) {
+    const cands = [];
+    for (const o of enemies) {
+      if (o === e || o.hp <= 0 || (o.shockT || 0) > 0) continue;
+      const dd = dist(e.x, e.y, o.x, o.y);
+      if (dd < 170) cands.push([dd, o]);
+    }
+    cands.sort((a, b) => a[0] - b[0]);
+    for (let i = 0; i < Math.min(2, cands.length); i++) {
+      const o = cands[i][1];
+      beams.push({ x1: e.x, y1: e.y, x2: o.x, y2: o.y, t: 0.18, col: "#ffee55" });
+      applyShock(o, dmg * 0.7, chains - 1);
+    }
+  }
+}
+
+/* FREEZE + SHOCK = SHATTER: burst damage, consumes both statuses */
+function shatterCombo(e) {
+  e.frozenT = 0; e.shockT = 0;
+  burst(e.x, e.y, "#cfeeff", 22, 300, 0.6, 3.5);
+  dnum(e.x, e.y - e.r - 14, "SHATTER", "#cfeeff", true);
+  audio.shatter();
+  shake(4, 0.15);
+  statusDamage(e, (30 + depth * 2.5) * dmgMul(), "#cfeeff");
+}
+
+/* BURN + FREEZE = THERMAL SNAP: small AoE, consumes both statuses */
+function thermalSnap(e) {
+  e.burnT = 0; e.burnStacks = 0; e.burnDps = 0; e.frozenT = 0;
+  const R = 90, dmg = (16 + depth * 1.8) * dmgMul();
+  burst(e.x, e.y, "#ffaa66", 18, 260, 0.5, 3);
+  burst(e.x, e.y, "#ffffff", 8, 180, 0.3, 2);
+  dnum(e.x, e.y - e.r - 14, "THERMAL SNAP", "#ffaa66", true);
+  audio.comboSnap();
+  shake(4, 0.15);
+  const ex = e.x, ey = e.y;
+  for (const o of enemies) {
+    if (o.hp <= 0) continue;
+    if (dist(ex, ey, o.x, o.y) < R + o.r) statusDamage(o, dmg, "#ffaa66");
+  }
+}
+
+/* shieldbearer: blocks bolts/slashes arriving from the shield-facing side */
+function shieldBlocks(e, fromX, fromY) {
+  return e.type === "shield" && e.hp > 0 && e.frozenT <= 0 && (e.shockT || 0) <= 0 &&
+    (e.exposeT || 0) <= 0 && e.spawnT <= 0 &&
+    Math.abs(angDiff(e.shieldA, angTo(e.x, e.y, fromX, fromY))) < 1.15;
+}
+
+/* bomber detonation: hurts the player AND other enemies */
+function explodeBomber(e) {
+  const R = 95;
+  burst(e.x, e.y, "#ff8844", 34, 340, 0.6, 4);
+  burst(e.x, e.y, "#ffe0aa", 12, 260, 0.35, 3);
+  shake(7, 0.3);
+  audio.enemyDie(true);
+  if (player && player.hp > 0 && dist(e.x, e.y, player.x, player.y) < R + player.r) {
+    damagePlayer(15 * eDmgMul(), angTo(e.x, e.y, player.x, player.y), null);
+  }
+  const ex = e.x, ey = e.y;
+  killEnemy(e);
+  for (const o of enemies) {
+    if (o === e || o.hp <= 0) continue;
+    if (dist(ex, ey, o.x, o.y) < R + o.r) statusDamage(o, 26 + depth * 2, "#ff8844");
+  }
 }
 
 function killEnemy(e) {
@@ -836,9 +1092,13 @@ function killEnemy(e) {
   if (boonLv("reset")) {
     player.dashCharges = Math.min(player.dashMax, player.dashCharges + 1);
     player.dashCD = 0;
+    // rarity bonus: above-common KILL DRIVE also refunds a little energy
+    const xPow = Math.max(0, boonPow("reset") - 1);
+    if (xPow > 0) player.energy = Math.min(player.maxEnergy, player.energy + 6 * xPow);
   }
   // core drops (splitter fragments drop a share each)
   let n = e.type === "boss" ? (e.gen ? randi(3, 5) : randi(14, 18)) : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
+  if (e.elite) n += randi(3, 5);
   while (n-- > 0) {
     pickups.push({ kind: "core", x: e.x, y: e.y, vx: rand(-120, 120), vy: rand(-120, 120), t: 12 });
   }
@@ -852,7 +1112,7 @@ function damagePlayer(d, ang, attacker) {
   if (!player || player.hp <= 0) return;
   if (player.ifr > 0 || player.hurtT > 0) return;
   if (boonLv("thorn") && attacker && attacker.hp > 0) {
-    hitEnemy(attacker, 9 * boonLv("thorn"), Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
+    hitEnemy(attacker, Math.round(9 * boonPow("thorn")), Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
   }
   player.hp -= d;
   player.hurtT = CONFIG.hurtIfr;
@@ -889,7 +1149,7 @@ function firePlayerBolt() {
     pbolts.push({
       x: player.x + Math.cos(a) * 16, y: player.y + Math.sin(a) * 16,
       vx: Math.cos(a) * CONFIG.boltSpeed, vy: Math.sin(a) * CONFIG.boltSpeed,
-      r: 5, t: 1.6, pierce: boonLv("pierce") * 2, hitSet: [],
+      r: 5, t: 1.6, pierce: Math.round(boonPow("pierce") * 2), hitSet: [],
     });
   }
   audio.bolt();
@@ -897,7 +1157,7 @@ function firePlayerBolt() {
 }
 
 function fireEbolt(x, y, a, spd, dmg, col, r) {
-  const slow = 1 - 0.25 * Math.min(2, boonLv("slow"));
+  const slow = 1 - Math.min(0.6, 0.25 * boonPow("slow"));
   ebolts.push({
     x, y, vx: Math.cos(a) * spd * slow, vy: Math.sin(a) * spd * slow,
     r: r || 6, t: 5, dmg: dmg * eDmgMul(), col: col || "#ff5577",
@@ -935,12 +1195,17 @@ function buildWaves(d) {
     const wave = [];
     const types = ["chaser", "swarmer"];
     if (d >= 2) types.push("shooter");
+    if (d >= 3) types.push("bomber");
     if (d >= 4) types.push("tank");
+    if (d >= 5) types.push("shield");
+    if (d >= 6) types.push("medic");
+    if (d >= 7) types.push("phantom");
     let guard = 0;
     while (budget > 0.5 && guard++ < 40) {
       const t = pick(types);
       const def = ENEMY_DEFS[t];
       if (def.cost > budget + 0.3) continue;
+      if (t === "medic" && wave.indexOf("medic") !== -1) continue; // one medic per wave
       if (t === "swarmer") {
         const pack = randi(3, 5);
         for (let i = 0; i < pack; i++) wave.push("swarmer");
@@ -956,6 +1221,7 @@ function buildWaves(d) {
 }
 
 function queueWave(list) {
+  eliteSpawned = false; // one elite per wave in elite rooms
   let cx = rand(180, CONFIG.arenaW - 180), cy = rand(140, CONFIG.arenaH - 200);
   for (const type of list) {
     let x = 0, y = 0, tries = 0, ok = false;
@@ -974,21 +1240,43 @@ function genRoom() {
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; mortars = []; novas = []; pedestals = []; boss = null;
   roomClear = false; waveIdx = 0; shopRoom = false;
+  challengeT = 0; challengeFailed = false; fountainUsed = false;
+  eliteRoom = false; eliteSpawned = false;
+  roomType = pendingRoom || (isBossDepth(depth) ? "boss" : "normal");
+  pendingRoom = null;
   player.x = CONFIG.arenaW / 2; player.y = CONFIG.arenaH - 90;
   player.vx = 0; player.vy = 0;
   roomFade = 1;
-  if (pendingShop) {
+  if (roomType === "shop") {
     // Charon-style shop room: combat-free, pedestals priced in cores
-    pendingShop = false;
     shopRoom = true;
     lastShopDepth = depth;
+    lastSpecialDepth = depth;
     pillars = [];
     waves = [];
     pedestals = makeShopStock();
     roomClear = true;
     openDoors(true);
     toast("PROVISIONER — 商店 — spend cores on wares", "#ffd966");
-  } else if (isBossDepth(depth)) {
+  } else if (roomType === "treasure") {
+    // combat-free cache: take ONE of the offerings, free
+    lastSpecialDepth = depth;
+    pillars = [];
+    waves = [];
+    pedestals = makeTreasureStock();
+    roomClear = true;
+    openDoors(true);
+    toast("CACHE — 宝藏：任选其一 — take ONE, free", "#cc88ff");
+  } else if (roomType === "fountain") {
+    // combat-free rest stop: approach the spring to heal 30%
+    lastFountainDepth = depth;
+    lastSpecialDepth = depth;
+    pillars = [];
+    waves = [];
+    roomClear = true;
+    openDoors(true);
+    toast("REST SITE — 泉水：靠近回复30%生命 — approach to heal 30%", "#66ffe0");
+  } else if (roomType === "boss") {
     genPillars(randi(0, 2));
     waves = [["boss"]];
     spawnBoss();
@@ -996,6 +1284,13 @@ function genRoom() {
   } else {
     genPillars(randi(2, 5));
     buildWaves(depth);
+    if (roomType === "challenge") {
+      // timed gauntlet: denser waves, double cores if cleared in time
+      if (waves.length < 2) waves.push(waves[0].slice());
+      challengeT = CONFIG.challengeTime;
+      toast("CHALLENGE — " + CONFIG.challengeTime + "s 限时双倍奖励 — clear in time for 2x cores", "#ffee55");
+    }
+    eliteRoom = depth >= 3 && Math.random() < (runHeat.elite ? 0.45 : 0.12);
     queueWave(waves[0]);
     waveIdx = 1;
   }
@@ -1010,17 +1305,23 @@ function nextRoom() {
 }
 
 const DOOR_REWARDS = {
-  boon:   { col: "#5ee6ff", label: "BOON" },
-  hp:     { col: "#ff6677", label: "+MAX HP" },
-  energy: { col: "#ff66ee", label: "+ENERGY" },
-  cores:  { col: "#ffcc44", label: "CORES" },
-  shop:   { col: "#ffd966", label: "SHOP" },
+  boon:      { col: "#5ee6ff", label: "BOON" },
+  hp:        { col: "#ff6677", label: "+MAX HP" },
+  energy:    { col: "#ff66ee", label: "+ENERGY" },
+  cores:     { col: "#ffcc44", label: "CORES" },
+  shop:      { col: "#ffd966", label: "SHOP" },
+  challenge: { col: "#ffee55", label: "CHALLENGE" },
+  treasure:  { col: "#cc88ff", label: "TREASURE" },
+  fountain:  { col: "#66ffe0", label: "FOUNTAIN" },
 };
+const SPECIAL_ROOMS = ["shop", "treasure", "fountain"]; // combat-free rooms
 
 function openDoors(quiet) {
   const A = CONFIG;
   const n = randi(2, 3);
+  const nextD = depth + 1;
   const rewards = [];
+  // slot 0 is ALWAYS a combat door — a fight is always available
   rewards.push(Math.random() < 0.6 ? "boon" : pick(["hp", "energy", "cores"]));
   const others = ["boon", "hp", "energy", "cores"].filter((r) => r !== rewards[0]);
   while (rewards.length < n) {
@@ -1028,9 +1329,22 @@ function openDoors(quiet) {
     others.splice(others.indexOf(r), 1);
     rewards.push(r);
   }
-  // SHOP door every ~4-5 depths (never right before/at a boss room)
-  if (!shopRoom && !isBossDepth(depth + 1) && depth + 1 - lastShopDepth >= 4) {
-    if (depth + 1 - lastShopDepth >= 5 || Math.random() < 0.55) rewards[rewards.length - 1] = "shop";
+  // CHALLENGE: optional timed gauntlet door (still a combat room)
+  if (n > 1 && depth >= 2 && !isBossDepth(nextD) && roomType !== "challenge" && Math.random() < 0.22) {
+    rewards[1] = "challenge";
+  }
+  // at most ONE special (combat-free) room per door set, never twice in a row
+  const inSpecial = SPECIAL_ROOMS.indexOf(roomType) !== -1;
+  if (!inSpecial && !isBossDepth(nextD) && nextD - lastSpecialDepth >= 2) {
+    if (nextD - lastShopDepth >= 4 && (nextD - lastShopDepth >= 5 || Math.random() < 0.55)) {
+      // SHOP door every ~4-5 depths
+      rewards[rewards.length - 1] = "shop";
+    } else if (nextD - lastFountainDepth >= 6 && (nextD - lastFountainDepth >= 7 || Math.random() < 0.6)) {
+      // FOUNTAIN rest stop every ~6-7 depths, offset from shops
+      rewards[rewards.length - 1] = "fountain";
+    } else if (Math.random() < 0.12) {
+      rewards[rewards.length - 1] = "treasure";
+    }
   }
   const spacing = A.arenaW / (n + 1);
   for (let i = 0; i < n; i++) {
@@ -1055,12 +1369,12 @@ function enterDoor(d) {
     toast("+14 MAX ENERGY", "#ff66ee"); audio.boon();
     nextRoom();
   } else if (r === "cores") {
-    const n = 8 + depth * 3;
-    cores += n; runCores += n; saveMeta();
+    const n = coreGain(8 + depth * 3);
+    saveMeta();
     toast("+" + n + " CORES", "#ffcc44"); audio.pickupSnd();
     nextRoom();
-  } else if (r === "shop") {
-    pendingShop = true;
+  } else if (r === "shop" || r === "treasure" || r === "fountain" || r === "challenge") {
+    pendingRoom = r;
     nextRoom();
   } else {
     boonChoices = rollBoons();
@@ -1088,10 +1402,26 @@ function makeShopStock() {
   while (out.length < n && pool.length) {
     out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
   }
+  // INFLATION heat contract: shop prices +50%
+  const inf = 1 + 0.5 * (runHeat.shopUp || 0);
   return out.map((it, i) => ({
     x: CONFIG.arenaW * (i + 1) / (out.length + 1),
     y: CONFIG.arenaH * 0.52,
-    item: it, price: it.price(), sold: false,
+    item: it, price: Math.round(it.price() * inf), sold: false,
+  }));
+}
+
+/* TREASURE room: combat-free, exactly one free pick */
+const TREASURE_ITEMS = [
+  { id: "tcores", name: "CORE CACHE",     desc: "a stash of cores",    col: "#ffcc44", glyph: "◆" },
+  { id: "theal",  name: "NANO SALVE",     desc: "heal 40% HP",         col: "#66ff99", glyph: "+" },
+  { id: "tboon",  name: "PROTOCOL SHARD", desc: "gain a random boon",  col: "#5ee6ff", glyph: "◇" },
+];
+function makeTreasureStock() {
+  return TREASURE_ITEMS.map((it, i) => ({
+    x: CONFIG.arenaW * (i + 1) / (TREASURE_ITEMS.length + 1),
+    y: CONFIG.arenaH * 0.52,
+    item: it, price: 0, sold: false,
   }));
 }
 
@@ -1107,10 +1437,11 @@ function tryBuyPedestal(pd) {
   const p = player;
   if (p.buyCD > 0) return;
   p.buyCD = 0.35;
-  if (cores < pd.price) { audio.deny(); toast("NOT ENOUGH CORES", "#ff5566"); return; }
+  if (pd.price > 0 && cores < pd.price) { audio.deny(); toast("NOT ENOUGH CORES", "#ff5566"); return; }
   cores -= pd.price;
   saveMeta(); // sync spend with persistent store
   pd.sold = true;
+  if (roomType === "treasure") for (const pd2 of pedestals) pd2.sold = true; // one free pick only
   applyShopItem(pd.item);
   audio.buy();
   burst(pd.x, pd.y, pd.item.col, 22, 220, 0.6, 3);
@@ -1121,7 +1452,7 @@ function applyShopItem(it) {
   const p = player;
   if (it.id === "heal") p.hp = Math.min(p.maxHp, p.hp + Math.round(p.maxHp * 0.4));
   else if (it.id === "maxhp") { p.maxHp += 20; p.hp += 20; }
-  else if (it.id === "boon") {
+  else if (it.id === "boon" || it.id === "tboon") {
     boonChoices = rollBoons().slice(0, 1);
     if (boonChoices.length) { boonReturnToPlay = true; state = "boon"; }
   }
@@ -1130,6 +1461,8 @@ function applyShopItem(it) {
   else if (it.id === "fdmg") p.frozenBonus += 0.4;
   else if (it.id === "bolt") p.boltMul += 0.25;
   else if (it.id === "melee") p.meleeMul += 0.25;
+  else if (it.id === "tcores") { const g = coreGain(20 + depth * 4); saveMeta(); toast("+" + g + " CORES", "#ffcc44"); }
+  else if (it.id === "theal") p.hp = Math.min(p.maxHp, p.hp + Math.round(p.maxHp * 0.4));
 }
 
 /* ---------------- §N HUB / RUN FLOW ---------------- */
@@ -1141,16 +1474,30 @@ function enterHub() {
   player.x = CONFIG.arenaW / 2; player.y = CONFIG.arenaH * 0.62;
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; pillars = []; boss = null; toasts = [];
-  mortars = []; novas = []; pedestals = []; shopRoom = false; pendingShop = false;
+  mortars = []; novas = []; pedestals = []; shopRoom = false; pendingRoom = null;
+  roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
+  eliteRoom = false; eliteSpawned = false;
+  runHeat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
+  runHeatPts = 0; coreFrac = 0;
   roomFade = 1;
   audio.uiSnd();
 }
 
 function startRun() {
   kills = 0; runCores = 0; roomsCleared = 0; depth = 0;
-  lastShopDepth = 0; pendingShop = false; boonReturnToPlay = false;
+  lastShopDepth = 0; lastFountainDepth = 0; lastSpecialDepth = 0;
+  pendingRoom = null; boonReturnToPlay = false;
   rerollsLeft = Math.max(0, (meta.boon || 0) - 1);
+  // lock in the HEAT contract for this run
+  runHeat = Object.assign({}, heat);
+  runHeatPts = heatTotal(runHeat);
+  coreFrac = 0;
   player = newPlayer(); // fresh boons each run
+  if (runHeat.lowhp) { // FRAGILE FRAME: -25% max HP
+    player.maxHp = Math.max(20, Math.round(player.maxHp * 0.75));
+    player.hp = player.maxHp;
+  }
+  if (runHeatPts > 0) toast("HEAT " + runHeatPts + " — 契约生效 · cores +" + runHeatPts * 25 + "%", "#ff7755");
   if (meta.boon > 0) {
     boonChoices = rollBoons();
     boonFromStart = true;
@@ -1162,6 +1509,15 @@ function startRun() {
 
 function openShop() { state = "shop"; audio.uiSnd(); }
 function closeShop() { state = "hub"; audio.uiSnd(); }
+function openHeat() { state = "heat"; audio.uiSnd(); }
+function closeHeat() { state = "hub"; audio.uiSnd(); }
+function toggleHeat(i) {
+  const m = HEAT_MODS[i];
+  if (!m) return;
+  heat[m.id] = ((heat[m.id] || 0) + 1) % (m.max + 1);
+  saveHeat();
+  audio.heatClunk();
+}
 function buyMeta(u) {
   const lv = meta[u.id] || 0;
   const c = metaCost(u, lv); // no level cap — geometric cost growth
@@ -1215,7 +1571,7 @@ function moveInput() {
 
 function trySlash() {
   const p = player;
-  if (shopRoom && state === "play") {       // slash doubles as interact/buy in shop rooms
+  if ((shopRoom || roomType === "treasure") && state === "play") { // slash doubles as interact/take
     const pd = pedestalUnder();
     if (pd) { tryBuyPedestal(pd); return; }
   }
@@ -1227,8 +1583,8 @@ function trySlash() {
   p.slashAng = p.aim;
   audio.slash();
   // immediate hit detection — snappy
-  const range = CONFIG.meleeRange + boonLv("arc") * 14;
-  const arc = CONFIG.meleeArc * (1 + boonLv("arc") * 0.45);
+  const range = meleeRangeNow();
+  const arc = meleeArcNow();
   const dmg = meleeDamage();
   let hitAny = false;
   for (const e of enemies) {
@@ -1237,14 +1593,25 @@ function trySlash() {
     if (d > range + e.r) continue;
     const a = angTo(p.x, p.y, e.x, e.y);
     if (Math.abs(angDiff(p.slashAng, a)) > arc / 2 + Math.atan2(e.r, Math.max(1, d))) continue;
+    if (shieldBlocks(e, p.x, p.y)) {
+      // clang: blocked, but the impact knocks the shieldbearer back and exposes it
+      e.kbx += Math.cos(a) * 340; e.kby += Math.sin(a) * 340;
+      e.exposeT = 1.1;
+      burst(e.x + Math.cos(e.shieldA) * (e.r + 6), e.y + Math.sin(e.shieldA) * (e.r + 6), "#88aaff", 8, 180, 0.3, 2.5);
+      audio.clank();
+      hitAny = true;
+      continue;
+    }
     const crit = critRoll();
     hitEnemy(e, dmg, Math.cos(a) * 260, Math.sin(a) * 260, crit, true);
+    if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE
     hitAny = true;
     // chain lightning
     const cl = boonLv("chain");
     if (cl) {
       let from = e, chained = 0;
       const hitIds = [e];
+      const chFrac = Math.min(1.1, 0.5 + 0.1 * boonPow("chain")); // rarity-scaled chain damage
       while (chained < cl) {
         let tgt = null, bd = 170;
         for (const o of enemies) {
@@ -1255,7 +1622,7 @@ function trySlash() {
         if (!tgt) break;
         beams.push({ x1: from.x, y1: from.y, x2: tgt.x, y2: tgt.y, t: 0.18, col: "#8cc8ff" });
         sparkLine(from.x, from.y, tgt.x, tgt.y, "#8cc8ff", 8);
-        hitEnemy(tgt, dmg * 0.6, 0, 0, false, false);
+        hitEnemy(tgt, dmg * chFrac, 0, 0, false, false);
         hitIds.push(tgt);
         from = tgt; chained++;
       }
@@ -1283,7 +1650,7 @@ function tryFreeze() {
   const p = player;
   if (!p || p.hp <= 0 || p.freezeCD > 0) return;
   freezeBuf = 0;
-  const cd = CONFIG.freezeCD * p.freezeCDMul * Math.pow(0.75, boonLv("cryo"));
+  const cd = CONFIG.freezeCD * p.freezeCDMul * Math.max(0.3, Math.pow(0.75, boonPow("cryo")));
   p.freezeCD = cd; p.freezeCDMax = cd;
   novas.push({ x: p.x, y: p.y, t: 0.5, tm: 0.5, maxR: CONFIG.freezeR });
   audio.freezeCast();
@@ -1291,6 +1658,8 @@ function tryFreeze() {
   for (const e of enemies) {
     if (e.hp <= 0) continue;
     if (dist(p.x, p.y, e.x, e.y) < CONFIG.freezeR + e.r) {
+      if ((e.shockT || 0) > 0) { shatterCombo(e); continue; }  // FREEZE + SHOCK = SHATTER
+      if ((e.burnT || 0) > 0) { thermalSnap(e); continue; }    // BURN + FREEZE = THERMAL SNAP
       e.frozenT = e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur;
       e.vx = 0; e.vy = 0;
       burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
@@ -1347,7 +1716,7 @@ function updatePlayer(dt) {
     }
   }
   // energy
-  p.energy = Math.min(p.maxEnergy, p.energy + CONFIG.energyRegen * (1 + boonLv("over") * 0.4) * dt);
+  p.energy = Math.min(p.maxEnergy, p.energy + CONFIG.energyRegen * (1 + boonPow("over") * 0.4) * dt);
 
   // actions
   if (slashBuf > 0) { trySlash(); if (p.slashT > 0) slashBuf = 0; }
@@ -1358,7 +1727,7 @@ function updatePlayer(dt) {
   if (dashBuf > 0) { const had = p.dashT; tryDash(); if (p.dashT > 0 && !had) dashBuf = 0; }
 
   // movement
-  const spd = CONFIG.playerSpeed * (1 + boonLv("swift") * 0.12);
+  const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12));
   if (p.dashT > 0) {
     p.dashT -= dt;
     p.vx = p.dashDX * CONFIG.dashSpeed;
@@ -1368,6 +1737,14 @@ function updatePlayer(dt) {
       p.trailT = 0.016;
       p.trail.push({ x: p.x, y: p.y, t: 0.3, a: p.aim });
       if (boonLv("trail")) addZone(p.x, p.y);
+      if (boonLv("sdash")) { // STATIC DASH: trail shocks nearby foes
+        for (const e2 of enemies) {
+          if (e2.hp > 0 && (e2.sdCD || 0) <= 0 && dist(p.x, p.y, e2.x, e2.y) < 60 + e2.r) {
+            e2.sdCD = 1.4;
+            applyShock(e2, 6 * boonPow("sdash") * dmgMul(), 1);
+          }
+        }
+      }
     }
   } else {
     const mv = moveInput();
@@ -1389,6 +1766,17 @@ function updatePlayer(dt) {
       startRun();
     }
   }
+  // fountain rest stop: approach the spring to heal 30% (once)
+  if (state === "play" && roomType === "fountain" && !fountainUsed &&
+      dist(p.x, p.y, CONFIG.arenaW / 2, CONFIG.arenaH * 0.5) < 52) {
+    fountainUsed = true;
+    const h = Math.round(p.maxHp * 0.3);
+    p.hp = Math.min(p.maxHp, p.hp + h);
+    dnum(p.x, p.y - 20, "+" + h, "#66ffe0", true);
+    burst(CONFIG.arenaW / 2, CONFIG.arenaH * 0.5, "#66ffe0", 30, 220, 0.8, 3);
+    toast("SYSTEMS RESTORED +30%", "#66ffe0");
+    audio.buy();
+  }
   // doors
   if (state === "play" && roomClear) {
     for (const d of doors) {
@@ -1406,7 +1794,7 @@ function updatePlayer(dt) {
       pk.vx += Math.cos(a) * 900 * dt; pk.vy += Math.sin(a) * 900 * dt;
     }
     if (dd < p.r + 10) {
-      if (pk.kind === "core") { cores++; runCores++; audio.pickupSnd(); }
+      if (pk.kind === "core") { coreGain(1); audio.pickupSnd(); }
       else { player.hp = Math.min(player.maxHp, player.hp + 8); dnum(p.x, p.y - 16, "+8", "#66ff99", false); audio.pickupSnd(); }
       pk.t = -1;
       burst(pk.x, pk.y, pk.kind === "core" ? "#ffcc44" : "#66ff99", 6, 120, 0.3, 2);
@@ -1424,7 +1812,7 @@ function enemyContact(e, dmg, dt) {
   e.contactCD = Math.max(0, e.contactCD - dt);
   if (e.contactCD > 0) return;
   if (dist(e.x, e.y, player.x, player.y) < e.r + player.r) {
-    damagePlayer(dmg * eDmgMul(), angTo(e.x, e.y, player.x, player.y), e);
+    damagePlayer(dmg * eDmgMul() * (e.elite ? 1.35 : 1), angTo(e.x, e.y, player.x, player.y), e);
     e.contactCD = 0.5;
   }
 }
@@ -1433,6 +1821,33 @@ function updateEnemy(e, dt) {
   e.flash = Math.max(0, e.flash - dt);
   e.spawnT = Math.max(0, e.spawnT - dt);
   if (e.spawnT > 0) return;
+  if ((e.sdCD || 0) > 0) e.sdCD -= dt;
+  // BURN: damage-over-time ticks (works alongside any state)
+  if ((e.burnT || 0) > 0) {
+    e.burnT -= dt;
+    e.burnTick -= dt;
+    if (e.burnTick <= 0) {
+      e.burnTick = 0.5;
+      statusDamage(e, e.burnDps * 0.5 * e.burnStacks, "#ff8844");
+      if (Math.random() < 0.35) audio.burnCrackle();
+      if (e.hp <= 0) return;
+    }
+    if (Math.random() < dt * 7) {
+      addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: rand(-15, 15), vy: -rand(30, 70), t: 0.45, tm: 0.45, col: Math.random() < 0.5 ? "#ff8844" : "#ffcc66", r: rand(1.5, 3), drag: 1 });
+    }
+    if (e.burnT <= 0) { e.burnStacks = 0; e.burnDps = 0; }
+  }
+  // SHOCK: brief stun — no movement, no attacks
+  if ((e.shockT || 0) > 0) {
+    e.shockT -= dt;
+    e.vx *= Math.pow(0.001, dt); e.vy *= Math.pow(0.001, dt);
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    if (Math.random() < dt * 12) {
+      sparkLine(e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), e.x + rand(-e.r, e.r), e.y + rand(-e.r, e.r), "#ffee55", 2);
+    }
+    collideArena(e);
+    return;
+  }
   // frozen: no movement, no attacks — cheap early-out
   if (e.frozenT > 0) {
     e.frozenT -= dt;
@@ -1521,7 +1936,114 @@ function updateEnemy(e, dt) {
     e.vx = (v.x + -v.y * wob) * e.speed * 0.72;
     e.vy = (v.y + v.x * wob) * e.speed * 0.72;
     enemyContact(e, 6, dt);
+  } else if (e.type === "bomber") {
+    // scuttles at the player; close range arms a beeping fuse, then detonates (hurts everyone)
+    if (e.state === "fuse") {
+      const v = seekVec(e, p.x, p.y);
+      e.vx = v.x * e.speed * 0.35; e.vy = v.y * e.speed * 0.35;
+      e.t -= dt;
+      if (!e.beeped && e.t < 0.45) { e.beeped = true; audio.bombBeep(); }
+      if (e.t <= 0) { explodeBomber(e); return; }
+    } else {
+      e.phase += dt * 11;
+      const v = seekVec(e, p.x, p.y);
+      const wob = Math.sin(e.phase) * 0.5;
+      e.vx = (v.x + -v.y * wob) * e.speed;
+      e.vy = (v.y + v.x * wob) * e.speed;
+      enemyContact(e, 6, dt);
+      if (d < 95) { e.state = "fuse"; e.t = 1.0; e.beeped = false; audio.bombBeep(); }
+    }
+  } else if (e.type === "shield") {
+    // shield faces the player but turns slowly — flank, freeze, shock or knock it back
+    e.exposeT = Math.max(0, (e.exposeT || 0) - dt);
+    const turn = 1.7 * dt;
+    e.shieldA += clamp(angDiff(e.shieldA, angTo(e.x, e.y, p.x, p.y)), -turn, turn);
+    const v = seekVec(e, p.x, p.y);
+    const wantSpd = d > 60 ? 1 : 0.2;
+    e.vx = lerp(e.vx, v.x * e.speed * wantSpd, 4 * dt);
+    e.vy = lerp(e.vy, v.y * e.speed * wantSpd, 4 * dt);
+    enemyContact(e, 9, dt);
+  } else if (e.type === "medic") {
+    // hovers behind others, beam-heals the most damaged ally
+    let tgt = null, worst = 0.999;
+    for (const o of enemies) {
+      if (o === e || o.hp <= 0 || o.type === "medic") continue;
+      const fr = o.hp / o.maxHp;
+      if (fr < worst) { worst = fr; tgt = o; }
+    }
+    e.healTgt = null;
+    let mx = 0, my = 0;
+    if (tgt) {
+      const away = angTo(p.x, p.y, tgt.x, tgt.y); // hide on the far side of the patient
+      const wx = clamp(tgt.x + Math.cos(away) * 80, 40, CONFIG.arenaW - 40);
+      const wy = clamp(tgt.y + Math.sin(away) * 80, 40, CONFIG.arenaH - 40);
+      const v = seekVec(e, wx, wy);
+      const dw = dist(e.x, e.y, wx, wy);
+      mx = v.x * Math.min(1, dw / 60); my = v.y * Math.min(1, dw / 60);
+      if (dist(e.x, e.y, tgt.x, tgt.y) < 230) {
+        e.healTgt = tgt;
+        e.cd -= dt;
+        if (e.cd <= 0) {
+          e.cd = 0.45;
+          const h = Math.max(2, Math.round((4 + depth * 1.1)));
+          tgt.hp = Math.min(tgt.maxHp, tgt.hp + h);
+          dnum(tgt.x, tgt.y - tgt.r, "+" + h, "#66ffcc", false);
+          burst(tgt.x, tgt.y, "#66ffcc", 3, 70, 0.3, 2);
+        }
+      }
+    } else {
+      const v = seekVec(e, p.x, p.y);
+      mx = -v.x; my = -v.y; // nobody to heal: flee
+    }
+    if (d < 150) { const v = seekVec(e, p.x, p.y); mx -= v.x * 0.8; my -= v.y * 0.8; }
+    e.vx = lerp(e.vx, mx * e.speed, 5 * dt);
+    e.vy = lerp(e.vy, my * e.speed, 5 * dt);
+    enemyContact(e, 4, dt);
+  } else if (e.type === "phantom") {
+    // cloaked stalker: shimmer drift -> decloak cue (0.5s) -> dash-strike -> visible recovery
+    if (e.state === "cloak") {
+      e.t += dt;
+      const v = seekVec(e, p.x, p.y);
+      const orbit = d > 200 ? 1 : 0.3;
+      e.vx = lerp(e.vx, (v.x * orbit - v.y * 0.7 * e.strafe) * e.speed, 4 * dt);
+      e.vy = lerp(e.vy, (v.y * orbit + v.x * 0.7 * e.strafe) * e.speed, 4 * dt);
+      if (Math.random() < dt * 0.4) e.strafe *= -1;
+      if (Math.random() < dt * 3) { // faint shimmer
+        addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: 0, vy: 0, t: 0.3, tm: 0.3, col: "rgba(187,153,255,0.4)", r: rand(1, 2), drag: 0 });
+      }
+      if (e.t > 1.4 && d < 240) {
+        e.state = "reveal"; e.t = 0.5;
+        audio.phantomCue();
+        burst(e.x, e.y, e.col, 10, 120, 0.4, 2.5);
+      }
+    } else if (e.state === "reveal") {
+      e.vx *= 0.85; e.vy *= 0.85;
+      const v = seekVec(e, p.x, p.y); e.dirX = v.x; e.dirY = v.y;
+      e.t -= dt;
+      if (e.t <= 0) {
+        e.state = "strike"; e.t = 0.32;
+        e.vx = e.dirX * 540; e.vy = e.dirY * 540;
+        audio.dash();
+      }
+    } else if (e.state === "strike") {
+      e.t -= dt;
+      enemyContact(e, 14, dt);
+      if (e.t <= 0) { e.state = "recover"; e.t = 1.1; e.vx *= 0.2; e.vy *= 0.2; }
+    } else { // recover (visible, vulnerable)
+      e.t -= dt;
+      e.vx *= 0.95; e.vy *= 0.95;
+      if (e.t <= 0) { e.state = "cloak"; e.t = 0; }
+    }
   } else if (e.type === "boss") {
+    // BERSERK CORES heat contract: bosses enrage at 30% HP
+    if (runHeat.enrage && !e.enraged && e.hp < e.maxHp * 0.3) {
+      e.enraged = true;
+      e.speed *= 1.3;
+      toast("ENRAGED — 狂暴!", "#ff3366");
+      audio.roar();
+      burst(e.x, e.y, "#ff3366", 30, 300, 0.7, 4);
+      shake(8, 0.4);
+    }
     if (e.kind === "summoner") updateBossSummoner(e, dt, d);
     else if (e.kind === "artillery") updateBossArtillery(e, dt, d);
     else if (e.kind === "splitter") updateBossSplitter(e, dt, d);
@@ -1547,7 +2069,7 @@ function updateBoss(e, dt, d) {
   e.rot += dt * (e.state === "radial" ? 6 : 1.2);
   const p = player;
   const phase2 = e.hp < e.maxHp * 0.5;
-  const cdm = e.hard ? 0.75 : 1; // hard variant: faster pattern cycling
+  const cdm = (e.hard ? 0.75 : 1) * (e.enraged ? 0.65 : 1); // hard variant / enrage: faster pattern cycling
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     const v = seekVec(e, p.x, p.y);
@@ -1621,7 +2143,7 @@ function updateBoss(e, dt, d) {
 function updateBossSummoner(e, dt, d) {
   const p = player;
   const phase2 = e.hp < e.maxHp * 0.5;
-  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1);
+  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1) * (e.enraged ? 0.65 : 1);
   e.rot += dt * 2.2;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -1698,7 +2220,7 @@ function updateBossSummoner(e, dt, d) {
 function updateBossArtillery(e, dt, d) {
   const p = player;
   const phase2 = e.hp < e.maxHp * 0.5;
-  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1);
+  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.85 : 1) * (e.enraged ? 0.65 : 1);
   e.rot += dt;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -1757,7 +2279,7 @@ function updateBossArtillery(e, dt, d) {
 function updateBossSplitter(e, dt, d) {
   if (e.gen < 2 && e.hp <= e.maxHp * 0.5) { splitBoss(e); return; }
   const p = player;
-  const cdm = e.hard ? 0.75 : 1;
+  const cdm = (e.hard ? 0.75 : 1) * (e.enraged ? 0.65 : 1);
   e.rot += dt * 0.8;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -1832,6 +2354,18 @@ function step(dt) {
   for (const e of enemies) if (e.hp > 0) updateEnemy(e, dt);
   enemies = enemies.filter((e) => e.hp > 0);
 
+  // challenge gauntlet countdown
+  if (state === "play" && roomType === "challenge" && !roomClear && !challengeFailed) {
+    const prevT = challengeT;
+    challengeT -= dt;
+    if (challengeT > 0 && challengeT <= 10 && Math.ceil(prevT) !== Math.ceil(challengeT)) audio.challengeTick();
+    if (challengeT <= 0) {
+      challengeFailed = true;
+      toast("OUT OF TIME — 超时：普通奖励 — normal reward", "#ff7755");
+      audio.deny();
+    }
+  }
+
   // waves / clear
   if (state === "play" && !roomClear && enemies.length === 0 && spawnQ.length === 0) {
     if (waveIdx < waves.length) {
@@ -1842,9 +2376,23 @@ function step(dt) {
       roomClear = true;
       roomsCleared++;
       if (boonLv("wind")) {
-        const h = 12 * boonLv("wind");
+        const h = Math.round(12 * boonPow("wind"));
         player.hp = Math.min(player.maxHp, player.hp + h);
         dnum(player.x, player.y - 20, "+" + h, "#66ff99", false);
+      }
+      if (roomType === "challenge") {
+        // timed gauntlet payout: double cores if cleared inside the limit
+        const base = 12 + depth * 3;
+        const success = !challengeFailed;
+        const got = coreGain(success ? base * 2 : base);
+        saveMeta();
+        if (success) {
+          toast("CHALLENGE CLEAR — 双倍奖励 +" + got + " ◆", "#ffee55");
+          audio.challengeWin();
+          burst(player.x, player.y, "#ffee55", 26, 240, 0.7, 3);
+        } else {
+          toast("+" + got + " ◆", "#ffcc44");
+        }
       }
       openDoors();
     }
@@ -1862,9 +2410,17 @@ function step(dt) {
     for (const e of enemies) {
       if (e.hp <= 0 || b.hitSet.includes(e)) continue;
       if (dist(b.x, b.y, e.x, e.y) < b.r + e.r) {
+        if (shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02)) {
+          // frontal energy shield eats the bolt
+          burst(b.x, b.y, "#88aaff", 6, 140, 0.25, 2);
+          audio.clank();
+          b.t = -1;
+          break;
+        }
         const crit = critRoll();
         const a = Math.atan2(b.vy, b.vx);
         hitEnemy(e, boltDamage(), Math.cos(a) * 130, Math.sin(a) * 130, crit, false);
+        if (crit && boonLv("volt")) applyShock(e, 7 * boonPow("volt") * dmgMul(), 1); // VOLT ROUNDS
         b.hitSet.push(e);
         if (b.pierce > 0) b.pierce--;
         else { b.t = -1; burst(b.x, b.y, "#ff66ee", 6, 140, 0.25, 2); break; }
@@ -1896,7 +2452,7 @@ function step(dt) {
       z.tick = 0.18;
       for (const e of enemies) {
         if (e.hp > 0 && dist(z.x, z.y, e.x, e.y) < z.r + e.r) {
-          hitEnemy(e, 4 * dmgMul() * boonLv("trail"), 0, 0, false, false);
+          hitEnemy(e, 4 * dmgMul() * boonPow("trail"), 0, 0, false, false);
         }
       }
       addPart({ x: z.x + rand(-14, 14), y: z.y + rand(-14, 14), vx: 0, vy: -40, t: 0.4, tm: 0.4, col: "#ffaa44", r: rand(2, 4), drag: 1 });
@@ -2049,6 +2605,29 @@ function drawDoors() {
       ctx.fillRect(d.x - 8, iy + 4, 16, 4);
       ctx.fillRect(d.x - 4, iy, 8, 4);
       ctx.arc(d.x, iy - 6, 5, 0, TAU); ctx.fill();
+    } else if (d.reward === "challenge") {
+      // stopwatch: ring + ticking hand
+      ctx.strokeStyle = rw.col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(d.x, iy, 8, 0, TAU); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(d.x, iy);
+      const ha = -Math.PI / 2 + (timeNow % 2) * Math.PI;
+      ctx.lineTo(d.x + Math.cos(ha) * 6, iy + Math.sin(ha) * 6);
+      ctx.stroke();
+      ctx.fillRect(d.x - 2, iy - 12, 4, 3);
+    } else if (d.reward === "treasure") {
+      // chest: box + lid + latch
+      ctx.fillRect(d.x - 8, iy - 2, 16, 8);
+      ctx.fillRect(d.x - 9, iy - 6, 18, 3);
+      ctx.fillStyle = "#070720";
+      ctx.fillRect(d.x - 1.5, iy, 3, 3);
+      ctx.fillStyle = rw.col;
+    } else if (d.reward === "fountain") {
+      // droplet
+      ctx.moveTo(d.x, iy - 9);
+      ctx.quadraticCurveTo(d.x + 7, iy + 1, d.x, iy + 7);
+      ctx.quadraticCurveTo(d.x - 7, iy + 1, d.x, iy - 9);
+      ctx.closePath(); ctx.fill();
     } else {
       ctx.arc(d.x, iy, 6, 0, TAU); ctx.fill();
     }
@@ -2119,12 +2698,12 @@ function drawZonesAndPickups() {
 }
 
 function drawPedestals() {
-  if (!shopRoom) return;
+  if (!shopRoom && roomType !== "treasure") return;
   const p = player;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   for (const pd of pedestals) {
     const it = pd.item;
-    const afford = cores >= pd.price;
+    const afford = pd.price <= 0 || cores >= pd.price;
     const near = p && p.hp > 0 && dist(p.x, p.y, pd.x, pd.y) < 36;
     const bob = Math.sin(timeNow * 2.4 + pd.x) * 4;
     ctx.save();
@@ -2152,12 +2731,12 @@ function drawPedestals() {
       ctx.fillStyle = "rgba(190,210,255,0.75)";
       ctx.fillText(it.desc, pd.x, pd.y + 62);
       ctx.font = "bold 12px 'Courier New', monospace";
-      ctx.fillStyle = afford ? "#ffcc44" : "#ff5566";
-      ctx.fillText("◆ " + pd.price, pd.x, pd.y + 78);
+      ctx.fillStyle = pd.price <= 0 ? "#cc88ff" : afford ? "#ffcc44" : "#ff5566";
+      ctx.fillText(pd.price <= 0 ? "FREE — 免费" : "◆ " + pd.price, pd.x, pd.y + 78);
       if (near) {
         ctx.fillStyle = "#ffffff";
         ctx.font = "bold 11px 'Courier New', monospace";
-        ctx.fillText(touchUI ? "TAP TO BUY" : "[J] BUY", pd.x, pd.y - 48);
+        ctx.fillText(touchUI ? (pd.price <= 0 ? "TAP TO TAKE" : "TAP TO BUY") : (pd.price <= 0 ? "[J] TAKE" : "[J] BUY"), pd.x, pd.y - 48);
       }
     }
     ctx.restore();
@@ -2185,7 +2764,35 @@ function drawEnemy(e) {
   const col = fl ? "#ffffff" : frozen ? "#bfe8ff" : e.col;
   ctx.save();
   if (e.spawnT > 0) ctx.globalAlpha = 1 - e.spawnT / 0.4;
+  // phantom cloak: barely-visible shimmer (statuses force visibility)
+  if (e.type === "phantom" && e.state === "cloak" && e.frozenT <= 0 && (e.shockT || 0) <= 0 && !fl) {
+    ctx.globalAlpha *= 0.12 + 0.05 * Math.sin(timeNow * 6 + e.phase);
+  }
   // telegraphs first (under body)
+  if (e.type === "bomber" && e.state === "fuse") {
+    // pulsing blast-radius telegraph synced to the fuse
+    const p2 = 1 - clamp(e.t / 1.0, 0, 1);
+    const puls = 0.5 + 0.5 * Math.sin(timeNow * (10 + p2 * 22));
+    ctx.strokeStyle = "#ff8844";
+    ctx.fillStyle = "rgba(255,136,68," + (0.05 + p2 * 0.12 + puls * 0.05) + ")";
+    ctx.lineWidth = 2;
+    glow("#ff8844", 10);
+    ctx.beginPath(); ctx.arc(e.x, e.y, 95, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(e.x, e.y, 95 * p2, 0, TAU); ctx.stroke();
+    noglow();
+  }
+  if (e.type === "phantom" && e.state === "reveal") {
+    // decloak strike telegraph
+    const p2 = 1 - e.t / 0.5;
+    ctx.strokeStyle = "rgba(187,153,255," + (0.3 + p2 * 0.6) + ")";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(e.x, e.y);
+    ctx.lineTo(e.x + e.dirX * 200, e.y + e.dirY * 200);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
   if (e.type === "tank" && e.state === "slam") {
     const p = 1 - e.t / 0.85;
     ctx.strokeStyle = "#ffaa33";
@@ -2321,6 +2928,90 @@ function drawEnemy(e) {
     ctx.moveTo(e.r + 2, 0); ctx.lineTo(0, e.r); ctx.lineTo(-e.r, 0); ctx.lineTo(0, -e.r);
     ctx.closePath(); ctx.fill();
     ctx.restore();
+  } else if (e.type === "bomber") {
+    // squat scuttler with stubby legs and a glowing fuse dome
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    const fusing = e.state === "fuse";
+    const fuseGlow = fusing ? 0.5 + 0.5 * Math.sin(timeNow * (12 + (1 - clamp(e.t, 0, 1)) * 26)) : 0.25 + 0.1 * Math.sin(timeNow * 4);
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 6; i++) { // legs
+      const a = (i / 6) * TAU + Math.sin(e.phase + i) * 0.18;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a) * e.r * 0.5, Math.sin(a) * e.r * 0.5);
+      ctx.lineTo(Math.cos(a) * (e.r + 5), Math.sin(a) * (e.r + 5));
+      ctx.stroke();
+    }
+    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
+    // fuse dome pulses hotter as detonation nears
+    glow("#ffe0aa", 10 + fuseGlow * 16);
+    ctx.fillStyle = fl ? "#ffffff" : "rgba(255," + Math.round(190 + fuseGlow * 65) + "," + Math.round(120 + fuseGlow * 100) + ",1)";
+    ctx.beginPath(); ctx.arc(0, 0, e.r * (0.4 + fuseGlow * 0.18), 0, TAU); ctx.fill();
+    ctx.restore();
+  } else if (e.type === "shield") {
+    // armored walker with a frontal energy shield arc
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    ctx.rotate(e.shieldA);
+    rrect(-e.r * 0.8, -e.r * 0.7, e.r * 1.5, e.r * 1.4, 5); ctx.fill();
+    ctx.fillStyle = "#070720";
+    ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.35, 0, TAU); ctx.fill();
+    ctx.fillStyle = fl ? "#ffffff" : "#cfe0ff";
+    ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.15, 0, TAU); ctx.fill();
+    // the shield itself: bright when active, shattered-dim when exposed/frozen/shocked
+    const active = e.frozenT <= 0 && (e.shockT || 0) <= 0 && (e.exposeT || 0) <= 0;
+    glow("#aaccff", active ? 14 : 4);
+    ctx.strokeStyle = active ? "rgba(170,204,255,0.95)" : "rgba(120,140,200,0.35)";
+    ctx.lineWidth = active ? 5 : 3;
+    ctx.beginPath(); ctx.arc(0, 0, e.r + 7, -1.15, 1.15); ctx.stroke();
+    if (active) {
+      ctx.strokeStyle = "rgba(200,225,255,0.4)";
+      ctx.lineWidth = 9;
+      ctx.beginPath(); ctx.arc(0, 0, e.r + 7, -1.0, 1.0); ctx.stroke();
+    }
+    noglow();
+    ctx.restore();
+  } else if (e.type === "medic") {
+    // heal beam to its patient (drawn under the drone body)
+    if (e.healTgt && e.healTgt.hp > 0) {
+      ctx.save();
+      glow("#66ffcc", 10);
+      ctx.strokeStyle = "rgba(102,255,204," + (0.5 + 0.25 * Math.sin(timeNow * 9)) + ")";
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([6, 5]);
+      ctx.beginPath();
+      ctx.moveTo(e.x, e.y);
+      ctx.lineTo(e.healTgt.x, e.healTgt.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      noglow();
+      ctx.restore();
+      ctx.fillStyle = col; ctx.strokeStyle = col;
+    }
+    // hovering drone: rotor ring + medical cross
+    ctx.save();
+    ctx.translate(e.x, e.y + Math.sin(timeNow * 5 + e.phase) * 2.5);
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, 0, e.r + 3, timeNow * 5, timeNow * 5 + 4.6); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, e.r, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#070720";
+    ctx.fillRect(-e.r * 0.55, -e.r * 0.2, e.r * 1.1, e.r * 0.4);
+    ctx.fillRect(-e.r * 0.2, -e.r * 0.55, e.r * 0.4, e.r * 1.1);
+    ctx.restore();
+  } else if (e.type === "phantom") {
+    // sleek dagger shard, aimed along its motion / strike line
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    const pa = (e.state === "reveal" || e.state === "strike") ? Math.atan2(e.dirY, e.dirX)
+      : (Math.hypot(e.vx, e.vy) > 5 ? Math.atan2(e.vy, e.vx) : angTo(e.x, e.y, player.x, player.y));
+    ctx.rotate(pa);
+    ctx.beginPath();
+    ctx.moveTo(e.r + 7, 0); ctx.lineTo(-e.r * 0.5, e.r * 0.55);
+    ctx.lineTo(-e.r * 0.9, 0); ctx.lineTo(-e.r * 0.5, -e.r * 0.55);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = fl ? "#ffffff" : "#e8defc";
+    ctx.beginPath(); ctx.arc(e.r * 0.15, 0, e.r * 0.18, 0, TAU); ctx.fill();
+    ctx.restore();
   } else if (e.type === "boss") {
     ctx.save();
     ctx.translate(e.x, e.y);
@@ -2423,6 +3114,31 @@ function drawEnemy(e) {
     ctx.restore();
   }
 
+  // elite: rotating gold ring
+  if (e.elite) {
+    ctx.save();
+    glow("#ffcc44", 10);
+    ctx.strokeStyle = "rgba(255,204,68,0.85)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 5]);
+    ctx.lineDashOffset = -timeNow * 22;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 7, 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+    noglow();
+    ctx.restore();
+  }
+  // enraged boss: pulsing red aura
+  if (e.enraged) {
+    ctx.save();
+    const pl = 0.4 + 0.3 * Math.sin(timeNow * 9);
+    glow("#ff3366", 16);
+    ctx.strokeStyle = "rgba(255,51,102," + pl + ")";
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 14, 0, TAU); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
+
   // small hp bar (not boss; boss has top bar)
   if (e.type !== "boss" && e.hp < e.maxHp) {
     const w = e.r * 2;
@@ -2430,6 +3146,24 @@ function drawEnemy(e) {
     ctx.fillRect(e.x - w / 2, e.y - e.r - 9, w, 3.5);
     ctx.fillStyle = e.col;
     ctx.fillRect(e.x - w / 2, e.y - e.r - 9, w * clamp(e.hp / e.maxHp, 0, 1), 3.5);
+  }
+  // tiny status icons above afflicted enemies
+  if (frozen || (e.burnT || 0) > 0 || (e.shockT || 0) > 0) {
+    const sts = [];
+    if (frozen) sts.push(["❄", "#aaeeff"]);
+    if ((e.burnT || 0) > 0) sts.push(["❋", "#ff8844"]);
+    if ((e.shockT || 0) > 0) sts.push(["↯", "#ffee55"]);
+    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    let sx0 = e.x - (sts.length - 1) * 6;
+    const sy0 = e.y - e.r - 17;
+    for (const s of sts) {
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(sx0 - 5, sy0 - 5, 10, 10);
+      ctx.fillStyle = s[1];
+      ctx.fillText(s[0], sx0, sy0 + 1);
+      sx0 += 12;
+    }
   }
   ctx.restore();
 }
@@ -2474,8 +3208,8 @@ function drawPlayer() {
   // slash arc swipe
   if (p.slashT > 0) {
     const prog = 1 - p.slashT / CONFIG.slashDur;
-    const range = CONFIG.meleeRange + boonLv("arc") * 14;
-    const arc = CONFIG.meleeArc * (1 + boonLv("arc") * 0.45);
+    const range = meleeRangeNow();
+    const arc = meleeArcNow();
     const sweep = p.slashSide;
     const a0 = p.slashAng - sweep * arc / 2;
     const a1 = a0 + sweep * arc * Math.min(1, prog * 2.4);
@@ -2579,6 +3313,30 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP TO UPGRADE" : "PRESS E TO UPGRADE", t.termX, t.termY - 48);
   }
+  // HEAT terminal (难度契约): toggle difficulty contracts for bonus cores
+  const hPts = heatTotal();
+  glow("#ff7755", 16);
+  ctx.fillStyle = "#2a1418";
+  rrect(t.heatX - 34, t.heatY - 26, 68, 52, 8); ctx.fill();
+  ctx.strokeStyle = "#ff7755";
+  ctx.lineWidth = 2.5;
+  rrect(t.heatX - 34, t.heatY - 26, 68, 52, 8); ctx.stroke();
+  noglow();
+  ctx.fillStyle = "#ff7755";
+  ctx.font = "bold 11px 'Courier New', monospace";
+  ctx.fillText("HEAT", t.heatX, t.heatY - 6);
+  ctx.fillText("契约", t.heatX, t.heatY + 8);
+  const hPulse = 0.5 + Math.sin(timeNow * 3 + 1.5) * 0.3;
+  ctx.strokeStyle = "rgba(255,119,85," + hPulse * 0.6 + ")";
+  ctx.beginPath(); ctx.arc(t.heatX, t.heatY, t.heatR, 0, TAU); ctx.stroke();
+  ctx.fillStyle = hPts > 0 ? "#ff7755" : "rgba(255,119,85,0.55)";
+  ctx.font = "bold 12px 'Courier New', monospace";
+  ctx.fillText(hPts > 0 ? "♨ " + hPts + " · ◆+" + hPts * 25 + "%" : "♨ 0", t.heatX, t.heatY + t.heatR * 0.62 + 8);
+  if (player && dist(player.x, player.y, t.heatX, t.heatY) < t.heatR + 30) {
+    ctx.fillStyle = "#ff7755";
+    ctx.font = "13px 'Courier New', monospace";
+    ctx.fillText(touchUI ? "TAP — HEAT CONTRACT" : "PRESS E — HEAT CONTRACT", t.heatX, t.heatY - 48);
+  }
   // exit gate
   glow("#5ee6ff", 18);
   ctx.fillStyle = "rgba(94,230,255,0.12)";
@@ -2593,6 +3351,42 @@ function drawHubObjects() {
   ctx.font = "11px 'Courier New', monospace";
   ctx.fillStyle = "rgba(94,230,255,0.6)";
   ctx.fillText("walk in to begin the run", t.exitX, t.exitY + t.exitH / 2 + 14);
+}
+
+function drawFountain() {
+  const fx = CONFIG.arenaW / 2, fy = CONFIG.arenaH * 0.5;
+  const used = fountainUsed;
+  ctx.save();
+  // basin
+  glow("#66ffe0", used ? 6 : 18);
+  ctx.fillStyle = "rgba(16,38,42,0.95)";
+  ctx.beginPath(); ctx.arc(fx, fy, 38, 0, TAU); ctx.fill();
+  ctx.strokeStyle = used ? "rgba(102,255,224,0.3)" : "#66ffe0";
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(fx, fy, 38, 0, TAU); ctx.stroke();
+  noglow();
+  // shimmering water
+  ctx.fillStyle = used ? "rgba(102,255,224,0.12)" : "rgba(102,255,224," + (0.25 + 0.1 * Math.sin(timeNow * 3)) + ")";
+  ctx.beginPath(); ctx.arc(fx, fy, 28, 0, TAU); ctx.fill();
+  if (!used) {
+    for (let i = 0; i < 3; i++) { // rising droplets
+      const ph = (timeNow * 0.7 + i / 3) % 1;
+      ctx.globalAlpha = 1 - ph;
+      ctx.fillStyle = "#9efff0";
+      ctx.beginPath(); ctx.arc(fx + Math.sin(i * 2.1 + timeNow) * 12, fy - 8 - ph * 30, 3 * (1 - ph) + 1, 0, TAU); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#66ffe0";
+    ctx.font = "bold 12px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("REST — 泉水 +30%", fx, fy + 58);
+  } else {
+    ctx.fillStyle = "rgba(102,255,224,0.4)";
+    ctx.font = "11px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("DEPLETED — 已枯竭", fx, fy + 58);
+  }
+  ctx.restore();
 }
 
 /* ---------------- §T RENDER: HUD & SCREENS ---------------- */
@@ -2670,15 +3464,17 @@ function drawHUD() {
       ctx.fillText("K", fx, fy + 15 * u);
     }
   }
-  // boon icons
+  // boon icons (border tinted by best rarity acquired)
   let ix = bx, iy = by - 22 * u;
   for (const id in p.boons) {
     const b = boonById(id);
     if (!b) continue;
-    glow(b.col, 6);
+    const rc = RARITIES[(p.boonBest && p.boonBest[id]) || 0].col;
+    glow(rc, 6);
     ctx.fillStyle = "rgba(8,10,30,0.9)";
     rrect(ix, iy - 9 * u, 18 * u, 18 * u, 4); ctx.fill();
-    ctx.strokeStyle = b.col; ctx.lineWidth = 1.5;
+    ctx.strokeStyle = ((p.boonBest && p.boonBest[id]) || 0) > 0 ? rc : b.col;
+    ctx.lineWidth = ((p.boonBest && p.boonBest[id]) || 0) > 0 ? 2 : 1.5;
     rrect(ix, iy - 9 * u, 18 * u, 18 * u, 4); ctx.stroke();
     noglow();
     ctx.fillStyle = b.col;
@@ -2701,10 +3497,39 @@ function drawHUD() {
   ctx.fillStyle = "#ffcc44";
   ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
   ctx.fillText("◆ " + fmtNum(cores), cw - 16, 44 * u);
+  // active HEAT contract readout
+  const heatLine = state !== "hub" && runHeatPts > 0;
+  if (heatLine) {
+    ctx.fillStyle = "#ff7755";
+    ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+    ctx.fillText("♨ HEAT " + runHeatPts + " · ◆+" + runHeatPts * 25 + "%", cw - 16, 62 * u);
+  }
   if (state === "play" && !roomClear && waves.length > 1) {
     ctx.fillStyle = "rgba(204,102,255,0.8)";
     ctx.font = 11 * u + "px 'Courier New', monospace";
-    ctx.fillText("wave " + waveIdx + "/" + waves.length, cw - 16, 62 * u);
+    ctx.fillText("wave " + waveIdx + "/" + waves.length, cw - 16, (heatLine ? 79 : 62) * u);
+  }
+  // challenge gauntlet countdown
+  if (state === "play" && roomType === "challenge" && !roomClear) {
+    ctx.textAlign = "center";
+    if (!challengeFailed) {
+      const secs = Math.max(0, challengeT);
+      const urgent = secs <= 10;
+      const col = urgent ? (Math.floor(timeNow * 4) % 2 ? "#ff5566" : "#ffee55") : "#ffee55";
+      glow(col, 12);
+      ctx.fillStyle = col;
+      ctx.font = "bold " + (urgent ? 30 : 24) * u + "px 'Courier New', monospace";
+      ctx.fillText(secs.toFixed(1), cw / 2, 52 * u);
+      noglow();
+      ctx.fillStyle = "rgba(255,238,85,0.7)";
+      ctx.font = 10 * u + "px 'Courier New', monospace";
+      ctx.fillText("CHALLENGE — 2x ◆", cw / 2, 70 * u);
+    } else {
+      ctx.fillStyle = "rgba(255,119,85,0.8)";
+      ctx.font = "bold " + 14 * u + "px 'Courier New', monospace";
+      ctx.fillText("TIME UP — normal reward", cw / 2, 52 * u);
+    }
+    ctx.textAlign = "right";
   }
   // boss bar (sums all boss-type entities, e.g. splitter fragments)
   let bossHpSum = 0, bossCol = "#ff3366", bossAlive = false;
@@ -2833,6 +3658,7 @@ function drawTitle() {
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
+    "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
   ] : [
     "HOW TO PLAY / 操作说明",
@@ -2842,6 +3668,7 @@ function drawTitle() {
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
+    "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
     "P/Esc 暂停 · M 静音 — pause / mute",
   ];
@@ -2869,6 +3696,7 @@ function drawSummary() {
     ["KILLS", String(kills)],
     ["CORES EARNED", "◆ " + runCores],
   ];
+  if (runHeatPts > 0) rows.push(["HEAT 契约", "♨ " + runHeatPts + "  (cores +" + runHeatPts * 25 + "%)"]);
   let y = ch * 0.4;
   for (const r of rows) {
     ctx.fillStyle = "rgba(170,200,255,0.8)";
@@ -2911,22 +3739,35 @@ function drawBoonScreen() {
   let x = (cw - total) / 2;
   const y = ch * 0.5 - chei / 2;
   for (let i = 0; i < n; i++) {
-    const b = boonChoices[i];
+    const choice = boonChoices[i];
+    const b = choice.b;
+    const R = RARITIES[choice.rar || 0];
     const lv = boonLv(b.id);
     const hover = mouse.x >= x && mouse.x <= x + cwid && mouse.y >= y && mouse.y <= y + chei;
     ctx.save();
-    glow(b.col, hover ? 24 : 12);
+    glow(R.col, hover ? 26 : (choice.rar > 0 ? 16 : 12));
     ctx.fillStyle = "rgba(10,12,34,0.95)";
     rrect(x, y, cwid, chei, 10); ctx.fill();
-    ctx.strokeStyle = b.col;
-    ctx.lineWidth = hover ? 3 : 2;
+    ctx.strokeStyle = R.col;
+    ctx.lineWidth = hover ? 3 : (choice.rar > 0 ? 2.5 : 2);
     rrect(x, y, cwid, chei, 10); ctx.stroke();
+    if (choice.rar > 0) { // inner rarity rim
+      ctx.strokeStyle = R.col;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth = 1;
+      rrect(x + 4, y + 4, cwid - 8, chei - 8, 7); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
     noglow();
+    // rarity tag
+    ctx.fillStyle = R.col;
+    ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+    ctx.fillText(R.name + " · " + R.zh + (R.mul > 1 ? "  x" + R.mul : ""), x + cwid / 2, y + 14 * u);
     ctx.fillStyle = b.col;
     ctx.font = "bold " + 34 * u + "px 'Courier New', monospace";
-    ctx.fillText(b.glyph, x + cwid / 2, y + 44 * u);
+    ctx.fillText(b.glyph, x + cwid / 2, y + 48 * u);
     ctx.font = "bold " + 14 * u + "px 'Courier New', monospace";
-    ctx.fillText(b.name, x + cwid / 2, y + 84 * u);
+    ctx.fillText(b.name, x + cwid / 2, y + 86 * u);
     if (lv > 0) {
       ctx.fillStyle = "rgba(255,255,255,0.65)";
       ctx.font = 11 * u + "px 'Courier New', monospace";
@@ -2982,8 +3823,8 @@ function drawShopScreen() {
   ctx.font = "bold " + 15 * u + "px 'Courier New', monospace";
   ctx.fillText("◆ " + fmtNum(cores) + " cores", cw / 2, ch * 0.13 + 28 * u);
   const w = Math.min(560 * u, cw - 40);
-  const rh = 64 * u;
-  let y = ch * 0.26;
+  const rh = 58 * u;
+  let y = ch * 0.23;
   for (let i = 0; i < META_UPGRADES.length; i++) {
     const m = META_UPGRADES[i];
     const lv = meta[m.id] || 0;
@@ -3026,6 +3867,67 @@ function drawShopScreen() {
   uiRects.push({ x: cw / 2 - 140, y: cy - 18, w: 280, h: 36, act: "close" });
 }
 
+function drawHeatScreen() {
+  dimScreen(0.66);
+  uiRects = [];
+  const u = us();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  glow("#ff7755", 16);
+  ctx.fillStyle = "#ff7755";
+  ctx.font = "bold " + 24 * u + "px 'Courier New', monospace";
+  ctx.fillText("HEAT — 难度契约", cw / 2, ch * 0.11);
+  noglow();
+  const pts = heatTotal();
+  ctx.fillStyle = pts > 0 ? "#ffcc44" : "rgba(255,255,255,0.5)";
+  ctx.font = "bold " + 14 * u + "px 'Courier New', monospace";
+  ctx.fillText("TOTAL HEAT " + pts + "  →  CORE INCOME +" + pts * 25 + "%", cw / 2, ch * 0.11 + 26 * u);
+  const w = Math.min(580 * u, cw - 40);
+  const rh = 50 * u;
+  let y = ch * 0.22;
+  for (let i = 0; i < HEAT_MODS.length; i++) {
+    const m = HEAT_MODS[i];
+    const lv = heat[m.id] || 0;
+    const x = (cw - w) / 2;
+    const hover = mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh;
+    ctx.save();
+    glow(lv > 0 ? "#ff7755" : "#445", hover ? 16 : 7);
+    ctx.fillStyle = "rgba(10,12,34,0.95)";
+    rrect(x, y, w, rh, 8); ctx.fill();
+    ctx.strokeStyle = lv > 0 ? "#ff7755" : "rgba(120,130,180,0.45)";
+    ctx.lineWidth = 2;
+    rrect(x, y, w, rh, 8); ctx.stroke();
+    noglow();
+    ctx.textAlign = "left";
+    ctx.fillStyle = lv > 0 ? "#fff" : "rgba(255,255,255,0.75)";
+    ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+    ctx.fillText("[" + (i + 1) + "] " + m.name + " · " + m.zh, x + 14, y + rh * 0.32);
+    ctx.fillStyle = "rgba(190,210,255,0.7)";
+    ctx.font = 11 * u + "px 'Courier New', monospace";
+    ctx.fillText(m.desc + (m.max > 1 ? " (each)" : ""), x + 14, y + rh * 0.7);
+    // stack pips + point value
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(255,204,68,0.85)";
+    ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+    ctx.fillText("+" + m.pts + (m.max > 1 ? " /lv" : " pts"), x + w - 14, y + rh * 0.7);
+    for (let k = 0; k < m.max; k++) {
+      const filled = k < lv;
+      ctx.fillStyle = filled ? "#ff7755" : "rgba(255,119,85,0.18)";
+      if (filled) glow("#ff7755", 6);
+      ctx.beginPath(); ctx.arc(x + w - 18 - (m.max - 1 - k) * 16 * u, y + rh * 0.3, 5 * u, 0, TAU); ctx.fill();
+      noglow();
+    }
+    ctx.restore();
+    uiRects.push({ x, y, w, h: rh, act: "heatmod", i });
+    y += rh + 10 * u;
+  }
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.font = 13 * u + "px 'Courier New', monospace";
+  const cy = y + 10 * u;
+  ctx.fillText(touchUI ? "tap a contract to cycle · tap here to close" : "[1-6] cycle a contract · [E]/[Esc] close", cw / 2, cy);
+  uiRects.push({ x: cw / 2 - 170, y: cy - 18, w: 340, h: 36, act: "heatclose" });
+}
+
 function drawPause() {
   dimScreen(0.55);
   const u = us();
@@ -3052,6 +3954,8 @@ function uiClick(x, y) {
       if (r.act === "reroll") { rerollBoons(); return; }
       if (r.act === "meta") { buyMeta(META_UPGRADES[r.i]); return; }
       if (r.act === "close") { closeShop(); return; }
+      if (r.act === "heatmod") { toggleHeat(r.i); return; }
+      if (r.act === "heatclose") { closeHeat(); return; }
     }
   }
 }
@@ -3081,8 +3985,9 @@ function render() {
   ctx.scale(aS, aS);
   drawArenaFloor();
   drawZonesAndPickups();
-  if (state === "hub" || (state === "shop")) drawHubObjects();
-  if (shopRoom) drawPedestals();
+  if (state === "hub" || state === "shop" || state === "heat") drawHubObjects();
+  if (roomType === "fountain" && state === "play") drawFountain();
+  if (shopRoom || roomType === "treasure") drawPedestals();
   if (roomClear) drawDoors();
   drawPillars();
   drawSpawnTelegraphs();
@@ -3128,6 +4033,9 @@ function render() {
   } else if (state === "shop") {
     drawHUD();
     drawShopScreen();
+  } else if (state === "heat") {
+    drawHUD();
+    drawHeatScreen();
   }
 
   // mute hint
