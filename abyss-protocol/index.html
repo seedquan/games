@@ -1890,6 +1890,7 @@ const PLAYER_SKINS = [
 ];
 let enemies = [], pbolts = [], ebolts = [], parts = [], dnums = [], beams = [];
 let pillars = [], doors = [], pickups = [], spawnQ = [], zones = [], toasts = [];
+let terrain = []; // decorative procedural scenery (lakes/mountains/plants); NO collision
 let waves = [], waveIdx = 0, roomClear = false, boss = null;
 let freezeT = 0, shakeT = 0, shakeA = 0, redFlash = 0, roomFade = 0;
 let mortars = [], novas = [], pedestals = [];
@@ -4029,6 +4030,170 @@ function genArena(d) {
   }
 }
 
+/* ----- PROCEDURAL TERRAIN / SCENERY -----
+   A purely DECORATIVE feature layer scattered across each arena at room-creation time so
+   rooms read distinct & lively. Features carry a stable per-feature seed → all their procedural
+   art (shimmer phase, lobe shape, plant sway) is deterministic and allocation-free at draw.
+   Terrain has NO collision and is excluded from arenaNavigable()/spawn validity — it never
+   blocks pathing, spawns, or doors. The mix + palette are tied to the biome/depth index so
+   shallow vs deep sectors feel different. One optional, cheap, fair functional touch exists:
+   shallow liquid lightly slows on-foot movement (see terrainSlowFactor) — clearly telegraphed
+   by the pool's shimmer, never frozen-blocking and never applied to enemies' pathing logic. */
+
+/* per-biome terrain palette + feature weights (index matches biomeIdxForDepth). Each entry:
+   liquid (core/rim/shimmer), rock (top/base/edge), flora (stem/glow), and a weighted mix. */
+const BIOME_TERRAIN = [
+  { // 0 SURFACE — teal coolant pools + cyan reeds, sparse rock
+    liquid: { core: "#0d3a52", rim: "#1d6b86", shimmer: "rgba(120,230,255,0.5)" },
+    rock:   { top: "#2b3550", base: "#10162a", edge: "rgba(120,150,210,0.35)" },
+    flora:  { stem: "#1f6f6a", glow: "rgba(110,255,235,0.8)" },
+    mix: ["lake", "lake", "plant", "plant", "plant", "rock"],
+  },
+  { // 1 VOID — violet plasma pools + magenta crystal sprouts
+    liquid: { core: "#2a0d44", rim: "#6a2a86", shimmer: "rgba(210,130,255,0.5)" },
+    rock:   { top: "#3a2a52", base: "#16102a", edge: "rgba(180,130,220,0.35)" },
+    flora:  { stem: "#5a2a7a", glow: "rgba(220,140,255,0.85)" },
+    mix: ["plant", "plant", "lake", "rock", "rock", "plant"],
+  },
+  { // 2 FORGE — lava-glow pools + rocky ridges + amber flora
+    liquid: { core: "#3a1408", rim: "#a8521a", shimmer: "rgba(255,170,80,0.55)" },
+    rock:   { top: "#4a3526", base: "#1c120a", edge: "rgba(220,140,70,0.4)" },
+    flora:  { stem: "#7a4a1a", glow: "rgba(255,190,90,0.85)" },
+    mix: ["rock", "rock", "lake", "plant", "rock", "lake"],
+  },
+  { // 3 REACTOR — green coolant + crystal mounds + emerald sprouts
+    liquid: { core: "#073525", rim: "#1c8a5e", shimmer: "rgba(110,255,190,0.5)" },
+    rock:   { top: "#26423a", base: "#0c1a14", edge: "rgba(90,210,160,0.35)" },
+    flora:  { stem: "#1a6a4a", glow: "rgba(120,255,180,0.85)" },
+    mix: ["rock", "lake", "plant", "rock", "plant", "rock"],
+  },
+  { // 4 ABYSS — void-plasma lakes + crystal spires + crimson blooms
+    liquid: { core: "#3a0a1c", rim: "#9a2050", shimmer: "rgba(255,90,150,0.55)" },
+    rock:   { top: "#42263a", base: "#1a0c16", edge: "rgba(220,90,140,0.4)" },
+    flora:  { stem: "#7a1a3a", glow: "rgba(255,110,160,0.9)" },
+    mix: ["lake", "rock", "rock", "plant", "lake", "rock"],
+  },
+];
+function terrainPalette() { return BIOME_TERRAIN[clamp(arenaBiomeIdx, 0, BIOME_TERRAIN.length - 1)]; }
+
+/* stable per-feature seed from a quantised world position (so it's reproducible & varies in space) */
+function terrainSeed(x, y, salt) {
+  return ((Math.round(x) * 73856093) ^ (Math.round(y) * 19349663) ^ ((salt | 0) * 83492791)) | 0;
+}
+/* keep a feature clear of both spawn bands AND clustered doors-staging area near top-centre.
+   Larger margin than obstacles since features are bigger & purely cosmetic — better to skip. */
+function terrainSpawnClear(x, y, r) {
+  const A = CONFIG;
+  if (dist(x, y, A.arenaW / 2, A.arenaH - 90) < r + 150) return false; // player spawn band
+  if (dist(x, y, A.arenaW / 2, 150) < r + 140) return false;           // enemy top spawn band
+  return true;
+}
+/* overlap test against already-placed terrain to avoid muddy stacking (lakes esp.) */
+function terrainOverlaps(x, y, r, minGap) {
+  for (const f of terrain) {
+    if (f.kind === "plant") continue; // plants may layer freely
+    if (dist(x, y, f.x, f.y) < r + f.r + (minGap || 0)) return true;
+  }
+  return false;
+}
+
+/* generate the decorative terrain layer for the current arena. Density varies per room via a
+   stable room seed; mix/palette by biome. Lakes & rock obey spawn/overlap rejection; plants
+   scatter in patches. Generated ONCE here — never per frame. */
+function genTerrain(d, density) {
+  terrain = [];
+  if (typeof ffx !== "undefined" && ffx.level === "off") density = (density || 1) * 0.45; // fewer on off
+  arenaBiomeIdx = biomeIdxForDepth(d);
+  const pal = terrainPalette();
+  const A = CONFIG;
+  // stable room seed: same room → same scenery frame-to-frame (depth + arena dims + roomType).
+  const roomSeed = terrainSeed(A.arenaW + d * 977, A.arenaH + (roomType ? roomType.length : 0) * 131, d * 31 + 7);
+  // per-room density jitter (stable): 0.7..1.3
+  const dens = (density || 1) * (0.7 + 0.6 * hash01(roomSeed, 11));
+  const scale = areaScale();
+  const baseLakes  = 3, baseRocks = 5, basePlants = 9;
+  const nLakes  = Math.round(baseLakes  * scale * dens * 0.55);
+  const nRocks  = Math.round(baseRocks  * scale * dens * 0.6);
+  const nPlants = Math.round(basePlants * scale * dens);
+
+  // LAKES — irregular liquid pools (precompute lobe radii once for a stable outline).
+  let tries = 0;
+  for (let placed = 0; placed < nLakes && tries < nLakes * 20 + 30; ) {
+    tries++;
+    const r = rand(70, 150);
+    const x = rand(r + 120, A.arenaW - r - 120), y = rand(r + 140, A.arenaH - r - 140);
+    if (!terrainSpawnClear(x, y, r)) continue;
+    if (terrainOverlaps(x, y, r, 40)) continue;
+    const seed = terrainSeed(x, y, 1);
+    const lobes = 7 + Math.floor(hash01(seed, 2) * 4);
+    const rr = new Float32Array(lobes);
+    for (let i = 0; i < lobes; i++) rr[i] = r * (0.74 + hash01(seed, 20 + i) * 0.32);
+    terrain.push({
+      kind: "lake", x, y, r, seed, lobes, rr,
+      shallow: hash01(seed, 5) < 0.45, // ~45% are shallow (the only ones with a functional touch)
+      ph: hash01(seed, 6) * TAU,       // shimmer phase
+    });
+    placed++;
+  }
+
+  // MOUNTAINS / ROCK RIDGES — low relief outcrops (flatter, background palette; not collidable).
+  tries = 0;
+  for (let placed = 0; placed < nRocks && tries < nRocks * 20 + 30; ) {
+    tries++;
+    const r = rand(45, 110);
+    const x = rand(r + 90, A.arenaW - r - 90), y = rand(r + 100, A.arenaH - r - 100);
+    if (!terrainSpawnClear(x, y, r)) continue;
+    if (terrainOverlaps(x, y, r, 24)) continue;
+    const seed = terrainSeed(x, y, 2);
+    const facets = 5 + Math.floor(hash01(seed, 2) * 4);
+    const rr = new Float32Array(facets);
+    for (let i = 0; i < facets; i++) rr[i] = r * (0.7 + hash01(seed, 30 + i) * 0.4);
+    terrain.push({
+      kind: "rock", x, y, r, seed, facets, rr,
+      crystal: hash01(seed, 9) < (d >= 5 ? 0.55 : 0.25), // deeper sectors get crystal mounds
+      rot: hash01(seed, 3) * TAU,
+    });
+    placed++;
+  }
+
+  // PLANTS / FLORA — scattered in small patches; purely decorative, may layer freely.
+  let patches = Math.max(1, Math.round(nPlants / 4));
+  let made = 0;
+  for (let pIdx = 0; pIdx < patches * 6 && made < nPlants; pIdx++) {
+    const pseed = terrainSeed(roomSeed, pIdx * 1009, 3);
+    const cx = rand(120, A.arenaW - 120), cy = rand(140, A.arenaH - 140);
+    if (!terrainSpawnClear(cx, cy, 60)) continue;
+    const inPatch = 2 + Math.floor(hash01(pseed, 1) * 3);
+    for (let k = 0; k < inPatch && made < nPlants; k++) {
+      const a = hash01(pseed, 10 + k) * TAU, rad = hash01(pseed, 20 + k) * 55;
+      const x = clamp(cx + Math.cos(a) * rad, 60, A.arenaW - 60);
+      const y = clamp(cy + Math.sin(a) * rad, 80, A.arenaH - 80);
+      if (!terrainSpawnClear(x, y, 30)) continue;
+      const seed = terrainSeed(x, y, 4);
+      const h = 14 + hash01(seed, 7) * 26;     // height
+      terrain.push({
+        kind: "plant", x, y, r: h * 0.6, seed, h,
+        blades: 3 + Math.floor(hash01(seed, 8) * 3),
+        ph: hash01(seed, 6) * TAU,             // sway phase
+        crystal: pal.mix.indexOf("rock") >= 0 && hash01(seed, 12) < 0.3,
+      });
+      made++;
+    }
+  }
+}
+
+/* optional FAIR functional touch: shallow liquid lightly slows a grounded player walking through
+   it (never enemies → can't strand/break AI pathing; never blocks; deep pools are pure decor).
+   Returns a speed multiplier in [slow,1]. Cheap: only scans nearby lakes, skips while dashing. */
+function terrainSlowFactor(x, y, dashing) {
+  if (dashing) return 1; // dashes ignore terrain (telegraphed escape) — keeps it fair
+  for (const f of terrain) {
+    if (f.kind !== "lake" || !f.shallow) continue;
+    if (dist(x, y, f.x, f.y) < f.r * 0.82) return 0.82; // gentle 18% slow inside shallow pools
+  }
+  return 1;
+}
+
 function buildWaves(d) {
   waves = [];
   // MORE WAVES (longer gauntlet): wave count now scales with depth — 1 early, climbing to
@@ -4332,6 +4497,7 @@ function genRoom() {
   clearArrows();
   arrowRains.length = 0;
   hazards = []; barrels = []; quakes = []; slashGhosts = [];
+  terrain = [];
   styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomClear = false; waveIdx = 0; shopRoom = false;
@@ -4353,6 +4519,7 @@ function genRoom() {
     waves = [];
     pedestals = makeShopStock();
     roomClear = true;
+    genTerrain(depth, 0.7);
     openDoors(true);
     toast("PROVISIONER — 商店 — spend cores on wares", "#ffd966");
   } else if (roomType === "treasure") {
@@ -4362,6 +4529,7 @@ function genRoom() {
     waves = [];
     pedestals = makeTreasureStock();
     roomClear = true;
+    genTerrain(depth, 0.7);
     openDoors(true);
     toast("CACHE — 宝藏：任选其一 — take ONE, free", "#cc88ff");
   } else if (roomType === "fountain") {
@@ -4371,16 +4539,19 @@ function genRoom() {
     pillars = [];
     waves = [];
     roomClear = true;
+    genTerrain(depth, 0.9); // rest sites feel lush
     openDoors(true);
     toast("REST SITE — 泉水：靠近回复30%生命 — approach to heal 30%", "#66ffe0");
   } else if (roomType === "boss") {
     genPillars(randi(0, 2));
+    genTerrain(depth, 0.5); // sparse so the boss arena stays readable
     spawnHazards(true); // barrels only in boss arenas
     waves = [["boss"]];
     spawnBoss();
     waveIdx = 1;
   } else {
     genArena(depth);
+    genTerrain(depth, 1);
     spawnHazards(false);
     buildWaves(depth);
     if (roomType === "challenge") {
@@ -4649,6 +4820,7 @@ function enterHub() {
   pickups = []; pillars = []; boss = null; toasts = [];
   mortars = []; novas = []; pedestals = []; shopRoom = false; pendingRoom = null;
   hazards = []; barrels = []; quakes = []; slashGhosts = []; runTrack = [];
+  terrain = [];
   singularities = []; lights = []; motes = []; ffx.rings = []; ffx.shocks = []; ffx.traumaV = 0;
   bossEntrance = null;
   clearSweeps();
@@ -4664,6 +4836,7 @@ function enterHub() {
   runHeat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
   runHeatPts = 0; coreFrac = 0;
   roomFade = 1;
+  genTerrain(0, 0.6); // light decorative scenery for the hub (combat-free, surface biome)
   audio.uiSnd();
 }
 
@@ -6780,8 +6953,10 @@ function updatePlayer(p, dt) {
   if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
   ctxP = p;
 
-  // movement
-  const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12)) * (p.velBuffT > 0 ? 1.25 : 1);
+  // movement — shallow decorative liquid lightly slows on-foot speed (fair: telegraphed by the
+  // pool sheen, ignored while dashing, never applied to enemies, never blocks). Pure decor otherwise.
+  const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12)) * (p.velBuffT > 0 ? 1.25 : 1)
+            * terrainSlowFactor(p.x, p.y, p.dashT > 0);
   if (p.dashT > 0) {
     p.dashT -= dt;
     // BLADE DASH BLADE (异相·疾刃): on dash end, auto-slash (free) in the dash/aim direction
@@ -9300,6 +9475,162 @@ function drawObstacleBody(p, detail) {
       ctx.restore();
     }
   }
+}
+
+/* ----- TERRAIN DRAW -----
+   Two passes: drawTerrainUnder (lakes + rock relief) runs right after the floor so it sits
+   beneath obstacles & characters; drawTerrainOver (tall flora) runs after pillars so blades can
+   layer slightly over cover. Both cull to the visible window via inView and allocate nothing in
+   the loop (all per-feature data is baked at gen time). Glow is BAKED into fills/strokes — no
+   per-plant point lights — so the particle/light caps are untouched. */
+function drawTerrainUnder() {
+  if (!terrain.length) return;
+  const lv = ffx.level;
+  if (lv === "off" && touchUI) { drawTerrainUnderSimple(); return; }
+  const detail = lv === "full" && !touchUI;
+  const pal = terrainPalette();
+  for (const f of terrain) {
+    if (f.kind === "plant") continue;
+    if (!inView(f.x, f.y, f.r + 20)) continue;
+    if (f.kind === "lake") drawLake(f, pal, detail);
+    else if (f.kind === "rock") drawRock(f, pal, detail);
+  }
+}
+/* reduced/off + touch: flat blobs, no shimmer/relief — cheapest possible read */
+function drawTerrainUnderSimple() {
+  const pal = terrainPalette();
+  for (const f of terrain) {
+    if (f.kind === "plant" || !inView(f.x, f.y, f.r + 10)) continue;
+    ctx.fillStyle = f.kind === "lake" ? pal.liquid.core : pal.rock.base;
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 0.9, 0, TAU); ctx.fill();
+  }
+}
+function drawLake(f, pal, detail) {
+  ctx.save();
+  // irregular outline traced from baked lobe radii (allocation-free)
+  ctx.beginPath();
+  for (let i = 0; i <= f.lobes; i++) {
+    const a = (i / f.lobes) * TAU, rr = f.rr[i % f.lobes];
+    const px = f.x + Math.cos(a) * rr, py = f.y + Math.sin(a) * rr * 0.82; // squashed = top-down read
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fillStyle = pal.liquid.core;
+  ctx.fill();
+  // rim
+  ctx.lineWidth = f.shallow ? 4 : 6;
+  ctx.strokeStyle = pal.liquid.rim;
+  ctx.stroke();
+  if (detail) {
+    // animated shimmer: a few concentric ripple arcs whose phase rides timeNow (baked phase f.ph)
+    ctx.globalAlpha = 0.5 + 0.3 * Math.sin(timeNow * 1.6 + f.ph);
+    ctx.strokeStyle = pal.liquid.shimmer;
+    ctx.lineWidth = f.shallow ? 1.4 : 2;
+    const rings = 3;
+    for (let i = 1; i <= rings; i++) {
+      const t = ((timeNow * 0.35 + f.ph + i / rings) % 1);
+      ctx.globalAlpha = (1 - t) * 0.5;
+      ctx.beginPath();
+      ctx.ellipse(f.x, f.y, f.r * 0.5 * (0.4 + t * 0.7), f.r * 0.5 * 0.82 * (0.4 + t * 0.7), 0, 0, TAU);
+      ctx.stroke();
+    }
+    // shallow pools get a brighter sheen patch so the (functional) slow is telegraphed
+    if (f.shallow) {
+      ctx.globalAlpha = 0.18 + 0.06 * Math.sin(timeNow * 2.2 + f.ph);
+      ctx.fillStyle = pal.liquid.shimmer;
+      ctx.beginPath();
+      ctx.ellipse(f.x, f.y, f.r * 0.62, f.r * 0.62 * 0.82, 0, 0, TAU);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+function drawRock(f, pal, detail) {
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  ctx.rotate(f.rot);
+  // base shadow footprint (offset down-right) → grounds the relief
+  ctx.fillStyle = pal.rock.base;
+  ctx.beginPath();
+  for (let i = 0; i <= f.facets; i++) {
+    const a = (i / f.facets) * TAU, rr = f.rr[i % f.facets];
+    const px = Math.cos(a) * rr + 6, py = Math.sin(a) * rr * 0.7 + 8;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fill();
+  // lit top face (smaller, shifted up) — flatter & background-palette so it never reads as solid cover
+  ctx.fillStyle = pal.rock.top;
+  ctx.beginPath();
+  for (let i = 0; i <= f.facets; i++) {
+    const a = (i / f.facets) * TAU, rr = f.rr[i % f.facets] * 0.82;
+    const px = Math.cos(a) * rr, py = Math.sin(a) * rr * 0.7 - 4;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath(); ctx.fill();
+  if (detail) {
+    ctx.strokeStyle = pal.rock.edge;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    if (f.crystal) {
+      // a small lit crystal spire on top for deep/crystal mounds (baked glow, no light)
+      ctx.fillStyle = pal.flora ? pal.flora.glow : pal.rock.edge;
+      ctx.globalAlpha = 0.7;
+      ctx.beginPath();
+      ctx.moveTo(0, -f.r * 0.5 - 14);
+      ctx.lineTo(-f.r * 0.16, -f.r * 0.3);
+      ctx.lineTo(f.r * 0.16, -f.r * 0.3);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+/* tall flora: gentle idle sway; drawn after obstacles so blades can overlap cover slightly */
+function drawTerrainOver() {
+  if (!terrain.length || (ffx.level === "off" && touchUI)) return;
+  const detail = ffx.level === "full" && !touchUI;
+  const pal = terrainPalette();
+  for (const f of terrain) {
+    if (f.kind !== "plant" || !inView(f.x, f.y, f.h + 12)) continue;
+    drawPlant(f, pal, detail);
+  }
+}
+function drawPlant(f, pal, detail) {
+  const sway = Math.sin(timeNow * 1.4 + f.ph) * (f.h * 0.16); // gentle idle sway at the tips
+  ctx.save();
+  ctx.translate(f.x, f.y);
+  if (f.crystal) {
+    // crystal sprout: a few lit shards fanning up (baked glow)
+    for (let i = 0; i < f.blades; i++) {
+      const sp = (i / (f.blades - 1 || 1) - 0.5);
+      const tx = sp * f.r + sway * 0.5, ty = -f.h * (0.7 + Math.abs(sp) * -0.2);
+      ctx.strokeStyle = pal.flora.stem; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(sp * f.r * 0.4, 0); ctx.lineTo(tx, ty); ctx.stroke();
+      if (detail) {
+        ctx.fillStyle = pal.flora.glow; ctx.globalAlpha = 0.85;
+        ctx.beginPath(); ctx.arc(tx, ty, 2.6, 0, TAU); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  } else {
+    // reeds/blades curving up with a glowing tip bloom
+    for (let i = 0; i < f.blades; i++) {
+      const sp = (i / (f.blades - 1 || 1) - 0.5);
+      const baseX = sp * f.r * 0.7;
+      const tipX = baseX + sway * (0.6 + i * 0.15) + sp * f.r * 0.5;
+      const tipY = -f.h * (0.8 + 0.2 * (i % 2));
+      ctx.strokeStyle = pal.flora.stem; ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(baseX, 0);
+      ctx.quadraticCurveTo(baseX + (tipX - baseX) * 0.4, tipY * 0.5, tipX, tipY);
+      ctx.stroke();
+      if (detail) { // glowing tip — baked, no point light
+        ctx.fillStyle = pal.flora.glow; ctx.globalAlpha = 0.85;
+        ctx.beginPath(); ctx.arc(tipX, tipY, 2.4, 0, TAU); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+  ctx.restore();
 }
 
 function drawPillars() {
@@ -13324,6 +13655,7 @@ function render(frameDt) {
   // refresh the visible-world rect (with a generous margin) for off-view draw culling
   viewWorldRect(160);
   drawArenaFloor();
+  drawTerrainUnder(); // lakes + rock relief: under obstacles & characters
   drawMotes();
   drawLighting();
   drawHazards();
@@ -13335,6 +13667,7 @@ function render(frameDt) {
   if (shopRoom || roomType === "treasure") drawPedestals();
   if (roomClear) drawDoors();
   drawPillars();
+  drawTerrainOver(); // tall flora: may layer slightly over cover
   drawSpawnTelegraphs();
   for (const e of enemies) { if (inView(e.x, e.y, e.r + 60)) drawEnemy(e); } // cull off-view foes
   drawPlayer();
