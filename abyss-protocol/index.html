@@ -1110,7 +1110,7 @@ const WEAPONS = [
 ];
 let curWeapon = store.get("weapon") || "blade";
 if (!WEAPONS.some((w) => w.id === curWeapon)) curWeapon = "blade";
-function weaponDef() { return WEAPONS.find((w) => w.id === curWeapon) || WEAPONS[0]; }
+function weaponDef() { return weaponVariant(curWeapon, activeAspectFor(curWeapon, curAspect)); }
 function selectWeapon(id) {
   if (!WEAPONS.some((w) => w.id === id)) return;
   curWeapon = id;
@@ -1120,7 +1120,7 @@ function cycleWeapon() {
   const i = WEAPONS.findIndex((w) => w.id === curWeapon);
   selectWeapon(WEAPONS[(i + 1) % WEAPONS.length].id);
   const W = weaponDef();
-  if (players[0]) players[0].weapon = curWeapon; // live-apply to hub P1
+  if (players[0]) { players[0].weapon = curWeapon; players[0].aspect = activeAspectFor(curWeapon, curAspect); } // live-apply to hub P1
   toast((numPlayers > 1 ? "P1 " : "") + "WEAPON: " + W.name + " — " + W.zh, W.col);
   audio.weaponSwap();
 }
@@ -1129,10 +1129,157 @@ function cycleWeaponP2() {
   const i = WEAPONS.findIndex((w) => w.id === p2Weapon);
   p2Weapon = WEAPONS[(i + 1) % WEAPONS.length].id;
   store.set("p2weapon", p2Weapon);
-  if (players[1]) players[1].weapon = p2Weapon;
+  if (players[1]) { players[1].weapon = p2Weapon; players[1].aspect = activeAspectFor(p2Weapon, p2Aspect); }
   const W = WEAPONS.find((w) => w.id === p2Weapon) || WEAPONS[0];
   toast("P2 WEAPON: " + W.name + " — " + W.zh, W.col);
   audio.weaponSwap();
+}
+
+/* ---------------- §E3b WEAPON ASPECTS (异相) — Hades-style alternate forms ----------------
+   Each of the 18 weapons gets ONE alternate ASPECT that MECHANICALLY changes how it plays
+   (not just +stats): a distinct second playstyle that differentiates weapons whose base
+   mechanics overlap. An aspect is a persistent META unlock (cores + a usage milestone with
+   that weapon via lifetime stats), per-player selectable as a sub-toggle on the armory rack
+   (P1 / P2 independent, persisted). When active, weaponDefP(p) returns a cached merged
+   variant def: it keeps the weapon `id` (so every `W.id === ...` branch + the held-sprite
+   art still resolves) but carries the aspect's stat tweaks and an `aspect` tag the attack
+   code branches on. The weapon's 4 exclusive boons still work; a couple are re-pointed where
+   the aspect would make them nonsensical (handled inline in the attack paths). Aspects are
+   sidegrades inside the existing DPS band (worst≈1.6× avg), not pure upgrades. */
+const ASPECTS = [
+  { weapon: "blade", id: "dashblade", name: "异相·疾刃", en: "DASH BLADE",
+    desc: "冲刺尾端自动斩击（无能耗）；连斩可衔接冲刺", descEN: "Dashing auto-slashes at the dash endpoint; combos flow into dash-strikes",
+    cost: 220, req: 60, mods: { dmgMul: 0.94 } },
+  { weapon: "lance", id: "blinkskewer", name: "异相·瞬刺", en: "BLINK SKEWER",
+    desc: "突刺变为短距瞬移穿刺（无敌帧），刺穿沿途敌人", descEN: "The charged thrust becomes a short forward blink-skewer with i-frames that pierces foes",
+    cost: 240, req: 60, mods: { rangeMul: 1.4 } },
+  { weapon: "maul", id: "overhead", name: "异相·苍天碎", en: "OVERHEAD",
+    desc: "蓄力单次巨型上劈：冲击波更大更重，但更慢", descEN: "One huge overhead slam — far bigger shockwave, harder hit, but slower",
+    cost: 260, req: 50, mods: { dmgMul: 1.7, cdMul: 1.55, rangeMul: 1.22 } },
+  { weapon: "fang", id: "spinfang", name: "异相·回旋牙", en: "SPIN FANG",
+    desc: "急袭变为原地360°回旋，命中四周全部敌人", descEN: "The flurry becomes a stationary 360° spin that hits everything around you",
+    cost: 230, req: 80, mods: {} },
+  { weapon: "arc", id: "arctether", name: "异相·束缚弧", en: "ARC TETHER",
+    desc: "锥形变为锁定单体的持续束缚光束，持续重击同一目标", descEN: "The cone becomes a tethered beam that locks one target and grinds it",
+    cost: 250, req: 70, mods: { dmgMul: 1.45, rangeMul: 1.5 } },
+  { weapon: "grav", id: "blackhole", name: "异相·黑洞", en: "SINGULARITY",
+    desc: "奇点变为单体黑洞（无范围牵引），专破首领", descEN: "The singularity becomes a single-target black hole (no AoE pull) — boss DPS",
+    cost: 280, req: 50, mods: { dmgMul: 1.15 } },
+  { weapon: "glaive", id: "orbitblade", name: "异相·环刃", en: "ORBIT BLADE",
+    desc: "回旋刃改为环绕你永久旋转的护卫刃，攻击键刷新转速", descEN: "A blade permanently orbits you instead of throw/return; attack refreshes its spin",
+    cost: 250, req: 70, mods: {} },
+  { weapon: "whip", id: "grapple", name: "异相·钩爪", en: "GRAPPLE",
+    desc: "鞭击改为将你自己拉向敌人（高机动）", descEN: "The grapple pulls YOURSELF to the struck enemy (mobility)",
+    cost: 240, req: 60, mods: { dmgMul: 1.12 } },
+  { weapon: "prism", id: "beamsaber", name: "异相·棱光束", en: "BEAM SABER",
+    desc: "纯光束、无近战，射程更远", descEN: "Beam-only — no melee swing, much longer range",
+    cost: 250, req: 70, mods: { dmgMul: 1.18, rangeMul: 1.0 } },
+  { weapon: "ember", id: "flamethrower", name: "异相·喷焰", en: "FLAMETHROWER",
+    desc: "火球改为短程持续喷焰，点燃前方扇形", descEN: "The fireball becomes a continuous short-range flamethrower stream",
+    cost: 240, req: 70, mods: {} },
+  { weapon: "frost", id: "frostburst", name: "异相·冰爆", en: "FROST NOVA",
+    desc: "冰弹改为环身冰冻新星爆发，冰缓四周", descEN: "The icebolt becomes a frost-nova burst around you that chills all nearby",
+    cost: 240, req: 70, mods: {} },
+  { weapon: "storm", id: "teslacoil", name: "异相·磁暴线圈", en: "TESLA COIL",
+    desc: "施法放置静止特斯拉线圈，持续电击附近敌人", descEN: "Casting drops a stationary tesla coil that zaps nearby foes over time",
+    cost: 250, req: 70, mods: {} },
+  { weapon: "rifle", id: "burst", name: "异相·三连发", en: "BURST FIRE",
+    desc: "改为三连发点射，节奏更慢但每发更准更重", descEN: "Burst-fires a tight 3-round group per trigger; slower cadence, harder rounds",
+    cost: 230, req: 90, mods: {} },
+  { weapon: "scatter", id: "slug", name: "异相·独头", en: "SLUG",
+    desc: "散射改为单发贯穿独头弹，远程单体重击", descEN: "The pellet cone becomes a single piercing slug — ranged single-target",
+    cost: 240, req: 60, mods: {} },
+  { weapon: "rail", id: "rapidrail", name: "异相·速射轨", en: "RAPID RAIL",
+    desc: "无需蓄力的快速轨道连射，每发更轻", descEN: "No-charge rapid rail — lighter per shot, much faster cadence",
+    cost: 260, req: 60, mods: {} },
+  { weapon: "qbow", id: "fullauto", name: "异相·连珠", en: "FULL AUTO",
+    desc: "按住即全自动连射箭矢", descEN: "Hold to full-auto loose a stream of arrows",
+    cost: 230, req: 90, mods: {} },
+  { weapon: "lbow", id: "multishot", name: "异相·散华", en: "MULTISHOT",
+    desc: "蓄力释放改为多重齐射扇形箭", descEN: "A charged release looses a multishot fan of arrows",
+    cost: 240, req: 60, mods: {} },
+  { weapon: "sbow", id: "homing", name: "异相·追踪", en: "HOMING VOLLEY",
+    desc: "散射箭改为自动追踪敌人的追踪齐射", descEN: "The spread becomes a homing volley that tracks foes",
+    cost: 250, req: 70, mods: {} },
+];
+const aspectByWeapon = (wid) => { for (const a of ASPECTS) if (a.weapon === wid) return a; return null; };
+const aspectById = (id) => { for (const a of ASPECTS) if (a.id === id) return a; return null; };
+/* per-aspect unlock cost grows with how many aspects you already own (long-term goal across all 18). */
+function aspectCost(a) { return Math.round(a.cost * Math.pow(1.12, aspectsUnlockedCount())); }
+function aspectsUnlockedCount() { let n = 0; for (const a of ASPECTS) if (aspectsUnlocked[a.id]) n++; return n; }
+/* persistent unlock set (store key "aspects" = comma list of unlocked aspect ids) */
+let aspectsUnlocked = {};
+try {
+  const raw = store.get("aspects") || "";
+  for (const id of String(raw).split(",")) if (id && aspectById(id)) aspectsUnlocked[id] = 1;
+} catch (e) { /* fresh */ }
+function saveAspects() {
+  const ids = [];
+  for (const a of ASPECTS) if (aspectsUnlocked[a.id]) ids.push(a.id);
+  store.set("aspects", ids.join(","));
+}
+function aspectUnlocked(id) { return !!aspectsUnlocked[id]; }
+/* try to unlock a weapon's aspect: requires the cores cost AND a lifetime usage milestone with
+   that weapon (existing stats.weapon counter). Returns true on success. */
+function tryUnlockAspect(wid) {
+  const a = aspectByWeapon(wid);
+  if (!a || aspectUnlocked(a.id)) return false;
+  const used = (stats.weapon && stats.weapon[wid]) | 0;
+  if (used < a.req) { audio.deny(); toast("异相未解锁 — USE " + (WEAPONS.find((w)=>w.id===wid)||{}).name + " ×" + a.req + " (" + used + "/" + a.req + ")", "#ff8866"); return false; }
+  const c = aspectCost(a);
+  if (cores < c) { audio.deny(); toast("NOT ENOUGH CORES — 需要 " + c + " ⬡", "#ff5566"); return false; }
+  cores -= c;
+  aspectsUnlocked[a.id] = 1;
+  saveAspects(); saveMeta();
+  audio.buy();
+  toast("异相解锁 ASPECT — " + a.name + " · " + a.en, "#b98cff");
+  return true;
+}
+
+/* per-player aspect selection (P1 = curAspect, P2 = p2Aspect; "" = base form). Each is stored
+   only when its weapon's aspect is unlocked + chosen; persisted as aspect / p2aspect. */
+let curAspect = store.get("aspect") || "";
+let p2Aspect = store.get("p2aspect") || "";
+/* the aspect id active for a given weapon+selection, or "" if base / not unlocked / mismatched */
+function activeAspectFor(wid, sel) {
+  if (!sel) return "";
+  const a = aspectById(sel);
+  if (!a || a.weapon !== wid || !aspectUnlocked(sel)) return "";
+  return sel;
+}
+/* cached merged variant defs: key "<weapon>/<aspect>" -> frozen def (no per-call allocation). */
+const WEAPON_VARIANTS = {};
+function weaponVariant(wid, aspectId) {
+  if (!aspectId) return WEAPONS.find((w) => w.id === wid) || WEAPONS[0];
+  const key = wid + "/" + aspectId;
+  let v = WEAPON_VARIANTS[key];
+  if (v) return v;
+  const base = WEAPONS.find((w) => w.id === wid) || WEAPONS[0];
+  const a = aspectById(aspectId);
+  v = Object.assign({}, base, (a && a.mods) || {});
+  v.aspect = aspectId;
+  WEAPON_VARIANTS[key] = Object.freeze(v);
+  return v;
+}
+/* toggle P1/P2 between base and (unlocked) aspect for the currently-selected weapon */
+function toggleAspect(forP2) {
+  const wid = forP2 ? p2Weapon : curWeapon;
+  const a = aspectByWeapon(wid);
+  if (!a) return;
+  if (!aspectUnlocked(a.id)) { tryUnlockAspect(wid); applyAspectToHubPlayer(forP2); return; }
+  const cur = forP2 ? p2Aspect : curAspect;
+  const on = activeAspectFor(wid, cur) ? "" : a.id;
+  if (forP2) { p2Aspect = on; store.set("p2aspect", on); } else { curAspect = on; store.set("aspect", on); }
+  applyAspectToHubPlayer(forP2);
+  const W = WEAPONS.find((w) => w.id === wid) || WEAPONS[0];
+  toast((numPlayers > 1 ? (forP2 ? "P2 " : "P1 ") : "") + (on ? ("异相 ASPECT: " + a.name) : ("基础 BASE: " + W.name)), on ? "#b98cff" : W.col);
+  audio.weaponSwap();
+}
+/* live-apply an aspect change to the hub player so the held sprite/behavior update immediately */
+function applyAspectToHubPlayer(forP2) {
+  const idx = forP2 ? 1 : 0;
+  const p = players[idx];
+  if (p) p.aspect = activeAspectFor(forP2 ? p2Weapon : curWeapon, forP2 ? p2Aspect : curAspect);
 }
 
 /* ---------------- §E4 LIFETIME STATS (existing saves start at zero) ---------------- */
@@ -2237,8 +2384,12 @@ function newPlayer(idx) {
   const skin = PLAYER_SKINS[idx] || PLAYER_SKINS[0];
   // per-player weapon: P1 uses curWeapon (the armory selection), P2 its own remembered pick
   const wep = idx === 0 ? curWeapon : p2Weapon;
+  // per-player ASPECT (异相): validated against the weapon + unlock state ("" = base form)
+  const asp = activeAspectFor(wep, idx === 0 ? curAspect : p2Aspect);
   return {
-    idx, tag: skin.tag, col: skin.col, colDash: skin.colDash, weapon: wep,
+    idx, tag: skin.tag, col: skin.col, colDash: skin.colDash, weapon: wep, aspect: asp,
+    orbitT: 0,                          // GLAIVE ORBIT BLADE: orbit-blade keep-alive timer
+    arctetherTgt: null,                 // ARC TETHER locked target
     x: CONFIG.arenaW / 2, y: CONFIG.arenaH - 90,
     vx: 0, vy: 0, r: CONFIG.playerR, aim: -Math.PI / 2,
     hp: maxHp, maxHp,
@@ -2274,8 +2425,15 @@ function newPlayer(idx) {
     slashBuf: 0, dashBuf: 0, freezeBuf: 0, lastDir: { x: 1, y: 0 }, // per-player buffered inputs
   };
 }
-/* per-player weapon def (falls back to the context/legacy player) */
-function weaponDefP(p) { p = p || ctxP || player; const id = (p && p.weapon) || curWeapon; return WEAPONS.find((w) => w.id === id) || WEAPONS[0]; }
+/* per-player weapon def (falls back to the context/legacy player). If the player has an active
+   ASPECT for this weapon, returns the cached merged variant (same id, aspect-tuned stats + an
+   `aspect` tag the attack code branches on) — no per-call allocation. */
+function weaponDefP(p) {
+  p = p || ctxP || player;
+  const id = (p && p.weapon) || curWeapon;
+  const asp = p && p.aspect ? activeAspectFor(id, p.aspect) : "";
+  return weaponVariant(id, asp);
+}
 function boonLv(id) { const p = ctxP || player; return (p && p.boons[id]) || 0; }
 /* rarity-scaled boon power: sum of rarity multipliers across picks of this boon */
 function boonPow(id) { const p = ctxP || player; return (p && p.boonPow && p.boonPow[id]) || 0; }
@@ -4239,8 +4397,14 @@ function trySlash(p) {
   }
   if (p.slashCD > 0) return;
   if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p); // keyboard-only: snap aim to nearest enemy
+  // ===== ASPECT branches that wholly replace the base melee swing =====
+  // ARC TETHER (异相·束缚弧): a single-target tethered beam onto a locked foe (no cone sweep).
+  if (W.id === "arc" && W.aspect === "arctether") { arcTetherStrike(p, W); return; }
+  // PRISM BEAM SABER (异相·棱光束): beam-only, no melee arc, longer range.
+  if (W.id === "prism" && W.aspect === "beamsaber") { prismBeamStrike(p, W); return; }
   // GLAIVE: while a thrown blade is in flight the wielder has no melee — wait for the return
   if (W.id === "glaive") {
+    if (W.aspect === "orbitblade") { glaiveOrbitStrike(p, W); return; } // ORBIT BLADE: refresh the orbiting guard blade
     if (p.glaiveOut) return;
     throwGlaive(p, W);
     return;
@@ -4248,13 +4412,21 @@ function trySlash(p) {
   if (p.comboT <= 0) p.comboN = 0;
   p.comboN = p.comboN % 3 + 1;
   p.comboT = 1.5;
-  const lunge = W.id === "lance" && p.comboN === 3; // lance: 3rd hit is a piercing lunge
+  const asp = W.aspect;
+  // LANCE BLINK SKEWER (异相·瞬刺): EVERY thrust becomes a blink-skewer, not just the 3rd hit.
+  const lunge = W.id === "lance" && (p.comboN === 3 || asp === "blinkskewer");
+  const blink = W.id === "lance" && asp === "blinkskewer"; // teleport-blink variant of the lunge
   const maul = W.id === "maul";
+  const overhead = maul && asp === "overhead"; // MAUL OVERHEAD (异相·苍天碎): single huge slam
   const fang = W.id === "fang";
   const arcW = W.id === "arc";
   const grav = W.id === "grav";
+  const blackhole = grav && asp === "blackhole"; // GRAV SINGULARITY (异相·黑洞): single-target
   const whip = W.id === "whip";
+  const grapple = whip && asp === "grapple"; // CHAIN WHIP GRAPPLE (异相·钩爪): pull SELF to foe
   const prism = W.id === "prism";
+  // TWIN FANG SPIN FANG (异相·回旋牙): the flurry becomes a stationary 360° spin
+  const fangSpin = fang && asp === "spinfang" && p.comboN === 3;
   const flurry = fang && p.comboN === 3; // TWIN FANG: every 3rd hit is a rapid flurry
   // FRENZY ramps attack speed on consecutive hits (twin fang only)
   let cdMul = W.cdMul;
@@ -4271,16 +4443,34 @@ function trySlash(p) {
     burst(p.x, p.y, W.col, 8, 150, 0.3, 2.5);
     // LANCE VAULT: longer lunge, burning wake, and refunds a dash charge
     const vault = boonLv("vault");
-    const lungeStep = 64 * (vault ? 1 + 0.25 * boonPow("vault") : 1);
+    // BLINK SKEWER (异相·瞬刺): a much longer forward blink + extra i-frames (a teleport-skewer)
+    const lungeStep = (blink ? 150 : 64) * (vault ? 1 + 0.25 * boonPow("vault") : 1);
     if (vault) {
       addZone(p.x, p.y);
       p.dashCharges = Math.min(p.dashMax, p.dashCharges + 1);
     }
+    if (blink) ffx.spawnLight(p.x, p.y, 50, W.col, 0.5);
+    const bx0 = p.x, by0 = p.y; // BLINK SKEWER: remember the start to skewer foes ALONG the path
     p.x += Math.cos(p.slashAng) * lungeStep;
     p.y += Math.sin(p.slashAng) * lungeStep;
     if (vault) addZone(p.x, p.y);
     collidePillars(p); collideArena(p);
-    p.ifr = Math.max(p.ifr, 0.1);
+    p.ifr = Math.max(p.ifr, blink ? 0.22 : 0.1);
+    if (blink) {
+      burst(p.x, p.y, W.col, 10, 200, 0.35, 2.6); ffx.spawnLight(p.x, p.y, 50, W.col, 0.5);
+      // skewer every foe the blink passed through (segment bx0->p.x), once, for the lunge damage
+      const sdmg = meleeDamage() * 1.3;
+      const dxs = p.x - bx0, dys = p.y - by0, sl2 = dxs * dxs + dys * dys || 1;
+      for (const e of enemies) {
+        if (e.hp <= 0) continue;
+        let tt = clamp(((e.x - bx0) * dxs + (e.y - by0) * dys) / sl2, 0, 1);
+        if (dist(bx0 + dxs * tt, by0 + dys * tt, e.x, e.y) > 26 + e.r) continue;
+        hitEnemy(e, sdmg, Math.cos(p.slashAng) * 120, Math.sin(p.slashAng) * 120, critRoll(), true);
+        if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        if (e.hp > 0 && boonLv("skewer")) { e.kbx = (p.x - e.x) * 6; e.kby = (p.y - e.y) * 6; }
+        if (e.hp > 0) applyWeaponEnchants(e, p);
+      }
+    }
     audio.dash();
   }
   const blade = W.id === "blade";
@@ -4298,6 +4488,8 @@ function trySlash(p) {
   if (maul && boonLv("seismic")) range *= 1 + 0.18 * boonPow("seismic"); // SEISMIC widens the slam (~+35% at II)
   let arc = lunge ? meleeArcNow() * 0.6 : meleeArcNow();
   if (blade && boonLv("cleave")) arc *= 1 + 0.25 * boonPow("cleave"); // CLEAVE widens the blade arc
+  // SPIN FANG (异相·回旋牙): the flurry hit becomes a stationary full 360° spin
+  if (fangSpin) arc = TAU;
   // twin fang per-hit is low; the flurry distributes its dmg across rapid sub-slashes
   // (each flurry sub-swing deals 0.42x so 3 swings ≈ 1.26x a normal hit — rewarding but
   // not the dominant outlier it was at 0.6x/3 ≈ 1.8x).
@@ -4314,15 +4506,19 @@ function trySlash(p) {
     const sy = p.y + Math.sin(p.slashAng) * range * 0.8;
     // NERF (引力锤 was too strong): trimmed base pull radius (90 + range*0.45 vs 120 + range*0.6)
     // and the EVENT HORIZON bonus (+35% vs +50%) so its group-pull footprint is smaller.
-    const pullR = (90 + range * 0.45) * (1 + 0.35 * boonPow("horizon"));
+    // SINGULARITY ASPECT (异相·黑洞): no AoE pull — a small single-target black hole that hits
+    // hard (great vs bosses). Compensates the lost crowd control with a bigger implosion.
+    const pullR = blackhole ? (44 + range * 0.18) : (90 + range * 0.45) * (1 + 0.35 * boonPow("horizon"));
     const density = boonLv("singpull");
     // NERF: DENSITY's longevity bonus reduced (+25%/lv vs +40%/lv); base life unchanged.
     const life = 0.4 * (density ? 1 + 0.25 * boonPow("singpull") : 1); // DENSITY: longer-lived
     singularities.push({
       x: sx, y: sy, t: life, tm: life, pullR,
       // NERF: implosion multiplier 1.18x (was 1.6x) — the dominant burst is reined in.
-      dmg: dmg * 1.18, slow: boonLv("horizon") > 0, col: W.col, pulled: [], done: false,
-      pullBoss: density > 0,        // DENSITY: singularities also drag bosses
+      // SINGULARITY: bigger single-target burst (2.2x) but only one foe caught (singleTarget flag).
+      dmg: dmg * (blackhole ? 2.2 : 1.18), slow: boonLv("horizon") > 0, col: W.col, pulled: [], done: false,
+      pullBoss: density > 0 || blackhole, // DENSITY / SINGULARITY: also drag bosses
+      singleTarget: blackhole,            // SINGULARITY: only the nearest foe is caught/imploded
       darkstar: boonLv("darkstar"), // DARK STAR: implosion crits + shocks everything caught
       owner: p,                     // boon/crit context for the delayed implosion
     });
@@ -4351,6 +4547,7 @@ function trySlash(p) {
   }
 
   let hitAny = false;
+  p._grappledThisSwing = false; // CHAIN WHIP GRAPPLE: grapple-to-foe fires at most once per swing
   const arcHits = []; // ARC CASTER: enemies struck this swing, for the chain zap
   // one swing's hit pass; flurry runs it several times with tiny angle jitter
   const swings = flurry ? 3 : 1;
@@ -4405,9 +4602,23 @@ function trySlash(p) {
       // CHAIN WHIP: yank struck foes toward the wielder (heavy enemies barely budge — bosses/tanks resist)
       if (whip && e.hp > 0) {
         const resist = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.4 : 1);
-        // pull toward a point near the player so they cluster (great with freeze/AoE)
-        e.kbx += (p.x - e.x) * 7 * resist;
-        e.kby += (p.y - e.y) * 7 * resist;
+        // GRAPPLE (异相·钩爪): pull YOURSELF to the struck foe (mobility) — once per swing, with i-frames
+        if (grapple && !p._grappledThisSwing) {
+          p._grappledThisSwing = true;
+          const ga = angTo(p.x, p.y, e.x, e.y);
+          const gd = Math.max(0, dist(p.x, p.y, e.x, e.y) - (p.r + e.r + 8));
+          p.x += Math.cos(ga) * gd; p.y += Math.sin(ga) * gd;
+          p.vx = Math.cos(ga) * 300; p.vy = Math.sin(ga) * 300;
+          collidePillars(p); collideArena(p);
+          p.ifr = Math.max(p.ifr, 0.16);
+          ffx.spawnLight(p.x, p.y, 46, W.col, 0.5);
+          burst(p.x, p.y, W.col, 8, 180, 0.3, 2.4);
+          audio.dash();
+        } else if (!grapple) {
+          // pull toward a point near the player so they cluster (great with freeze/AoE)
+          e.kbx += (p.x - e.x) * 7 * resist;
+          e.kby += (p.y - e.y) * 7 * resist;
+        }
         if (boonLv("hookshot")) {
           hitEnemy(e, dmg * 0.45 * boonPow("hookshot"), 0, 0, false, false); // HOOKSHOT bonus damage
           if (e.hp > 0) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.2 : 0.45); // brief stun (reuses shock-stun)
@@ -4564,12 +4775,27 @@ function trySlash(p) {
     hitAny = true;
   }
   if (maul) { // heavy slam: shockwave ring + AFTERSHOCK quake
-    novas.push({ x: p.x, y: p.y, t: 0.35, tm: 0.35, maxR: range + 16, col: "#ff9966" });
-    shake(4, 0.18);
+    // OVERHEAD (异相·苍天碎): a single huge overhead — a much larger damaging shockwave ring.
+    const shockR = overhead ? (range + 90) : (range + 16);
+    novas.push({ x: p.x, y: p.y, t: overhead ? 0.45 : 0.35, tm: overhead ? 0.45 : 0.35, maxR: shockR, col: "#ff9966" });
+    shake(overhead ? 6 : 4, overhead ? 0.24 : 0.18);
     audio.maulSlam();
-    ffx.spawnLight(p.x, p.y, range + 24, "#ff9966", 0.8);
+    ffx.spawnLight(p.x, p.y, shockR + 8, "#ff9966", overhead ? 1 : 0.8);
+    if (overhead) {
+      // outer shockwave: foes beyond the swing arc but inside the big ring take a chunk + knockback
+      for (const e of enemies) {
+        if (e.hp <= 0) continue;
+        const d = dist(p.x, p.y, e.x, e.y);
+        if (d <= range + e.r || d > shockR + e.r) continue; // (inner foes were hit by the swing)
+        const a = angTo(p.x, p.y, e.x, e.y);
+        hitEnemy(e, dmg * 0.5, Math.cos(a) * kb, Math.sin(a) * kb, critRoll(), true);
+        if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        if (e.hp > 0 && boonLv("magma")) applyBurn(e, (4 + depth * 0.5) * boonPow("magma") * dmgMul());
+        hitAny = true;
+      }
+    }
     if (boonLv("ashock")) {
-      quakes.push({ x: p.x, y: p.y, r: range * 0.85, t: 1.4, tm: 1.4, tick: 0.25, dps: (5 + depth) * dmgMul() * boonPow("ashock") });
+      quakes.push({ x: p.x, y: p.y, r: range * 0.85 * (overhead ? 1.4 : 1), t: 1.4, tm: 1.4, tick: 0.25, dps: (5 + depth) * dmgMul() * boonPow("ashock") });
     }
   }
   // CHAIN WHIP FLECHETTE: the tip cracks a small shockwave at max reach
@@ -4590,6 +4816,133 @@ function trySlash(p) {
   }
   if (flurry) { audio.fangFlurry(); if (hitAny) ffx.trauma(0.18); }
   if (hitAny) shake(2.5, 0.1);
+}
+
+/* ===== ASPECT melee replacements (异相) — each reuses the shared hit/status/boon systems ===== */
+
+/* ARC TETHER (异相·束缚弧): a single-target tethered beam that locks one foe in the aim half and
+   grinds it; the weapon's exclusive boons (CONDUCTOR / OVERLOAD / SUPERCONDUCT / ARC FIELD) all
+   still fire — OVERLOAD's extra chain jumps fan off the tethered target so it isn't nonsensical. */
+function arcTetherStrike(p, W) {
+  ctxP = p;
+  p.slashCD = CONFIG.meleeCD * W.cdMul;
+  p.slashAng = p.aim;
+  p.recoilT = 0.18;
+  audio.slash(W.id);
+  const range = meleeRangeNow();
+  const a = p.slashAng;
+  // (re)acquire a locked target: keep the previous if still valid + in range, else nearest on-aim
+  let tgt = p.arctetherTgt;
+  if (!tgt || tgt.hp <= 0 || dist(p.x, p.y, tgt.x, tgt.y) > range + tgt.r) tgt = null;
+  if (!tgt) {
+    let bd = Infinity;
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      const d = dist(p.x, p.y, e.x, e.y);
+      if (d > range + e.r) continue;
+      const ad = Math.abs(angDiff(a, angTo(p.x, p.y, e.x, e.y)));
+      if (ad < 1.2 && d < bd) { bd = d; tgt = e; }
+    }
+  }
+  p.arctetherTgt = tgt;
+  // sustained beam: hits one foe each swing for a modestly higher per-hit amount (no cone spread).
+  // Tuned to ~1.05x: focuses single-target where base ARC is weak, without becoming a DPS outlier.
+  const dmg = meleeDamage() * 1.05;
+  if (!tgt) { // visual stub forward beam
+    const ex = p.x + Math.cos(a) * range, ey = p.y + Math.sin(a) * range;
+    beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.16, col: W.col });
+    sparkLine(p.x, p.y, ex, ey, W.col, 6);
+    return;
+  }
+  beams.push({ x1: p.x, y1: p.y, x2: tgt.x, y2: tgt.y, t: 0.18, col: W.col });
+  sparkLine(p.x, p.y, tgt.x, tgt.y, W.col, 8);
+  ffx.spawnLight(tgt.x, tgt.y, 50, W.col, 0.5);
+  if (shieldBlocks(tgt, p.x, p.y)) { tgt.exposeT = 1.1; audio.clank(); }
+  else {
+    hitEnemy(tgt, dmg, 0, 0, critRoll(), false);
+    if (tgt.hp > 0) {
+      if (boonLv("conduct")) applyShock(tgt, 4 * dmgMul(), 0);                 // CONDUCTOR
+      if (boonLv("supercond")) applyShock(tgt, 4 * boonPow("supercond") * dmgMul(), 1); // SUPERCONDUCT
+      else applyShock(tgt, 3 * dmgMul(), 0); // tether always shocks (its signature)
+      if (boonLv("ignite")) applyBurn(tgt, 4 * boonPow("ignite") * dmgMul());
+      applyWeaponEnchants(tgt, p);
+    }
+    // OVERLOAD: chain extra jumps off the tethered foe
+    const jumps = boonLv("overld") * 2;
+    let from = tgt, used = [tgt], jumped = 0;
+    while (jumped < jumps) {
+      let nx = null, bd = 200;
+      for (const o of enemies) { if (o.hp <= 0 || used.includes(o)) continue; const dd = dist(from.x, from.y, o.x, o.y); if (dd < bd) { bd = dd; nx = o; } }
+      if (!nx) break;
+      beams.push({ x1: from.x, y1: from.y, x2: nx.x, y2: nx.y, t: 0.18, col: W.col });
+      sparkLine(from.x, from.y, nx.x, nx.y, W.col, 6);
+      hitEnemy(nx, dmg * 0.45, 0, 0, false, false);
+      used.push(nx); from = nx; jumped++;
+    }
+  }
+  // ARC FIELD still drops a lingering field on the tethered foe
+  if (boonLv("arcfield")) {
+    zones.push({ x: tgt.x, y: tgt.y, r: 54, t: 1.4 + 0.3 * boonPow("arcfield"), tick: 0, shock: true, dps: (4 + depth * 0.5) * boonPow("arcfield") * dmgMul() });
+  }
+  audio.arcZap();
+}
+
+/* PRISM BEAM SABER (异相·棱光束): beam-only (no melee arc), much longer range, forward pierce.
+   The prism exclusive boons still apply (REFRACTION V-split, SOLAR FLARE ignite/pierce, etc.). */
+function prismBeamStrike(p, W) {
+  ctxP = p;
+  p.slashCD = CONFIG.meleeCD * W.cdMul;
+  p.slashAng = p.aim;
+  p.recoilT = 0.18;
+  audio.prismBeam();
+  p.prismN = Math.min(6, (p.prismN || 0) + 1); p.prismT = 1.4;
+  const charge = boonLv("ocharge") ? Math.min(1, 0.18 * boonPow("ocharge") * p.prismN) : 0;
+  const beamLen = meleeRangeNow() * (3.0 + charge * 0.8); // beam-only: much longer reach
+  const beamW = 18 + charge * 18;
+  const beamDmg = meleeDamage() * (1.0 + charge * 0.6); // full damage (no melee arc to share with)
+  const angs = boonLv("refract") ? [0, -0.28, 0.28] : [0];
+  const pierced = [];
+  for (const off of angs) {
+    const ba = p.slashAng + off;
+    const ex = p.x + Math.cos(ba) * beamLen, ey = p.y + Math.sin(ba) * beamLen;
+    beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.18, col: W.col });
+    beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.1, col: "#efeaff" });
+    sparkLine(p.x, p.y, ex, ey, W.col, 8);
+    const dx = ex - p.x, dy = ey - p.y, len2 = dx * dx + dy * dy || 1;
+    for (const e of enemies) {
+      if (e.hp <= 0 || pierced.includes(e)) continue;
+      let t = clamp(((e.x - p.x) * dx + (e.y - p.y) * dy) / len2, 0, 1);
+      if (dist(p.x + dx * t, p.y + dy * t, e.x, e.y) > beamW + e.r) continue;
+      hitEnemy(e, beamDmg, Math.cos(ba) * 90, Math.sin(ba) * 90, critRoll(), true); // pierces all
+      if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+      if (e.hp > 0 && boonLv("prismburn")) applyBurn(e, (4 + depth * 0.5) * boonPow("prismburn") * dmgMul());
+      if (e.hp > 0) applyWeaponEnchants(e, p);
+      pierced.push(e);
+    }
+  }
+  // LIGHTSPEED still blinks you forward through foes on a charged beam
+  if (boonLv("lightspeed") && charge > 0.45) {
+    p.dashDX = Math.cos(p.slashAng); p.dashDY = Math.sin(p.slashAng);
+    p.dashT = Math.max(p.dashT, 0.12);
+    p.ifr = Math.max(p.ifr, 0.18 + 0.06 * boonPow("lightspeed"));
+    burst(p.x, p.y, W.col, 8, 180, 0.3, 2.4);
+  }
+  ffx.spawnLight(p.x + Math.cos(p.slashAng) * 40, p.y + Math.sin(p.slashAng) * 40, 50, W.col, 0.5);
+}
+
+/* GLAIVE ORBIT BLADE (异相·环刃): instead of throw/return, a blade permanently ORBITS the wielder,
+   grinding foes it sweeps. The attack button refreshes/empowers the orbit (keeps it spinning fast).
+   RICOCHET/CYCLONE/etc. exclusive boons are folded into orbit tuning so they aren't nonsensical. */
+function glaiveOrbitStrike(p, W) {
+  ctxP = p;
+  p.slashCD = CONFIG.meleeCD * W.cdMul;
+  p.slashAng = p.aim;
+  p.recoilT = 0.18;
+  // refresh the keep-alive timer; the orbit itself is updated in updateGlaives/orbit pass
+  p.orbitT = 3.2; // seconds the orbit stays empowered after the last press (decays)
+  p.orbitFast = 1.4; // brief spin-up burst
+  audio.glaiveThrow();
+  ffx.spawnLight(p.x, p.y, 46, W.col, 0.5);
 }
 
 /* spawn a single pooled glaive along an angle (shared by throw + TWIN GLAIVE) */
@@ -4698,6 +5051,51 @@ function catchGlaive(g) {
   if (glaivePool.length < 24) glaivePool.push(g);
 }
 
+/* GLAIVE ORBIT BLADE (异相·环刃): one (or two with TWIN GLAIVE) blade orbits each wielder, grinding
+   foes it sweeps. Empowered (faster) for orbitT seconds after the attack button; idles slowly after.
+   No per-frame allocations; per-enemy hit throttle via e.orbitCD. */
+const ORBIT_R = 70;       // orbit radius (world px)
+const ORBIT_HITR = 22;    // blade hit half-width
+function updateOrbitBlades(dt) {
+  for (const p of players) {
+    if (!p || p.downed) continue;
+    if (p.weapon !== "glaive" || p.aspect !== "orbitblade") continue;
+    p.orbitT = Math.max(0, (p.orbitT || 0) - dt);
+    p.orbitFast = Math.max(0, (p.orbitFast || 0) - dt);
+    const empowered = p.orbitT > 0;
+    const spin = (empowered ? (p.orbitFast > 0 ? 11 : 7) : 3.2);
+    p.orbitAng = ((p.orbitAng || 0) + spin * dt) % TAU;
+    const orbitR = ORBIT_R * (1 + (boonLv("tempest2") ? 0.18 * boonPow("tempest2") : 0)); // CYCLONE widens
+    const blades = boonLv("twinblade") ? 2 : 1; // TWIN GLAIVE: a second mirrored blade
+    const dmg = meleeDamageFor(p) * 1.25 * (empowered ? 1 : 0.6); // sustained grind per-tick
+    ctxP = p;
+    for (let bi = 0; bi < blades; bi++) {
+      const ba = p.orbitAng + bi * Math.PI;
+      const bx = p.x + Math.cos(ba) * orbitR, by = p.y + Math.sin(ba) * orbitR;
+      if (Math.random() < 0.4) addPart({ x: bx, y: by, vx: rand(-20, 20), vy: rand(-20, 20), t: 0.22, tm: 0.22, col: WEAPONS.find((w)=>w.id==="glaive").col, r: rand(1, 2.2), drag: 1.5 });
+      for (const e of enemies) {
+        if (e.hp <= 0 || (e.orbitCD || 0) > 0) continue;
+        if (dist(bx, by, e.x, e.y) > ORBIT_HITR + e.r) continue;
+        e.orbitCD = 0.18; // per-enemy grind throttle
+        const a = angTo(p.x, p.y, e.x, e.y);
+        let crit = critRoll();
+        if (boonLv("velret")) crit = crit || Math.random() < 0.2 * boonPow("velret"); // RETURN VELOCITY: more crits
+        hitEnemy(e, dmg, Math.cos(a) * 120, Math.sin(a) * 120, crit, true);
+        if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        if (e.hp > 0) applyWeaponEnchants(e, p);
+      }
+      for (const bl of barrels) { if (!bl.dead && bl.fuse < 0 && dist(bx, by, bl.x, bl.y) < ORBIT_HITR + bl.r) igniteBarrel(bl, 0.06); }
+    }
+  }
+}
+/* per-player melee base damage with that player's weapon/aspect/boon context (avoids ctxP shuffling) */
+function meleeDamageFor(p) {
+  const prev = ctxP; ctxP = p;
+  const d = meleeDamage();
+  ctxP = prev;
+  return d;
+}
+
 /* ---------------- §L2 STAFF / WAND SPELLCASTING ---------------- */
 /* grab a pooled spell object (no per-cast allocation in the hot path) */
 function getSpell() {
@@ -4724,6 +5122,10 @@ function castSpell(p, W) {
   p.recoilT = 0.18;        // cast pose (reuses the weapon-arm recoil window)
   const a = p.slashAng;
   const base = spellDamage();
+  // ===== caster ASPECT branches that wholly replace the base cast =====
+  if (W.aspect === "flamethrower") { castFlamethrower(p, W, a, base); return; } // EMBER 异相·喷焰
+  if (W.aspect === "frostburst")   { castFrostBurst(p, W, a, base); return; }   // FROST 异相·冰爆
+  if (W.aspect === "teslacoil")    { castTeslaCoil(p, W, a, base); return; }    // STORM 异相·磁暴线圈
   if (W.id === "ember") {
     // EMBER STAFF: lob a fireball; explodes in an AoE on impact + leaves a burning patch.
     // METEOR: every few casts launch an empowered, stunning fireball.
@@ -4768,6 +5170,107 @@ function castSpell(p, W) {
     p.castCD = 0.5;
     castStorm(p, W, a, base);
   }
+}
+
+/* ===== caster ASPECT replacements (异相) — reuse shared status/boon/enchant systems ===== */
+
+/* EMBER FLAMETHROWER (异相·喷焰): a fast short-range flame cone each cast; sustained burning.
+   CONFLAGRATION widens the cone; FIRE WALL drops a short burning patch at the cone tip;
+   METEOR occasionally adds a heavier stun pulse. */
+function castFlamethrower(p, W, a, base) {
+  p.castCD = 0.12;                       // rapid stream cadence
+  p.recoilT = 0.1;
+  const range = 130 + 20 * boonPow("conflag");
+  const halfArc = 0.42 + (boonLv("conflag") ? 0.06 * boonPow("conflag") : 0);
+  const dmg = base * 0.4;                // per-tick low (fires ~8x/s)
+  const meteor = boonLv("meteor") && (p.castN % 12 === 0);
+  // visual cone of flame particles
+  for (let i = 0; i < 5; i++) {
+    const ja = a + rand(-halfArc, halfArc), jd = rand(0.3, 1) * range;
+    addPart({ x: p.x + Math.cos(ja) * jd, y: p.y + Math.sin(ja) * jd, vx: Math.cos(ja) * 80, vy: Math.sin(ja) * 80, t: 0.22, tm: 0.22, col: i % 2 ? "#ffd27a" : W.col, r: rand(2, 4), drag: 2 });
+  }
+  ffx.spawnLight(p.x + Math.cos(a) * range * 0.5, p.y + Math.sin(a) * range * 0.5, range * 0.7, W.col, 0.45);
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    const d = dist(p.x, p.y, e.x, e.y);
+    if (d > range + e.r) continue;
+    if (Math.abs(angDiff(a, angTo(p.x, p.y, e.x, e.y))) > halfArc + Math.atan2(e.r, Math.max(1, d))) continue;
+    hitEnemy(e, dmg, Math.cos(a) * 40, Math.sin(a) * 40, critRoll(), false);
+    if (e.hp > 0) {
+      applyBurn(e, (3 + depth * 0.35) * dmgMul());                 // the stream's signature burn
+      if (meteor) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.3 : 0.7);
+      if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+      applyWeaponEnchants(e, p);
+    }
+  }
+  for (const bl of barrels) { if (!bl.dead && bl.fuse < 0 && dist(p.x, p.y, bl.x, bl.y) < range && Math.abs(angDiff(a, angTo(p.x, p.y, bl.x, bl.y))) < halfArc) igniteBarrel(bl, 0.1); }
+  if (boonLv("firewall") && p.castN % 6 === 0) {
+    const fx = p.x + Math.cos(a) * range * 0.8, fy = p.y + Math.sin(a) * range * 0.8;
+    zones.push({ x: fx, y: fy, r: 40 * (1 + 0.3 * boonPow("firewall")), t: 1.4, tick: 0, ember: true, dps: (4 + depth * 0.6) * dmgMul(), fireslow: true });
+  }
+  if (p.castN % 4 === 0) audio.emberCast(meteor);
+}
+
+/* FROST FROST NOVA (异相·冰爆): a frost-nova burst around the wielder instead of a forward icebolt.
+   Chills + builds freeze on everything nearby. PERMAFROST builds faster/longer; BLIZZARD widens
+   the nova; ICE LANCE shatters frozen foes caught in it; FROST NOVA boon strengthens the burst. */
+function castFrostBurst(p, W, a, base) {
+  p.castCD = 0.5;                        // slower than the bolt (it's an AoE)
+  p.recoilT = 0.16;
+  const R = (130 + 16 * boonPow("blizzard")) * (boonLv("frostnova") ? 1 + 0.12 * boonPow("frostnova") : 1);
+  novas.push({ x: p.x, y: p.y, t: 0.34, tm: 0.34, maxR: R, col: W.col });
+  ffx.ring(p.x, p.y, R, W.col, 0.36, 5);
+  ffx.spawnLight(p.x, p.y, R, W.col, 0.7);
+  burst(p.x, p.y, "#bfe8ff", 14, 220, 0.4, 2.8);
+  audio.frostCast();
+  const dmg = base * 0.85;
+  const buildRate = boonLv("permaf") ? 0.5 + 0.18 * boonPow("permaf") : 0.34;
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    if (dist(p.x, p.y, e.x, e.y) > R + e.r) continue;
+    if (boonLv("icelance") && e.frozenT > 0) { // ICE LANCE: shatter frozen foes caught
+      e.frozenT = 0; burst(e.x, e.y, "#cfeeff", 14, 240, 0.4, 3); audio.shatter();
+      statusDamage(e, (20 + depth * 2) * dmgMul() * (1 + 0.3 * boonPow("icelance")), "#bfeeff");
+    }
+    hitEnemy(e, dmg, 0, 0, critRoll(), false);
+    if (e.hp <= 0) continue;
+    e.iceSlow = Math.max(e.iceSlow || 0, 0.55); e.iceSlowT = Math.max(e.iceSlowT || 0, 1.2);
+    e.freezeBuild = (e.freezeBuild || 0) + buildRate;
+    if (e.frozenT <= 0 && e.freezeBuild >= 1 && canFreeze(e)) {
+      e.freezeBuild = 0;
+      if ((e.shockT || 0) > 0) { shatterCombo(e); continue; }
+      if ((e.burnT || 0) > 0) { thermalSnap(e); continue; }
+      const dur = (e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur) * (boonLv("permaf") ? 1 + 0.25 * boonPow("permaf") : 1);
+      e.frozenT = dur; e.vx = 0; e.vy = 0; burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
+    }
+    if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+    applyWeaponEnchants(e, p);
+  }
+}
+
+/* STORM TESLA COIL (异相·磁暴线圈): place a stationary coil (a zone) that periodically zaps nearby
+   foes with SHOCK. TEMPEST extends its reach; OVERVOLT lets its zaps crit; BALL LIGHTNING / THUNDERCLAP
+   exclusive boons fold into the coil's discharge so they aren't nonsensical. */
+function castTeslaCoil(p, W, a, base) {
+  p.castCD = 0.7;                        // slower cadence — you're placing a turret
+  p.recoilT = 0.2;
+  const cx = p.x + Math.cos(a) * 40, cy = p.y + Math.sin(a) * 40;
+  const coilR = 150 + 20 * boonLv("tempest");
+  // cap concurrent coils per owner (replace the oldest) so coils can't stack into a DPS outlier
+  let mine = 0, oldest = -1;
+  for (let i = 0; i < zones.length; i++) if (zones[i].tesla && zones[i].owner === p) { mine++; if (oldest < 0) oldest = i; }
+  if (mine >= 2 && oldest >= 0) zones.splice(oldest, 1);
+  zones.push({
+    x: clamp(cx, CONFIG.wall + 8, CONFIG.arenaW - CONFIG.wall - 8),
+    y: clamp(cy, CONFIG.wall + 8, CONFIG.arenaH - CONFIG.wall - 8),
+    r: coilR, t: 3.2, tick: 0, tesla: true,
+    dmg: base * 0.5, owner: p, zapTick: 0,
+    overvolt: boonLv("overvolt") > 0,
+  });
+  if (zones.length > 40) zones.shift();
+  ffx.spawnLight(cx, cy, coilR * 0.6, W.col, 0.6);
+  burst(cx, cy, W.col, 10, 200, 0.3, 2.6);
+  audio.stormCast();
 }
 
 /* STORM STAFF: pick the nearest foe in the aim half, then chain a lightning bolt through several. */
@@ -5066,25 +5569,30 @@ function gunDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weapon
 /* AUTO-RIFLE: rapid low-damage rounds with mild spread + recoil. OVERHEAT ramps rate & damage
    on sustained fire; RICOCHET ROUNDS lets a round bounce once (wall or to a nearby foe). */
 function fireRifle(p, W, a, base) {
+  const burst3 = W.aspect === "burst"; // BURST FIRE (异相·三连发): tight 3-round group, slower cadence
   // OVERHEAT: each shot while sustaining fire ramps the counter; decays via heatT.
   if (boonLv("overheat")) { p.heatN = Math.min(20, (p.heatN || 0) + 1); p.heatT = 0.9; }
   const heat = boonLv("overheat") ? Math.min(1, 0.05 * (p.heatN || 0) * boonPow("overheat")) : 0;
-  p.gunCD = W.fireCD * (1 - heat * 0.4);   // OVERHEAT: up to 40% faster
+  // BURST: ~3x cadence so the 3-round burst keeps the same shots/sec, but lands as a punchy group.
+  p.gunCD = W.fireCD * (burst3 ? 3.0 : 1) * (1 - heat * 0.4);
   p.recoilT = 0.1;
-  const spread = (0.10 - heat * 0.04) * (Math.random() * 2 - 1); // recoil/spread, tightens as it heats
-  const aa = a + spread;
-  const dmg = base * 0.34 * (1 + heat * 0.5); // per-round low; OVERHEAT up to +50%
   // AP ROUNDS: rounds pierce extra foes and crit more often
-  let crit = critRoll();
-  if (boonLv("apr") && !crit) crit = Math.random() < 0.10 * boonPow("apr");
-  spawnBullet(p, "rifle", aa, 760, dmg, W.col, 3.2, {
-    life: 1.0, kb: 60, crit,
-    pierce: boonLv("apr") ? 2 * Math.round(boonPow("apr")) : 0,
-    bounces: boonLv("ricoR") ? Math.round(boonPow("ricoR")) : 0,
-    tracer: boonLv("tracer") ? boonPow("tracer") : 0,
-  });
+  const rounds = burst3 ? 3 : 1;
+  const dmgEach = base * (burst3 ? 0.4 : 0.34) * (1 + heat * 0.5); // BURST rounds slightly heavier + accurate
+  for (let r = 0; r < rounds; r++) {
+    const spread = (burst3 ? 0.03 : (0.10 - heat * 0.04)) * (Math.random() * 2 - 1);
+    const aa = a + spread;
+    let crit = critRoll();
+    if (boonLv("apr") && !crit) crit = Math.random() < 0.10 * boonPow("apr");
+    spawnBullet(p, "rifle", aa, 760, dmgEach, W.col, 3.2, {
+      life: 1.0, kb: 60, crit,
+      pierce: boonLv("apr") ? 2 * Math.round(boonPow("apr")) : 0,
+      bounces: boonLv("ricoR") ? Math.round(boonPow("ricoR")) : 0,
+      tracer: boonLv("tracer") ? boonPow("tracer") : 0,
+    });
+    if (Math.random() < 0.5) burst(p.x + Math.cos(aa) * 18, p.y + Math.sin(aa) * 18, "#ffe6b0", 2, 120, 0.14, 1.8);
+  }
   audio.rifleShot();
-  if (Math.random() < 0.5) burst(p.x + Math.cos(aa) * 18, p.y + Math.sin(aa) * 18, "#ffe6b0", 2, 120, 0.14, 1.8);
 }
 
 /* SCATTERGUN: a tight cone of pellets — devastating point-blank, sharp range falloff, big knockback.
@@ -5092,6 +5600,22 @@ function fireRifle(p, W, a, base) {
 function fireScatter(p, W, a, base) {
   p.gunCD = W.fireCD;
   p.recoilT = 0.2;
+  // SLUG ASPECT (异相·独头): a single far-flying piercing slug instead of the pellet cone —
+  // ranged single-target. Folds in the scatter exclusive boons (POINT BLANK / DRAGON'S BREATH).
+  if (W.aspect === "slug") {
+    const dragon = boonLv("dragonsbreath");
+    spawnBullet(p, "pellet", a + rand(-0.01, 0.01), 900, base * 2.0, W.col, 4, {
+      life: 0.7, kb: 320, falloff: 0, crit: critRoll(),
+      pierce: 3, pblank: boonLv("pblank") > 0,
+      ignite: dragon ? boonPow("dragonsbreath") : 0,
+    });
+    p.vx -= Math.cos(a) * 130; p.vy -= Math.sin(a) * 130;
+    burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#ffd29a", 8, 220, 0.24, 2.6);
+    ffx.spawnLight(p.x + Math.cos(a) * 24, p.y + Math.sin(a) * 24, 64, W.col, 0.6);
+    shake(3.5, 0.12);
+    audio.scatterShot();
+    return;
+  }
   const pellets = 6 + (boonLv("dbarrel") ? 1 + Math.round(boonPow("dbarrel")) : 0);
   const spread = 0.5;
   // SLUG ROUNDS: pellets fly far with far less falloff and hit much harder physically
@@ -5119,20 +5643,24 @@ function fireScatter(p, W, a, base) {
 /* RAILGUN: an instant charged piercing rail that hits everything along a line. Slow cadence;
    OVERCHARGE makes shots crit & pierce/reach further; RECOIL DASH kicks you back with i-frames. */
 function fireRail(p, W, a, base) {
-  p.gunCD = W.fireCD;
-  p.recoilT = 0.24;
+  // RAPID RAIL (异相·速射轨): no-charge rapid rail — much faster cadence, lighter per shot.
+  const rapid = W.aspect === "rapidrail";
+  p.gunCD = rapid ? W.fireCD * 0.42 : W.fireCD;
+  p.recoilT = rapid ? 0.14 : 0.24;
   const over = boonLv("ocharge2");
   const reachMul = over ? 1.35 + 0.15 * boonPow("ocharge2") : 1;
   const len = (560 * reachMul);
-  // CAPACITOR: holding off between shots stores charge for bonus damage (capped); consumed here
+  // CAPACITOR: holding off between shots stores charge for bonus damage (capped); consumed here.
+  // RAPID RAIL forgoes charge entirely (always firing) so CAPACITOR is inert under that aspect.
   let capMul = 1;
-  if (boonLv("chargeshot")) {
+  if (!rapid && boonLv("chargeshot")) {
     const charge = Math.min(1, (p.railChargeT || 0) / 1.4); // ~1.4s to full
     capMul = 1 + charge * (0.6 + 0.3 * boonPow("chargeshot"));
     p.railChargeT = 0;
     if (charge > 0.5) { ffx.spawnLight(p.x, p.y, 80, W.col, 0.7); }
   }
-  const dmg = base * 2.3 * (over ? 1.15 : 1) * capMul; // single big hit; balanced vs slow cadence
+  // single big hit; RAPID RAIL trades per-shot weight (×0.42 dmg ≈ matches the ×0.42 faster cadence)
+  const dmg = base * 2.3 * (rapid ? 0.42 : 1) * (over ? 1.15 : 1) * capMul;
   const ex = clamp(p.x + Math.cos(a) * len, CONFIG.wall, CONFIG.arenaW - CONFIG.wall);
   const ey = clamp(p.y + Math.sin(a) * len, CONFIG.wall, CONFIG.arenaH - CONFIG.wall);
   // visual rail beam + sparks
@@ -5294,9 +5822,9 @@ function getArrow() {
   let a = arrowPool.pop();
   if (!a) a = { kind: "", x: 0, y: 0, vx: 0, vy: 0, ang: 0, r: 0, t: 0, tm: 0,
                 dmg: 0, kb: 0, col: "#fff", owner: null, hitSet: [], pierce: 0,
-                crit: false, charge: 0, split: 0, shock: 0, mark: 0, rico: 0, gale: false, falloff: 0 };
+                crit: false, charge: 0, split: 0, shock: 0, mark: 0, rico: 0, gale: false, falloff: 0, homing: 0, homeTgt: null };
   a.hitSet.length = 0; a.pierce = 0; a.crit = false; a.charge = 0; a.split = 0;
-  a.shock = 0; a.mark = 0; a.rico = 0; a.gale = false; a.kb = 0; a.falloff = 0;
+  a.shock = 0; a.mark = 0; a.rico = 0; a.gale = false; a.kb = 0; a.falloff = 0; a.homing = 0; a.homeTgt = null;
   return a;
 }
 function freeArrow(a) {
@@ -5330,6 +5858,8 @@ function spawnArrow(p, kind, a, spd, dmg, col, r, opts) {
   o.rico = (opts && opts.rico) || 0;       // RICOCHET bounces remaining
   o.gale = !!(opts && opts.gale);          // GALEFORCE knockback flag
   o.falloff = (opts && opts.falloff) || 0; // STORMBOW range falloff
+  o.homing = (opts && opts.homing) || 0;   // HOMING VOLLEY (异相·追踪) tracking strength
+  o.homeTgt = null;
   arrows.push(o);
   return o;
 }
@@ -5353,11 +5883,13 @@ function fireBow(p, W, charge) {
 /* QUICK BOW: a fast stream of light arrows. RAPID NOCK ramps fire rate + damage on sustained fire;
    SPLIT ARROW shards arrows on hit; HEARTSEEKER ramps crit on the same foe; BARRAGE fans every 4th. */
 function fireQuickBow(p, W, a, base) {
+  const fullauto = W.aspect === "fullauto"; // FULL AUTO (异相·连珠): hold to stream arrows
   if (boonLv("rapidnock")) { p.rapidN = Math.min(16, (p.rapidN || 0) + 1); p.rapidT = 0.8; }
   const ramp = boonLv("rapidnock") ? Math.min(1, 0.06 * (p.rapidN || 0) * boonPow("rapidnock")) : 0;
-  p.bowCD = W.fireCD * (1 - ramp * 0.4);  // RAPID NOCK: up to 40% faster
+  // FULL AUTO trades per-shot damage (×0.7) for a much faster cadence (×0.7) — net DPS held in band.
+  p.bowCD = W.fireCD * (fullauto ? 0.7 : 1) * (1 - ramp * 0.4);  // RAPID NOCK: up to 40% faster
   p.recoilT = 0.12;
-  const dmg = base * 0.46 * (1 + ramp * 0.4); // light per-hit; RAPID NOCK up to +40%
+  const dmg = base * (fullauto ? 0.32 : 0.46) * (1 + ramp * 0.4); // light per-hit; RAPID NOCK up to +40%
   // BARRAGE: every 4th shot looses a 3-arrow fan instead of a single arrow
   const barrage = boonLv("barrage") && (p.bowN % 4 === 0);
   const angs = barrage ? [0, -0.14, 0.14] : [0];
@@ -5389,11 +5921,30 @@ function fireLongBow(p, W, a, base, charge) {
   let crit = critRoll() || penetrator;
   // a full natural draw pierces a couple of foes; PENETRATOR pierces everything
   const pierce = penetrator ? 99 : (full ? 2 : (charge > 0.5 ? 1 : 0));
+  // MULTISHOT (异相·散华): a charged release fans several arrows (each weaker) for area coverage.
+  // Fan count + per-arrow damage scale with the draw so it stays within the longbow's DPS band.
+  if (W.aspect === "multishot") {
+    const n = 3 + Math.round(charge * 2);            // 3..5 arrows by draw
+    const spread = 0.18 + charge * 0.22;
+    // split so a single pinned target takes ≈1.2x a base shot (all arrows on one foe); the real
+    // payoff is AREA coverage when the fan spreads — keeps it a sidegrade, not a single-target win.
+    const each = dmg * 1.2 / n;
+    for (let i = 0; i < n; i++) {
+      const off = (n === 1 ? 0 : (i / (n - 1) - 0.5) * spread);
+      spawnArrow(p, "larrow", a + off, 1000, each, W.col, full ? 4 : 3.2, {
+        life: 1.0, kb: 160 + charge * 160, crit: critRoll() || penetrator, charge,
+        pierce: penetrator ? 99 : (charge > 0.6 ? 1 : 0),
+        mark: boonLv("huntmark") ? boonPow("huntmark") : 0,
+        gale: boonLv("galeforce") && charge > 0.5,
+      });
+    }
+  } else {
   spawnArrow(p, "larrow", a, 1000, dmg, W.col, full ? 4.4 : 3.4, {
     life: 1.0, kb: 220 + charge * 220, crit, charge,
     pierce, gale: boonLv("galeforce") && charge > 0.5,
     mark: boonLv("huntmark") ? boonPow("huntmark") : 0,
   });
+  }
   // GALEFORCE: a charged release also cracks a forward wind shockwave (knockback + chip)
   if (boonLv("galeforce") && charge > 0.5) {
     const gx = p.x + Math.cos(a) * 90, gy = p.y + Math.sin(a) * 90;
@@ -5429,16 +5980,18 @@ function fireLongBow(p, W, a, base, charge) {
 function fireStormBow(p, W, a, base) {
   p.bowCD = W.fireCD;
   p.recoilT = 0.2;
+  const homing = W.aspect === "homing";             // HOMING VOLLEY (异相·追踪): arrows track foes
   const extra = boonLv("thicket") ? 1 + Math.round(boonPow("thicket")) : 0;
   const count = 5 + extra;                          // base 5 arrows
-  const spread = 0.62 * (boonLv("thicket") ? 1 + 0.18 * boonPow("thicket") : 1);
-  const dmg = base * 0.42;                          // per-arrow; many arrows, range falloff
+  const spread = (homing ? 0.95 : 0.62) * (boonLv("thicket") ? 1 + 0.18 * boonPow("thicket") : 1); // homing fans wider, then curves in
+  const dmg = base * (homing ? 0.4 : 0.42);         // per-arrow; many arrows, range falloff
   for (let i = 0; i < count; i++) {
     const off = (count === 1 ? 0 : (i / (count - 1) - 0.5) * spread) + rand(-0.03, 0.03);
-    spawnArrow(p, "sarrow", a + off, 820 + rand(-40, 50), dmg, W.col, 2.8, {
-      life: 0.6, kb: 90, crit: critRoll(), falloff: 0.0024,
+    spawnArrow(p, "sarrow", a + off, homing ? 640 + rand(-30, 40) : 820 + rand(-40, 50), dmg, W.col, 2.8, {
+      life: homing ? 1.2 : 0.6, kb: 90, crit: critRoll(), falloff: homing ? 0 : 0.0024,
       shock: boonLv("staticarr") ? boonPow("staticarr") : 0,
       rico: boonLv("ricoarr") ? 1 : 0,
+      homing: homing ? 1 : 0,
     });
   }
   // ARROW RAIN: a delayed volley arcs down onto the aimed target zone (mortar-style telegraph)
@@ -5495,6 +6048,20 @@ function updateArrows(dt) {
   for (let ai = arrows.length - 1; ai >= 0; ai--) {
     const a = arrows[ai];
     ctxP = a.owner || player;
+    // HOMING VOLLEY (异相·追踪): steer the velocity toward a (re)acquired nearby target
+    if (a.homing > 0) {
+      if (!a.homeTgt || a.homeTgt.hp <= 0 || a.hitSet.includes(a.homeTgt)) {
+        a.homeTgt = null; let bd = 360;
+        for (const e of enemies) { if (e.hp <= 0 || a.hitSet.includes(e)) continue; const d = dist(a.x, a.y, e.x, e.y); if (d < bd) { bd = d; a.homeTgt = e; } }
+      }
+      if (a.homeTgt) {
+        const want = angTo(a.x, a.y, a.homeTgt.x, a.homeTgt.y);
+        const sp = Math.hypot(a.vx, a.vy) || 1;
+        let cur = Math.atan2(a.vy, a.vx);
+        cur += clamp(angDiff(cur, want), -6 * dt, 6 * dt); // bounded turn rate
+        a.vx = Math.cos(cur) * sp; a.vy = Math.sin(cur) * sp; a.ang = cur;
+      }
+    }
     a.x += a.vx * dt; a.y += a.vy * dt; a.t -= dt;
     // cheap fletching trail spark (respects particle cap via addPart)
     if (Math.random() < 0.35) addPart({ x: a.x, y: a.y, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: a.col, r: 1.5, drag: 0 });
@@ -5617,6 +6184,9 @@ function tryDash(p) {
   p.dashDX = dx / m; p.dashDY = dy / m;
   p.dashT = CONFIG.dashDur;
   p.dashedT = 0.45;                 // BLADE RIPOSTE: arm the post-dash empowered slash
+  // BLADE DASH BLADE (异相·疾刃): dashing auto-triggers a slash when the dash ends (free, no energy)
+  const Wd = weaponDefP(p);
+  p.dashSlashPending = (Wd.id === "blade" && Wd.aspect === "dashblade");
   p.blinkUsed = false;             // DUO PHASE STRIKE: re-arm the guaranteed first-hit crit
   p.ifr = Math.max(p.ifr, CONFIG.dashIfr);
   p.dashCharges--;
@@ -5637,7 +6207,10 @@ function readPlayerControls(p) {
   p.padBound = !!pad;
   // interactMelee = a rising-edge press of THIS player's melee/attack control, used at the
   // hub to select/confirm a weapon at the ARMORY rack (mirrors P1's E/Enter/click rack pick).
-  const c = { aimHas: false, aimAng: 0, aimIsDir: false, bolt: false, interact: false, interactMelee: false, fireHeld: false };
+  // aspectToggle = rising edge of THIS player's BOLT control; at the hub ARMORY rack it toggles
+  // base⇄aspect (and, when locked, attempts the aspect unlock) — per-player, device-agnostic.
+  const c = { aimHas: false, aimAng: 0, aimIsDir: false, bolt: false, interact: false, interactMelee: false, fireHeld: false, aspectToggle: false };
+  let boltHeldNow = false;
   if (p.idx === 0) {
     // P1 mouse aim (only while recent and not pad-bound)
     if (!pad && (!touchUI || mouseActive) && !mouseIdle()) {
@@ -5646,6 +6219,8 @@ function readPlayerControls(p) {
     // P1 keyboard/touch fire
     if (mouse.left || keys["j"]) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; }
     if (mouse.right || keys["Shift"] || keys["ctrlRight"] || keys["e"] || boltHeld) c.bolt = true;
+    // rack aspect-toggle edge excludes the "e" key (E already cycles weapons at the rack)
+    if (mouse.right || keys["Shift"] || keys["ctrlRight"] || boltHeld) boltHeldNow = true;
     if (keys["k"] || keys["q"]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
     if (keys[" "]) p.dashBuf = Math.max(p.dashBuf, 0.05);
     if (touchFireHeld) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; } // touch tap held on the right half
@@ -5658,7 +6233,7 @@ function readPlayerControls(p) {
     if (rs.mag > 0) { c.aimHas = true; c.aimAng = Math.atan2(rs.y, rs.x); c.aimIsDir = true; }
     if (gpPressed(pad, 2)) { p.slashBuf = 0.12; c.interactMelee = true; } // □ press also confirms at the hub rack
     if (gpButton(pad, 2)) c.fireHeld = true; // □ held = bow draw
-    if (gpButton(pad, 7) || gpButton(pad, 5)) c.bolt = true; // R2 / R1 held = bolt
+    if (gpButton(pad, 7) || gpButton(pad, 5)) { c.bolt = true; boltHeldNow = true; } // R2 / R1 held = bolt
     if (gpPressed(pad, 0)) { p.dashBuf = 0.15; c.interact = true; }
     if (gpPressed(pad, 3) || gpPressed(pad, 4)) p.freezeBuf = 0.18;
   }
@@ -5667,10 +6242,13 @@ function readPlayerControls(p) {
     if (keys["."]) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; }
     if (keys["."] && !p._meleePrev) c.interactMelee = true; // melee press also confirms at the hub rack
     p._meleePrev = !!keys["."];
-    if (keys["/"]) c.bolt = true;
+    if (keys["/"]) { c.bolt = true; boltHeldNow = true; }
     if (keys[","]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
     if (keys["Enter"]) p.dashBuf = Math.max(p.dashBuf, 0.05);
   }
+  // rising-edge detection for the rack aspect toggle (per-player, device-agnostic)
+  if (boltHeldNow && !p._boltPrev) c.aspectToggle = true;
+  p._boltPrev = boltHeldNow;
   return c;
 }
 
@@ -5768,8 +6346,12 @@ function updatePlayer(p, dt) {
       p.drawing = false; p.drawT = 0; // swapped away / dashed mid-draw
     }
   }
-  if (c.bolt && (state === "play" || state === "hub")) tryBolt(p);
-  if (p.freezeBuf > 0) tryFreeze(p);
+  // at the hub rack, BOLT/FREEZE are repurposed for the aspect toggle/unlock — don't also bolt/freeze
+  const atRackNow = state === "hub" && dist(p.x, p.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30;
+  if (c.bolt && state === "play") tryBolt(p);
+  else if (c.bolt && state === "hub" && !atRackNow) tryBolt(p);
+  if (p.freezeBuf > 0 && !atRackNow) tryFreeze(p);
+  else if (atRackNow) p.freezeBuf = 0;
   if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
   ctxP = p;
 
@@ -5777,6 +6359,15 @@ function updatePlayer(p, dt) {
   const spd = CONFIG.playerSpeed * (1 + Math.min(0.55, boonPow("swift") * 0.12)) * (p.velBuffT > 0 ? 1.25 : 1);
   if (p.dashT > 0) {
     p.dashT -= dt;
+    // BLADE DASH BLADE (异相·疾刃): on dash end, auto-slash (free) in the dash/aim direction
+    if (p.dashT <= 0 && p.dashSlashPending) {
+      p.dashSlashPending = false;
+      p.aim = Math.atan2(p.dashDY, p.dashDX);
+      const near = nearestEnemy(p.x, p.y, 180);
+      if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
+      p.slashCD = 0; p.slashT = 0; // ensure the auto-slash isn't gated
+      trySlash(p);
+    }
     p.vx = p.dashDX * CONFIG.dashSpeed;
     p.vy = p.dashDY * CONFIG.dashSpeed;
     p.trailT -= dt;
@@ -5836,10 +6427,14 @@ function updatePlayer(p, dt) {
     if (c.interact) hubInteract(p);
     // P2 (and any pad/keyboard player) picks/confirms its ARMORY weapon with its OWN
     // melee/attack control — the same action it uses to slash — mirroring P1's rack pick.
-    if (c.interactMelee && dist(p.x, p.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30) {
+    const atRack = dist(p.x, p.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30;
+    if (c.interactMelee && atRack) {
       p.idx === 1 ? cycleWeaponP2() : cycleWeapon();
       p.slashBuf = 0; // consume the buffered swing so it doesn't also flail at the rack
     }
+    // ASPECT (异相): at the rack, the BOLT control toggles base⇄aspect (and, when the aspect is
+    // still locked, attempts to unlock it — spends cores once the usage milestone is met).
+    if (atRack && c.aspectToggle) { toggleAspect(p.idx === 1); p.boltCD = 0.3; }
   }
   // fountain rest stop: approach the spring to heal 30% (once, per player)
   if (state === "play" && roomType === "fountain" && !p.fountainUsed &&
@@ -5958,6 +6553,7 @@ function updateEnemy(e, dt) {
   e.spawnT = Math.max(0, e.spawnT - dt);
   if (e.spawnT > 0) return;
   if ((e.sdCD || 0) > 0) e.sdCD -= dt;
+  if ((e.orbitCD || 0) > 0) e.orbitCD -= dt; // GLAIVE ORBIT BLADE grind throttle
   if ((e.ewCD || 0) > 0) e.ewCD -= dt;   // DUO ELEMENTAL WAKE trail tick cooldown
   if ((e.hazCD || 0) > 0) e.hazCD -= dt;
   if ((e.markT || 0) > 0) e.markT -= dt; // TRACER FIRE damage-amp mark
@@ -7256,6 +7852,29 @@ function step(dt) {
   //               · LOBBER caustic pools — the only enemy-created zone; it hurts players)
   for (const z of zones) {
     z.t -= dt; z.tick -= dt;
+    // STORM TESLA COIL (异相·磁暴线圈): a stationary coil that periodically zaps nearby foes (SHOCK)
+    if (z.tesla) {
+      z.zapTick = (z.zapTick || 0) - dt;
+      if ((z.crackle = (z.crackle || 0) - dt) <= 0) { z.crackle = 0.12; sparkLine(z.x + rand(-6, 6), z.y - 6, z.x + rand(-10, 10), z.y - 18, z.col || "#ffe24a", 2); }
+      if (z.zapTick <= 0) {
+        z.zapTick = 0.24;
+        ctxP = z.owner || player;
+        let zapped = 0;
+        for (const e of enemies) {
+          if (e.hp <= 0 || zapped >= 3) continue;
+          if (dist(z.x, z.y, e.x, e.y) > z.r + e.r) continue;
+          zapped++;
+          beams.push({ x1: z.x, y1: z.y, x2: e.x, y2: e.y, t: 0.14, col: z.col || "#ffe24a" });
+          sparkLine(z.x, z.y, e.x, e.y, z.col || "#ffe24a", 5);
+          const crit = z.overvolt ? critRoll() : false;
+          hitEnemy(e, z.dmg, 0, 0, crit, false);
+          if (e.hp > 0) applyShock(e, 4 * dmgMul(), 0);
+          if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+          if (e.hp > 0) applyWeaponEnchants(e, ctxP);
+        }
+      }
+      continue;
+    }
     if (z.tick <= 0) {
       if (z.caustic) { // enemy hazard pool: ticks damage to players standing in it
         z.tick = 0.4;
@@ -7331,7 +7950,24 @@ function step(dt) {
     ctxP = sg.owner || player; // boon/crit context = the wielder who cast it
     sg.t -= dt;
     const pr = 1 - clamp(sg.t / sg.tm, 0, 1);
-    for (const e of enemies) {
+    if (sg.singleTarget) {
+      // SINGULARITY (异相·黑洞): lock the single nearest foe — no AoE pull, pure single-target DPS
+      let lock = null, bd = Infinity;
+      for (const e of enemies) {
+        if (e.hp <= 0) continue;
+        const d = dist(sg.x, sg.y, e.x, e.y);
+        if (d < sg.pullR + e.r && d < bd) { bd = d; lock = e; }
+      }
+      if (lock) {
+        const a = angTo(lock.x, lock.y, sg.x, sg.y);
+        const bossResist = lock.type === "boss" ? 0.22 : 1;
+        const force = 600 * dt * bossResist;
+        lock.kbx += Math.cos(a) * force; lock.kby += Math.sin(a) * force;
+        if (sg.slow) lock.gravSlow = 0.12;
+        if (!sg.pulled.includes(lock)) sg.pulled.push(lock);
+        sg.lock = lock;
+      }
+    } else for (const e of enemies) {
       if (e.hp <= 0) continue;
       if (e.type === "boss" && !sg.pullBoss) continue; // bosses resist the pull unless DENSITY
       const d = dist(sg.x, sg.y, e.x, e.y);
@@ -7360,7 +7996,17 @@ function step(dt) {
       shake(5, 0.2);
       audio.gravImplode();
       const ir = sg.pullR * 0.6;
-      for (const e of enemies) {
+      if (sg.singleTarget) {
+        // SINGULARITY: implode only the locked foe (or nearest in reach) for the full burst
+        let e = (sg.lock && sg.lock.hp > 0) ? sg.lock : null;
+        if (!e) { let bd = Infinity; for (const o of enemies) { if (o.hp <= 0) continue; const d = dist(sg.x, sg.y, o.x, o.y); if (d < ir + o.r + 30 && d < bd) { bd = d; e = o; } } }
+        if (e) {
+          const crit = critRoll() || sg.darkstar;
+          hitEnemy(e, idmg, 0, 0, crit, true);
+          if (e.hp > 0 && sg.darkstar) applyShock(e, 6 * dmgMul(), 1);
+          if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        }
+      } else for (const e of enemies) {
         if (e.hp <= 0) continue;
         if (dist(sg.x, sg.y, e.x, e.y) < ir + e.r) {
           const crit = critRoll() || sg.darkstar;     // DARK STAR: implosion always crits
@@ -7378,6 +8024,9 @@ function step(dt) {
 
   // glaive thrown blades (pooled): fly out & return, hitting on both legs
   updateGlaives(dt);
+
+  // GLAIVE ORBIT BLADE aspect: blades orbiting each wielder, grinding swept foes
+  updateOrbitBlades(dt);
 
   // staff/wand spell projectiles (pooled): fireballs & icebolts
   updateSpells(dt);
@@ -7776,6 +8425,17 @@ function drawZonesAndPickups() {
       ctx.strokeStyle = "rgba(180,255,90," + (0.4 + 0.3 * Math.sin(timeNow * 6 + z.x)) + ")";
       ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(z.x, z.y, z.r * (0.85 + 0.1 * Math.sin(timeNow * 4 + z.y)), 0, TAU); ctx.stroke();
+      noglow();
+      continue;
+    }
+    if (z.tesla) { // STORM TESLA COIL: a crackling pylon + faint reach ring
+      const a = clamp(z.t / 3.2, 0, 1);
+      glow(z.col || "#ffe24a", 10);
+      ctx.strokeStyle = "rgba(255,226,74," + (0.10 + 0.10 * a) + ")"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, TAU); ctx.stroke();
+      ctx.fillStyle = z.col || "#ffe24a";
+      ctx.fillRect(z.x - 2, z.y - 16, 4, 18);                 // pylon
+      ctx.beginPath(); ctx.arc(z.x, z.y - 18, 4 + 1.5 * Math.sin(timeNow * 18), 0, TAU); ctx.fill(); // coil top
       noglow();
       continue;
     }
@@ -9215,6 +9875,12 @@ function drawHeldWeapon(W, hx, hy, recoil, fl, drawAmt) {
     ctx.fillStyle = "#1a0a28";
     ctx.beginPath(); ctx.arc(17 + recoil * 4, 2, 1.8, 0, TAU); ctx.fill();
   }
+  // ASPECT (异相) held-sprite cue: a small distinct violet rune/glint near the hilt (EFFECTS-gated).
+  if (W.aspect && spriteDetail()) {
+    glow("#caa6ff", 7);
+    ctx.fillStyle = fl ? "#ffffff" : "#caa6ff";
+    ctx.beginPath(); ctx.arc(-4, -4, 1.7 + 0.5 * Math.sin(timeNow * 8), 0, TAU); ctx.fill();
+  }
   ctx.lineCap = "butt";
   noglow();
   ctx.restore();
@@ -9535,6 +10201,27 @@ function drawGlaives() {
     noglow();
     ctx.restore();
   }
+  // GLAIVE ORBIT BLADE aspect: render each orbiting guard blade around its wielder
+  const gcol = WEAPONS.find((w) => w.id === "glaive").col;
+  for (const p of players) {
+    if (!p || p.downed || p.weapon !== "glaive" || p.aspect !== "orbitblade") continue;
+    const orbitR = ORBIT_R * (1 + (p.boons && p.boons.tempest2 ? 0.18 * (p.boonPow.tempest2 || 0) : 0));
+    const blades = (p.boons && p.boons.twinblade) ? 2 : 1;
+    for (let bi = 0; bi < blades; bi++) {
+      const ba = (p.orbitAng || 0) + bi * Math.PI;
+      const bx = p.x + Math.cos(ba) * orbitR, by = p.y + Math.sin(ba) * orbitR;
+      bloomCircle(bx, by, 20, gcol, (p.orbitT > 0 ? 0.45 : 0.28));
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate((p.orbitAng || 0) * 3);
+      glow(gcol, 11);
+      ctx.strokeStyle = gcol; ctx.lineWidth = 3; ctx.lineCap = "round";
+      ctx.beginPath(); ctx.arc(0, 0, 9, -2.3, 2.3); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 9, Math.PI - 2.3, Math.PI + 2.3); ctx.stroke();
+      noglow();
+      ctx.restore();
+    }
+  }
 }
 
 /* staff/wand spell projectiles: glowing fireball orb / piercing icebolt shard */
@@ -9771,25 +10458,45 @@ function drawHubObjects() {
     ctx.fillText(w2.glyph, cx, cy);
     noglow();
   }
-  ctx.fillStyle = Wsel.col;
+  // P1 weapon + ASPECT (异相) state line
+  const p1Asp = activeAspectFor(curWeapon, curAspect);
+  ctx.fillStyle = p1Asp ? "#caa6ff" : Wsel.col;
   ctx.font = "bold 10px 'Courier New', monospace";
-  ctx.fillText("ARMORY·" + Wsel.name, t.rackX, t.rackY + 39);
+  ctx.fillText((numPlayers > 1 ? "P1·" : "ARMORY·") + Wsel.name + (p1Asp ? " [异相]" : ""), t.rackX, t.rackY + 39);
   const rPulse = 0.5 + Math.sin(timeNow * 3 + 3) * 0.3;
   ctx.strokeStyle = "rgba(255,210,122," + rPulse * 0.6 + ")";
   ctx.beginPath(); ctx.arc(t.rackX, t.rackY, t.rackR, 0, TAU); ctx.stroke();
   ctx.fillStyle = "rgba(255,210,122,0.7)";
   ctx.font = "bold 11px 'Courier New', monospace";
   ctx.fillText("武器架 " + Wsel.zh, t.rackX, t.rackY + t.rackR * 1.06 + 8);
-  if (numPlayers > 1) { // show P2's separate armory pick
+  // ASPECT status / unlock line for the selected weapon (P1)
+  const a1 = aspectByWeapon(curWeapon);
+  let aspY = t.rackY + t.rackR * 1.06 + 22;
+  if (a1) {
+    if (!aspectUnlocked(a1.id)) {
+      const used = (stats.weapon && stats.weapon[curWeapon]) | 0;
+      const ready = used >= a1.req;
+      ctx.fillStyle = ready ? "#ffd27a" : "rgba(180,150,255,0.7)";
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.fillText(ready ? ("异相: " + aspectCost(a1) + " ⬡ — UNLOCK") : ("异相需求 USE ×" + a1.req + " (" + Math.min(used, a1.req) + "/" + a1.req + ")"), t.rackX, aspY);
+    } else {
+      ctx.fillStyle = p1Asp ? "#caa6ff" : "rgba(180,150,255,0.7)";
+      ctx.font = "bold 10px 'Courier New', monospace";
+      ctx.fillText(p1Asp ? ("异相 ▶ " + a1.name) : ("基础 ▶ BASE · 异相可用"), t.rackX, aspY);
+    }
+    aspY += 13;
+  }
+  if (numPlayers > 1) { // show P2's separate armory + aspect pick
     const W2 = WEAPONS.find((w) => w.id === p2Weapon) || WEAPONS[0];
+    const p2Asp = activeAspectFor(p2Weapon, p2Aspect);
     ctx.fillStyle = PLAYER_SKINS[1].col;
     ctx.font = "bold 10px 'Courier New', monospace";
-    ctx.fillText("P2 " + W2.glyph + " " + W2.name, t.rackX, t.rackY + t.rackR * 1.06 + 22);
+    ctx.fillText("P2 " + W2.glyph + " " + W2.name + (p2Asp ? " [异相]" : ""), t.rackX, aspY);
   }
   if (player && dist(player.x, player.y, t.rackX, t.rackY) < t.rackR + 30) {
     ctx.fillStyle = Wsel.col;
     ctx.font = "13px 'Courier New', monospace";
-    ctx.fillText(touchUI ? "TAP — 切换武器 SWITCH WEAPON" : "PRESS E — 切换武器 SWITCH WEAPON", t.rackX, t.rackY - 48);
+    ctx.fillText(touchUI ? "TAP — 武器 / BOLT — 异相" : "E — 武器 SWITCH · BOLT — 异相 ASPECT", t.rackX, t.rackY - 48);
   }
   // STATS terminal (战绩): lifetime service record
   glow("#8fd0ff", 16);
@@ -10415,6 +11122,7 @@ function drawTitle() {
     "持法杖施法·持枪械开火·持弓射箭(长弓蓄力) — STAFF casts · GUN fires · BOW looses arrows (hold to draw the LONGBOW)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
+    "武器架 BOLT 键切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores + usage)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
@@ -10428,6 +11136,7 @@ function drawTitle() {
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
+    "武器架按 BOLT 切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores + usage)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
@@ -11045,6 +11754,18 @@ function drawBuildColumn(p, x, y, w, h, u) {
   ctx.fillStyle = "rgba(200,215,255,0.7)";
   ctx.font = 11 * u + "px 'Courier New', monospace";
   ctx.fillText(weaponClassLabel(W), cx, yy);
+  yy += 15 * u;
+  // ASPECT (异相) line: show the active aspect, or that the base form is in use
+  if (W.aspect) {
+    const ad = aspectById(W.aspect);
+    ctx.fillStyle = "#caa6ff";
+    ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+    ctx.fillText("异相 " + (ad ? ad.name + " · " + ad.en : "ASPECT"), cx, yy);
+  } else {
+    ctx.fillStyle = "rgba(180,160,230,0.6)";
+    ctx.font = 11 * u + "px 'Courier New', monospace";
+    ctx.fillText("基础形态 BASE FORM", cx, yy);
+  }
   yy += 20 * u;
   // active enchants row (element icons + potency)
   const en = p.enchants || {};
