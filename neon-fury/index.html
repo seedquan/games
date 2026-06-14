@@ -1,0 +1,2603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<title>NEON FURY</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #050514; overflow: hidden;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none;
+  }
+  canvas { display: block; touch-action: none; }
+  #arcade {
+    position: fixed; top: 12px; left: 14px; z-index: 10;
+    font: 14px "Courier New", monospace; letter-spacing: 1px;
+    color: #5ee6ff; opacity: 0.45; text-decoration: none;
+    text-shadow: 0 0 8px rgba(94,230,255,0.6);
+    transition: opacity 0.2s;
+  }
+  #arcade:hover { opacity: 0.9; }
+  #fsbtn {
+    position: fixed; top: 12px; right: 14px; z-index: 10;
+    font: 14px "Courier New", monospace; letter-spacing: 1px;
+    color: #ff5ec8; opacity: 0.45; text-decoration: none;
+    text-shadow: 0 0 8px rgba(255,94,200,0.6);
+    background: none; border: none; cursor: pointer; padding: 0;
+    transition: opacity 0.2s; display: none;
+  }
+  #fsbtn:hover { opacity: 0.9; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<a id="arcade" href="../">&larr; Arcade</a>
+<button id="fsbtn" type="button" aria-label="Toggle fullscreen">FULLSCREEN &#9166;</button>
+<script>
+"use strict";
+
+/* ============================================================
+   NEON FURY — a side-scrolling belt-scroll beat-'em-up.
+   Local two-player co-op in the Final Fight / Streets of Rage
+   STYLE. Original neon-space theme: a lone augmented brawler
+   (or two, in co-op) cleaning out a derelict neon megastructure.
+
+   Single file, zero dependencies, all art & audio 100% original
+   and procedural. No commercial characters/assets/melodies.
+
+   Controls (P1 keyboard): WASD / arrows move (8-dir belt),
+       J/Z attack · K/X jump (jump-kick) · L/C special.
+       Walk into a foe + attack to grab, attack to pummel,
+       L while grabbing to throw.
+   Controls (P2 keyboard): IJKL move · B attack · N jump · M special.
+   Gamepad:  left stick / d-pad move · square/X attack · cross/A jump
+       · circle/B or R1 special · Start pause/begin. Menus pad-navigable.
+   Touch:    left virtual stick + right ATTACK / JUMP / SPECIAL buttons
+       (touch = 1P).  P/Esc pause · M mute · F fullscreen.
+   ============================================================ */
+
+/* ---------------- §B CONFIG ---------------- */
+const CONFIG = Object.freeze({
+  // logical play resolution (a wide belt, letterboxed)
+  baseW: 960, baseH: 540,
+  // belt floor band in logical coords (depth Y range)
+  beltTop: 300, beltBottom: 510,
+  // player
+  pSpeed: 165,            // px/s walk
+  pHP: 100,
+  pLives: 3,
+  jumpV: 470, gravity: 1500,
+  // combat
+  depthTol: 34,           // depth overlap tolerance for hits
+  hitReach: 50,           // horizontal reach of light attack
+  comboWindow: 0.55,      // s to chain next combo hit
+  comboMax: 4,            // hits in light string (last = knockdown)
+  hitstopHeavy: 0.09, hitstopLight: 0.045,
+  knockdownTime: 1.1,
+  hurtTime: 0.28,
+  invulnAfterGetup: 1.1,
+  grabRange: 30, grabDepth: 26,
+  specialCost: 8,         // hp cost for special
+  // enemies
+  maxEnemiesActive: 10,
+  // camera
+  camLerp: 6,
+  // scoring
+  comboTextWindow: 1.4,
+  // pools
+  maxParticles: 520, maxTexts: 60, maxSparks: 220,
+});
+
+/* ---------------- §C UTIL ---------------- */
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const randi = (a, b) => Math.floor(rand(a, b + 1));
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const sign = (v) => v < 0 ? -1 : 1;
+const approach = (v, t, d) => v < t ? Math.min(v + d, t) : Math.max(v - d, t);
+
+const store = {
+  get(k) { try { return localStorage.getItem("neonfury." + k); } catch (e) { return this._m && this._m[k]; } },
+  set(k, v) { try { localStorage.setItem("neonfury." + k, v); } catch (e) { (this._m = this._m || {})[k] = v; } },
+};
+
+/* ---------------- canvas / view ---------------- */
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let cw = 0, ch = 0, dpr = 1, viewScale = 1, playX = 0, playY = 0, playW = CONFIG.baseW, playH = CONFIG.baseH;
+
+function resize() {
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  cw = window.innerWidth; ch = window.innerHeight;
+  canvas.width = Math.max(1, Math.round(cw * dpr));
+  canvas.height = Math.max(1, Math.round(ch * dpr));
+  canvas.style.width = cw + "px";
+  canvas.style.height = ch + "px";
+  // letterbox the belt at baseW:baseH aspect
+  viewScale = Math.min(cw / CONFIG.baseW, ch / CONFIG.baseH);
+  playW = CONFIG.baseW; playH = CONFIG.baseH;
+  playX = (cw - playW * viewScale) / 2;
+  playY = (ch - playH * viewScale) / 2;
+}
+if (typeof window !== "undefined" && window.addEventListener)
+  window.addEventListener("resize", resize);
+resize();
+
+// logical(playspace) -> canvas px
+const px = (x) => playX + x * viewScale;
+const py = (y) => playY + y * viewScale;
+const ps = (s) => s * viewScale;
+
+/* coarse-pointer (touch) devices get touch controls + instructions */
+const touchUI = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
+/* ---------------- §C2 FULLSCREEN ---------------- */
+const FS = { auto: store.get("autofs") !== "0", autoTried: false };
+function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+function fsSupported() {
+  const el = document.documentElement;
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen ||
+            document.exitFullscreen || document.webkitExitFullscreen);
+}
+function isFullscreen() { return !!fsElement(); }
+function requestFullscreen() {
+  if (isFullscreen()) return;
+  const el = document.documentElement;
+  try {
+    const fn = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (!fn) return;
+    const r = fn.call(el);
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (e) { /* denied — never break the game */ }
+}
+function exitFullscreen() {
+  try {
+    const fn = document.exitFullscreen || document.webkitExitFullscreen;
+    if (!fn) return;
+    const r = fn.call(document);
+    if (r && typeof r.catch === "function") r.catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+function toggleFullscreen() {
+  if (isFullscreen()) exitFullscreen();
+  else { FS.autoTried = true; requestFullscreen(); }
+}
+function autoRequestFullscreen() {
+  if (!FS.auto || FS.autoTried || isFullscreen()) return;
+  FS.autoTried = true;
+  requestFullscreen();
+}
+function setAutoFullscreen(on) {
+  FS.auto = !!on;
+  store.set("autofs", FS.auto ? "1" : "0");
+  if (FS.auto) FS.autoTried = false;
+}
+function onFullscreenChange() { resize(); }
+if (typeof document !== "undefined" && document.addEventListener) {
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+}
+const fsBtn = document.getElementById("fsbtn");
+function updateFsBtn() {
+  if (!fsBtn) return;
+  fsBtn.style.display = (state === "title" || state === "over" || state === "clear" || state === "win" || paused) && fsSupported() ? "block" : "none";
+  fsBtn.textContent = isFullscreen() ? "EXIT FULL ⏎" : "FULLSCREEN ⏎";
+}
+if (fsBtn) {
+  const fsClick = (e) => { e.preventDefault(); e.stopPropagation(); toggleFullscreen(); updateFsBtn(); };
+  fsBtn.addEventListener("click", fsClick);
+  fsBtn.addEventListener("touchstart", fsClick, { passive: false });
+}
+
+/* ---------------- §D AUDIO ---------------- */
+class AudioEngine {
+  constructor() {
+    this.ctx = null;
+    this.muted = store.get("muted") === "1";
+  }
+  unlock() {
+    if (!this.ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      const c = this.ctx = new AC();
+      this.master = c.createGain();
+      this.master.gain.value = this.muted ? 0 : 0.85;
+      const comp = c.createDynamicsCompressor();
+      this.master.connect(comp); comp.connect(c.destination);
+      // feedback-delay "reverb" send
+      this.send = c.createGain(); this.send.gain.value = 0.28;
+      const delay = c.createDelay(1); delay.delayTime.value = 0.23;
+      const fb = c.createGain(); fb.gain.value = 0.26;
+      this.send.connect(delay); delay.connect(fb); fb.connect(delay);
+      delay.connect(this.master);
+      // music bus
+      this.musicGain = c.createGain(); this.musicGain.gain.value = 0.6;
+      this.musicGain.connect(this.master); this.musicGain.connect(this.send);
+      // noise buffer
+      const buf = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      this.noiseBuf = buf;
+      this.startMusic();
+    }
+    if (this.ctx.state !== "running") this.ctx.resume();
+  }
+  toggleMute() {
+    this.muted = !this.muted;
+    store.set("muted", this.muted ? "1" : "0");
+    if (this.master) this.master.gain.value = this.muted ? 0 : 0.85;
+  }
+  ok() { return this.ctx && this.ctx.state === "running" && !this.muted; }
+  tone(type, f0, f1, t0, dur, vol, wet) {
+    const c = this.ctx, o = c.createOscillator(), g = c.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(this.master);
+    if (wet) g.connect(this.send);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  noise(t0, dur, vol, filterType, f0, f1, pan) {
+    const c = this.ctx, s = c.createBufferSource(), g = c.createGain();
+    s.buffer = this.noiseBuf;
+    const fl = c.createBiquadFilter();
+    fl.type = filterType;
+    fl.frequency.setValueAtTime(f0, t0);
+    if (f1) fl.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(fl); fl.connect(g);
+    let out = g;
+    if (pan !== undefined && c.createStereoPanner) {
+      const p = c.createStereoPanner(); p.pan.value = pan; g.connect(p); out = p;
+    }
+    out.connect(this.master);
+    s.start(t0); s.stop(t0 + dur + 0.05);
+  }
+  /* ---- SFX ---- */
+  whiff() { if (this.ok()) this.noise(this.ctx.currentTime, 0.12, 0.10, "bandpass", 1200, 600); }
+  punch() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.09, 0.30, "lowpass", 1800, 400);
+    this.tone("square", 160, 70, t, 0.08, 0.18, false);
+  }
+  kick() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.12, 0.34, "lowpass", 1400, 240);
+    this.tone("triangle", 130, 55, t, 0.12, 0.22, false);
+  }
+  grab() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 300, 180, t, 0.1, 0.12, false);
+    this.noise(t, 0.06, 0.12, "bandpass", 900, 600);
+  }
+  throwSlam() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.22, 0.4, "lowpass", 2200, 120);
+    this.tone("sine", 110, 40, t, 0.24, 0.3, false);
+  }
+  special() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 220, 660, t, 0.18, 0.18, true);
+    this.tone("square", 440, 1320, t + 0.02, 0.2, 0.12, true);
+    this.noise(t, 0.3, 0.28, "bandpass", 1600, 600);
+  }
+  hurt() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 380, 140, t, 0.12, 0.12, false);
+  }
+  enemyDie() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.4, 0.3, "lowpass", 2600, 150);
+    this.tone("sawtooth", 200, 60, t, 0.4, 0.18, true);
+  }
+  pickup() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sine", 660, 990, t, 0.08, 0.14, true);
+    this.tone("sine", 990, 1320, t + 0.06, 0.1, 0.1, true);
+  }
+  coin() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 880, 880, t, 0.05, 0.1, true);
+    this.tone("square", 1320, 1320, t + 0.05, 0.08, 0.1, true);
+  }
+  toast() {
+    if (!this.ok()) return;
+    this.tone("sine", 520, 660, this.ctx.currentTime, 0.07, 0.07, false);
+  }
+  go() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 440, 660, t, 0.1, 0.12, true);
+    this.tone("square", 660, 880, t + 0.09, 0.14, 0.12, true);
+  }
+  bossWarn() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    for (let i = 0; i < 3; i++)
+      this.tone("sawtooth", 120, 120, t + i * 0.18, 0.14, 0.2, true);
+    this.noise(t, 0.6, 0.18, "lowpass", 600, 200);
+  }
+  stageClear() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) =>
+      this.tone("triangle", f, f, t + i * 0.12, 0.3, 0.14, true));
+  }
+  gameOver() {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    [392, 330, 262, 196].forEach((f, i) =>
+      this.tone("sawtooth", f, f * 0.5, t + i * 0.16, 0.3, 0.16, true));
+  }
+  /* ---- original driving synth music: bass + drums + arp ---- */
+  startMusic() {
+    const c = this.ctx;
+    // original i-VI-VII-v progression in A minor-ish, all our own
+    const roots = [55, 87.31, 98, 73.42]; // A, F, G, D
+    const arpSet = [
+      [220, 261.63, 329.63, 392],
+      [174.61, 220, 261.63, 349.23],
+      [196, 246.94, 293.66, 392],
+      [146.83, 220, 293.66, 349.23],
+    ];
+    const STEP = 0.1428; // ~16ths at ~105 bpm feel
+    let next = c.currentTime + 0.2, step = 0;
+    const kick = (t) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = "sine"; o.frequency.setValueAtTime(150, t);
+      o.frequency.exponentialRampToValueAtTime(45, t + 0.12);
+      g.gain.setValueAtTime(0.5, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      o.connect(g); g.connect(this.musicGain); o.start(t); o.stop(t + 0.18);
+    };
+    const hat = (t, open) => {
+      const s = c.createBufferSource(), g = c.createGain(), fl = c.createBiquadFilter();
+      s.buffer = this.noiseBuf; fl.type = "highpass"; fl.frequency.value = 7000;
+      const d = open ? 0.12 : 0.03;
+      g.gain.setValueAtTime(0.13, t); g.gain.exponentialRampToValueAtTime(0.001, t + d);
+      s.connect(fl); fl.connect(g); g.connect(this.musicGain); s.start(t); s.stop(t + d + 0.02);
+    };
+    const snare = (t) => {
+      const s = c.createBufferSource(), g = c.createGain(), fl = c.createBiquadFilter();
+      s.buffer = this.noiseBuf; fl.type = "bandpass"; fl.frequency.value = 1800; fl.Q.value = 0.8;
+      g.gain.setValueAtTime(0.28, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+      s.connect(fl); fl.connect(g); g.connect(this.musicGain); s.start(t); s.stop(t + 0.18);
+    };
+    const bass = (t, f) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = "sawtooth"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.22, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + STEP * 1.6);
+      const fl = c.createBiquadFilter(); fl.type = "lowpass"; fl.frequency.value = 700;
+      o.connect(fl); fl.connect(g); g.connect(this.musicGain); o.start(t); o.stop(t + STEP * 2);
+    };
+    const arp = (t, f) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = "square"; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.06, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + STEP * 0.9);
+      o.connect(g); g.connect(this.musicGain); g.connect(this.send); o.start(t); o.stop(t + STEP);
+    };
+    this._timer = setInterval(() => {
+      if (this.muted || c.state !== "running") return;
+      while (next < c.currentTime + 0.4) {
+        const t = next, s = step % 16, bar = Math.floor(step / 16) % 4;
+        const root = roots[bar];
+        const chordArp = arpSet[bar];
+        // drums
+        if (s % 4 === 0) kick(t);
+        if (s === 4 || s === 12) snare(t);
+        hat(t, s % 4 === 2);
+        // bass on 8ths
+        if (s % 2 === 0) bass(t, root);
+        // arp every step, faster feel during play
+        const intensity = (typeof state !== "undefined" && state === "play") ? 1 : 0.55;
+        if (Math.random() < intensity)
+          arp(t, chordArp[s % chordArp.length] * (s % 8 >= 4 ? 1 : 1));
+        next += STEP; step++;
+      }
+    }, 60);
+  }
+}
+const audio = new AudioEngine();
+
+/* ---------------- §E PARTICLES / SPARKS / TEXTS ---------------- */
+// generic particle pool (world/play coords)
+const parts = [];
+for (let i = 0; i < CONFIG.maxParticles; i++)
+  parts.push({ on: false, kind: 0, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, life: 0, max: 1, size: 2, col: "#fff", drag: 0, grav: 0 });
+let partIdx = 0;
+function spawnPart(kind, x, y, vx, vy, life, size, col, drag, grav) {
+  const p = parts[partIdx = (partIdx + 1) % parts.length];
+  p.on = true; p.kind = kind; p.x = x; p.y = y; p.vx = vx; p.vy = vy;
+  p.life = life; p.max = life; p.size = size; p.col = col; p.drag = drag || 0; p.grav = grav || 0;
+}
+function burst(x, y, n, col, speed, life, size) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, TAU), s = rand(speed * 0.3, speed);
+    spawnPart(0, x, y, Math.cos(a) * s, Math.sin(a) * s, rand(life * 0.5, life), rand(size * 0.6, size), col, 3);
+  }
+}
+function ring(x, y, col, life, maxR) { spawnPart(1, x, y, 0, 0, life || 0.4, maxR || 60, col, 0, 0); }
+function updateParts(dt) {
+  for (const p of parts) {
+    if (!p.on) continue;
+    p.life -= dt;
+    if (p.life <= 0) { p.on = false; continue; }
+    if (p.kind === 0) {
+      const k = Math.exp(-p.drag * dt);
+      p.vx *= k; p.vy = p.vy * k + p.grav * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+    }
+  }
+}
+// hit sparks (impact stars), pooled, screen-ish coords in play space
+const sparks = [];
+for (let i = 0; i < CONFIG.maxSparks; i++)
+  sparks.push({ on: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1, size: 4, col: "#fff" });
+let sparkIdx = 0;
+function hitSpark(x, y, col, n, spd) {
+  for (let i = 0; i < (n || 8); i++) {
+    const s = sparks[sparkIdx = (sparkIdx + 1) % sparks.length];
+    const a = rand(0, TAU), v = rand((spd || 220) * 0.4, spd || 220);
+    s.on = true; s.x = x; s.y = y; s.vx = Math.cos(a) * v; s.vy = Math.sin(a) * v;
+    s.life = rand(0.12, 0.3); s.max = s.life; s.size = rand(3, 7); s.col = col || "#fff";
+  }
+}
+function updateSparks(dt) {
+  for (const s of sparks) {
+    if (!s.on) continue;
+    s.life -= dt; if (s.life <= 0) { s.on = false; continue; }
+    s.vx *= Math.exp(-6 * dt); s.vy *= Math.exp(-6 * dt);
+    s.x += s.vx * dt; s.y += s.vy * dt;
+  }
+}
+// floating texts
+const texts = [];
+for (let i = 0; i < CONFIG.maxTexts; i++) texts.push({ on: false, x: 0, y: 0, vy: -40, str: "", col: "#fff", size: 18, life: 0, max: 1 });
+let textIdx = 0;
+function floatText(x, y, str, col, size) {
+  const t = texts[textIdx = (textIdx + 1) % texts.length];
+  t.on = true; t.x = x; t.y = y; t.vy = -42; t.str = str; t.col = col || "#fff"; t.size = size || 18; t.life = 0.9; t.max = 0.9;
+}
+function updateTexts(dt) {
+  for (const t of texts) {
+    if (!t.on) continue;
+    t.life -= dt; if (t.life <= 0) { t.on = false; continue; }
+    t.y += t.vy * dt; t.vy *= Math.exp(-2 * dt);
+  }
+}
+
+/* ---------------- screen shake ---------------- */
+let shakeMag = 0, shakeT = 0;
+function addShake(m, t) { shakeMag = Math.max(shakeMag, m); shakeT = Math.max(shakeT, t); }
+
+/* ---------------- toast ---------------- */
+let toastMsg = "", toastT = 0;
+function showToast(m) { toastMsg = m; toastT = 2.2; }
+
+/* ---------------- hit-stop ---------------- */
+let hitstop = 0;
+
+/* ---------------- §F COLORS ---------------- */
+const COL = {
+  p1: { body: "#19e6ff", glow: "rgba(25,230,255,0.55)", trim: "#bff8ff", tag: "#19e6ff" },
+  p2: { body: "#ff4fd0", glow: "rgba(255,79,208,0.55)", trim: "#ffd6f4", tag: "#ff4fd0" },
+};
+
+/* ---------------- §G ENEMY DEFINITIONS ---------------- */
+// types: grunt, dagger, gunner, brute, boss
+const ENEMY_DEF = {
+  grunt: { hp: 22, speed: 78, dmg: 6, reach: 42, w: 34, h: 64, col: "#9b6bff", glow: "rgba(155,107,255,0.5)", score: 100, atkCd: 0.9, behavior: "swarm" },
+  dagger:{ hp: 16, speed: 132, dmg: 7, reach: 38, w: 30, h: 60, col: "#ff7a3c", glow: "rgba(255,122,60,0.5)", score: 150, atkCd: 0.6, behavior: "rush" },
+  bruiser:{ hp: 46, speed: 60, dmg: 11, reach: 44, w: 44, h: 74, col: "#46d17a", glow: "rgba(70,209,122,0.5)", score: 220, atkCd: 1.3, behavior: "grappler" },
+  gunner:{ hp: 18, speed: 70, dmg: 8, reach: 999, w: 32, h: 62, col: "#ffe14a", glow: "rgba(255,225,74,0.5)", score: 180, atkCd: 1.8, behavior: "ranged" },
+  minib: { hp: 120, speed: 66, dmg: 16, reach: 56, w: 60, h: 96, col: "#ff3b6b", glow: "rgba(255,59,107,0.55)", score: 600, atkCd: 1.2, behavior: "brute", boss: true },
+};
+const BOSS_DEF = [
+  { name: "WARDEN-7", hp: 360, speed: 78, dmg: 18, reach: 60, w: 64, h: 104, col: "#ff3b6b", glow: "rgba(255,59,107,0.6)", score: 2000, atkCd: 1.0, ranged: false },
+  { name: "VOLT BARON", hp: 520, speed: 92, dmg: 20, reach: 58, w: 66, h: 108, col: "#ffd23b", glow: "rgba(255,210,59,0.6)", score: 3000, atkCd: 0.9, ranged: true },
+  { name: "OVERSEER X", hp: 760, speed: 100, dmg: 24, reach: 64, w: 74, h: 118, col: "#c44bff", glow: "rgba(196,75,255,0.6)", score: 5000, atkCd: 0.8, ranged: true },
+];
+
+/* ---------------- §H STAGE / WAVE DESIGN ---------------- */
+// Each stage = list of segments. Segment: {scroll: targetCamX, waves:[ [enemySpec...] ]}
+// A wave is a list of {type, count}. Camera locks at the segment's scroll point,
+// spawns the wave; cleared -> next wave; all cleared -> GO! unlock to next segment.
+// Final segment of a stage is the boss.
+function buildStages() {
+  return [
+    { // STAGE 1 — Docking Spine
+      name: "DOCKING SPINE",
+      bg: 0,
+      segments: [
+        { wave: [{ type: "grunt", count: 3 }] },
+        { wave: [{ type: "grunt", count: 2 }, { type: "dagger", count: 1 }] },
+        { wave: [{ type: "grunt", count: 2 }, { type: "gunner", count: 1 }], crates: 1 },
+        { wave: [{ type: "dagger", count: 2 }, { type: "bruiser", count: 1 }] },
+        { boss: 0 },
+      ],
+    },
+    { // STAGE 2 — Reactor Promenade
+      name: "REACTOR PROMENADE",
+      bg: 1,
+      segments: [
+        { wave: [{ type: "grunt", count: 3 }, { type: "dagger", count: 1 }] },
+        { wave: [{ type: "gunner", count: 2 }, { type: "grunt", count: 2 }], crates: 1 },
+        { wave: [{ type: "bruiser", count: 2 }, { type: "dagger", count: 2 }] },
+        { wave: [{ type: "minib", count: 1 }, { type: "grunt", count: 2 }] },
+        { boss: 1 },
+      ],
+    },
+    { // STAGE 3 — Spire Apex
+      name: "SPIRE APEX",
+      bg: 2,
+      segments: [
+        { wave: [{ type: "dagger", count: 3 }, { type: "gunner", count: 1 }] },
+        { wave: [{ type: "bruiser", count: 2 }, { type: "gunner", count: 2 }], crates: 1 },
+        { wave: [{ type: "minib", count: 1 }, { type: "dagger", count: 3 }] },
+        { wave: [{ type: "grunt", count: 3 }, { type: "bruiser", count: 2 }, { type: "gunner", count: 1 }] },
+        { boss: 2 },
+      ],
+    },
+  ];
+}
+
+/* ---------------- §I GAME STATE ---------------- */
+let state = "title";   // title, play, over, clear, win
+let paused = false;
+let numPlayers = Number(store.get("players")) === 2 ? 2 : 1;
+let best = Number(store.get("best")) || 0;
+let game = null;
+let stages = buildStages();
+
+// belt world width per stage segment; camera scroll target
+const SEG_SCROLL = 760;   // px advanced per cleared segment
+
+function makePlayer(idx) {
+  const col = idx === 0 ? COL.p1 : COL.p2;
+  return {
+    idx, col,
+    x: 180 + idx * 70, y: 430, z: 0, // z = jump height
+    vz: 0, facing: 1,
+    hp: CONFIG.pHP, maxHp: CONFIG.pHP, lives: CONFIG.pLives,
+    alive: true, downed: false, downT: 0,
+    state: "idle", // idle, walk, attack, jump, hurt, knockdown, grab, special
+    animT: 0, walkPhase: 0,
+    atkStep: 0, atkT: 0, comboT: 0,
+    hitstun: 0, invuln: 0,
+    grabTarget: null, grabT: 0,
+    weapon: null, weaponUses: 0,
+    score: 0,
+    // input snapshot
+    in: { mx: 0, my: 0, attack: false, jump: false, special: false, pAttack: false, pJump: false, pSpecial: false },
+    attackHits: [], // entities hit this swing (avoid multi-hit)
+    jumpKickDone: false,
+    flash: 0,
+    respawnT: 0,
+  };
+}
+
+function newGame() {
+  game = {
+    stage: 0,
+    seg: 0,
+    waveIdx: 0,
+    camX: 0, camTargetX: 0,
+    locked: true,        // camera locked during fight
+    go: false,           // GO! prompt showing (segment cleared, can advance)
+    goArrowT: 0,
+    players: [],
+    enemies: [],
+    projectiles: [],     // enemy bullets / thrown objects
+    pickups: [],
+    crates: [],
+    combo: 0, comboT: 0,
+    bossActive: null,
+    bossWarnT: 0,
+    score: 0,
+    segWorldX: 0,        // left edge world x of current segment fight zone
+    time: 0,
+    transition: 0,       // stage transition timer
+    spawnedWave: false,
+    enemyBudget: 0,
+  };
+  game.players.push(makePlayer(0));
+  if (numPlayers === 2) game.players.push(makePlayer(1));
+  startStage(0);
+}
+
+function startStage(n) {
+  game.stage = n;
+  game.seg = 0;
+  game.camX = 0; game.camTargetX = 0;
+  game.enemies.length = 0; game.projectiles.length = 0; game.pickups.length = 0; game.crates.length = 0;
+  game.bossActive = null;
+  for (const p of game.players) {
+    p.x = 180 + p.idx * 70; p.y = 430; p.z = 0; p.vz = 0;
+    if (p.alive) p.hp = Math.min(p.maxHp, p.hp + 30);
+    p.state = "idle"; p.hitstun = 0; p.downed = false;
+  }
+  enterSegment();
+  showToast("STAGE " + (n + 1) + " — " + stages[n].name);
+}
+
+function curStage() { return game ? stages[game.stage] : stages[0]; }
+function curSeg() { return curStage().segments[game.seg]; }
+
+function enterSegment() {
+  const seg = curSeg();
+  game.locked = true; game.go = false; game.spawnedWave = false;
+  game.segWorldX = game.camX;
+  if (seg.boss !== undefined) {
+    game.bossWarnT = 1.8;
+    audio.bossWarn();
+    showToast("WARNING");
+  } else {
+    spawnWave(seg);
+  }
+  if (seg.crates) {
+    for (let i = 0; i < seg.crates; i++)
+      spawnCrate(game.camX + rand(playW * 0.55, playW * 0.85), rand(CONFIG.beltTop + 20, CONFIG.beltBottom - 20));
+  }
+}
+
+function spawnWave(seg) {
+  game.spawnedWave = true;
+  const list = seg.wave;
+  let n = 0;
+  for (const grp of list) {
+    for (let i = 0; i < grp.count; i++) {
+      // stagger off the right edge
+      const ex = game.camX + playW + rand(20, 220) + n * 36;
+      const ey = rand(CONFIG.beltTop + 24, CONFIG.beltBottom - 24);
+      spawnEnemy(grp.type, ex, ey);
+      n++;
+    }
+  }
+}
+
+function spawnBoss() {
+  const seg = curSeg();
+  const def = BOSS_DEF[seg.boss];
+  const e = spawnEnemy("__boss__", game.camX + playW * 0.8, 410, def);
+  game.bossActive = e;
+  showToast("BOSS — " + def.name);
+}
+
+/* ---------------- §J ENEMY ---------------- */
+function spawnEnemy(type, x, y, bossDef) {
+  if (game.enemies.length >= 64) return null;
+  let def;
+  if (type === "__boss__") def = bossDef;
+  else def = ENEMY_DEF[type];
+  const e = {
+    type: type === "__boss__" ? "boss" : type,
+    def,
+    isBoss: type === "__boss__",
+    isMini: !!def.boss && type !== "__boss__",
+    x, y, z: 0, vz: 0,
+    hp: def.hp, maxHp: def.hp,
+    facing: -1,
+    speed: def.speed, dmg: def.dmg, reach: def.reach,
+    w: def.w, h: def.h, col: def.col, glow: def.glow, score: def.score,
+    state: "spawn", animT: 0, walkPhase: 0,
+    atkCd: rand(0.3, def.atkCd), atkT: 0, atkWind: 0,
+    hitstun: 0, flash: 0,
+    knockT: 0,
+    target: null,
+    aiT: rand(0, 0.6),
+    aiMode: "approach",
+    strafeDir: Math.random() < 0.5 ? 1 : -1,
+    grabbed: false, grabbedBy: null,
+    grabbing: null, grabT: 0,
+    name: def.name || "",
+    blockT: 0,
+    alive: true,
+    hitThisSwing: false,
+  };
+  game.enemies.push(e);
+  return e;
+}
+
+/* ---------------- §K PICKUPS / CRATES ---------------- */
+function spawnCrate(x, y) {
+  game.crates.push({ x, y, z: 0, hp: 2, w: 38, h: 38, broken: false, t: 0 });
+}
+function breakCrate(cr) {
+  cr.broken = true;
+  burst(cr.x, cr.y - 20, 16, "#8fe", 200, 0.5, 5);
+  hitSpark(cr.x, cr.y - 20, "#cff", 10, 240);
+  // drop something
+  const r = Math.random();
+  if (r < 0.5) spawnPickup(cr.x, cr.y, "food");
+  else if (r < 0.78) spawnPickup(cr.x, cr.y, "coin");
+  else spawnPickup(cr.x, cr.y, "weapon");
+}
+function spawnPickup(x, y, kind) {
+  game.pickups.push({ x, y, z: 30, vz: 120, kind, t: 0, life: 14, w: 26, h: 26 });
+}
+function maybeDrop(e) {
+  const r = Math.random();
+  if (e.isBoss) { spawnPickup(e.x, e.y, "food"); spawnPickup(e.x - 30, e.y, "coin"); return; }
+  if (e.isMini && r < 0.8) { spawnPickup(e.x, e.y, "food"); return; }
+  if (r < 0.14) spawnPickup(e.x, e.y, "food");
+  else if (r < 0.30) spawnPickup(e.x, e.y, "coin");
+  else if (r < 0.36) spawnPickup(e.x, e.y, "weapon");
+}
+
+/* ---------------- §L COMBAT HELPERS ---------------- */
+function depthOverlap(a, b, tol) { return Math.abs(a.y - b.y) <= (tol || CONFIG.depthTol); }
+
+function aliveEnemies() {
+  let n = 0;
+  for (const e of game.enemies) if (e.alive && e.state !== "dying") n++;
+  return n;
+}
+function activePlayers() {
+  return game.players.filter(p => p.lives > 0 || p.alive);
+}
+function livePlayers() {
+  return game.players.filter(p => p.alive && !p.downed);
+}
+
+function addCombo(n) {
+  game.combo += (n || 1);
+  game.comboT = CONFIG.comboTextWindow;
+}
+function resetCombo() { game.combo = 0; game.comboT = 0; }
+
+function addScore(p, amt) {
+  game.score += amt;
+  if (p) p.score += amt;
+}
+
+// damage an enemy. dmg, knockX direction, knockdown bool, source player
+function damageEnemy(e, dmg, dir, knockdown, src, light) {
+  if (!e.alive || e.state === "dying") return;
+  if (e.blockT > 0 && !knockdown && Math.random() < 0.8) {
+    // blocked
+    hitSpark(e.x, e.y - e.h * 0.5, "#cff", 5, 140);
+    audio.whiff();
+    e.blockT = 0.2;
+    return;
+  }
+  e.hp -= dmg;
+  e.flash = 0.12;
+  e.hitstun = knockdown ? 0.4 : 0.22;
+  e.atkWind = 0; e.state = knockdown ? "knock" : "hurt";
+  if (e.grabbing) { releaseGrab(e); }
+  if (e.grabbed) { e.grabbed = false; e.grabbedBy = null; }
+  const kb = knockdown ? (e.isBoss ? 90 : 200) : (e.isBoss ? 8 : 40);
+  e.x += dir * kb * 0.18;
+  e.vz = knockdown ? 260 : 0;
+  if (knockdown) { e.z = Math.max(e.z, 1); e.knockT = 0.9; e.facing = -dir; }
+  hitstop = light ? CONFIG.hitstopLight : CONFIG.hitstopHeavy;
+  addShake(knockdown ? 9 : 4, knockdown ? 0.18 : 0.08);
+  const col = e.col;
+  hitSpark(e.x, e.y - e.h * 0.55, "#fff", knockdown ? 14 : 8, knockdown ? 320 : 220);
+  burst(e.x, e.y - e.h * 0.5, knockdown ? 8 : 4, col, 160, 0.4, 4);
+  if (knockdown) audio.kick(); else audio.punch();
+  addCombo();
+  addScore(src, 10 + Math.floor(game.combo * 1.5));
+  floatText(e.x, e.y - e.h - 8, "" + dmg, "#ffec6b", 16);
+  if (game.combo >= 2 && game.combo % 2 === 0)
+    floatText(e.x, e.y - e.h - 26, game.combo + " HIT", src ? src.col.body : "#fff", 18);
+  if (e.hp <= 0) killEnemy(e, src);
+}
+
+function killEnemy(e, src) {
+  if (e.state === "dying") return;
+  e.state = "dying"; e.alive = false; e.dieT = 0.5;
+  audio.enemyDie();
+  burst(e.x, e.y - e.h * 0.5, 20, e.col, 260, 0.6, 6);
+  ring(e.x, e.y - e.h * 0.4, e.col, 0.5, 80);
+  addShake(e.isBoss ? 16 : 6, e.isBoss ? 0.4 : 0.12);
+  addScore(src, e.score);
+  floatText(e.x, e.y - e.h, "+" + e.score, "#ffec6b", 20);
+  maybeDrop(e);
+  if (e === game.bossActive) game.bossActive = null;
+}
+
+function releaseGrab(e) {
+  if (e.grabbing) { e.grabbing.grabbed = false; e.grabbing.grabbedBy = null; e.grabbing = null; }
+}
+
+// damage a player
+function damagePlayer(p, dmg, dir, knockdown) {
+  if (!p.alive || p.downed || p.invuln > 0) return;
+  p.hp -= dmg;
+  p.flash = 0.15;
+  p.hitstun = CONFIG.hurtTime;
+  p.state = knockdown ? "knockdown" : "hurt";
+  p.atkStep = 0; p.comboT = 0;
+  if (p.grabTarget) { p.grabTarget.grabbed = false; p.grabTarget.grabbedBy = null; p.grabTarget = null; }
+  if (p.grabbedByEnemy) { p.grabbedByEnemy = null; }
+  p.facing = -sign(dir || -p.facing) || p.facing;
+  p.x += dir * (knockdown ? 70 : 24);
+  if (knockdown) { p.vz = 240; p.z = Math.max(p.z, 1); p.downT = CONFIG.knockdownTime; p.state = "knockdown"; }
+  audio.hurt();
+  hitSpark(p.x, p.y - pHeight() * 0.5, p.col.body, 8, 220);
+  addShake(knockdown ? 10 : 4, 0.12);
+  resetCombo();
+  if (p.hp <= 0) downPlayer(p);
+}
+
+function downPlayer(p) {
+  p.hp = 0; p.alive = false; p.downed = true; p.downT = 1.5;
+  p.state = "down"; p.vz = 180; p.z = Math.max(p.z, 1);
+  burst(p.x, p.y - 30, 16, p.col.body, 200, 0.5, 5);
+  audio.hurt();
+  if (p.grabTarget) { p.grabTarget.grabbed = false; p.grabTarget.grabbedBy = null; p.grabTarget = null; }
+  checkGameOver();
+}
+
+function loseLifeRespawn(p) {
+  p.lives--;
+  if (p.lives < 0) p.lives = 0;
+  if (p.lives <= 0) { checkGameOver(); return; }
+  p.alive = true; p.downed = false; p.hp = p.maxHp; p.state = "idle";
+  p.invuln = CONFIG.invulnAfterGetup + 0.6;
+  // respawn near camera/other player
+  const ally = game.players.find(q => q !== p && q.alive);
+  p.x = ally ? ally.x + 60 : game.camX + playW * 0.4;
+  p.y = clamp((ally ? ally.y : 430), CONFIG.beltTop + 20, CONFIG.beltBottom - 20);
+  p.z = 0; p.vz = 0; p.respawnT = 0;
+  ring(p.x, p.y, p.col.body, 0.6, 100);
+  showToast("P" + (p.idx + 1) + " RESPAWN — " + p.lives + " LEFT");
+}
+
+function checkGameOver() {
+  const anyAlive = game.players.some(p => p.alive && !p.downed);
+  const anyLives = game.players.some(p => p.lives > 0 || (p.alive && !p.downed));
+  if (!anyAlive && !game.players.some(p => p.lives > 0)) {
+    endGame();
+  }
+}
+
+function endGame() {
+  if (state !== "play") return;
+  state = "over";
+  audio.gameOver();
+  if (game.score > best) { best = game.score; store.set("best", best); }
+  updateFsBtn();
+}
+
+/* player height helper (varies a touch by state) */
+function pHeight() { return 66; }
+
+/* ---------------- §M PLAYER ACTIONS ---------------- */
+function tryAttack(p) {
+  if (!p.alive || p.downed || p.hitstun > 0) return;
+  // grabbing -> pummel
+  if (p.grabTarget && p.grabTarget.alive) {
+    pummel(p);
+    return;
+  }
+  if (p.state === "jump" || p.z > 6) { jumpKick(p); return; }
+  // don't restart a swing that is still in its active/early frames
+  if (p.state === "attack" && p.atkT < 0.12) return;
+  // check grab on walk-into: an adjacent enemy in front + close
+  const g = findGrabTarget(p);
+  if (g && (p.atkStep === 0 || p.comboT <= 0)) { startGrab(p, g); return; }
+  // combo light attack (chains while comboT window is open)
+  startSwing(p);
+}
+
+function startSwing(p) {
+  if (p.comboT <= 0) p.atkStep = 0;
+  p.atkStep = Math.min(p.atkStep + 1, CONFIG.comboMax);
+  p.state = "attack"; p.atkT = 0; p.comboT = CONFIG.comboWindow;
+  p.attackHits.length = 0;
+  audio.whiff();
+}
+
+function jumpKick(p) {
+  if (p.jumpKickDone) return;
+  p.jumpKickDone = true;
+  p.state = "jump"; p.atkT = 0;
+  p.attackHits.length = 0;
+  p.jumpKicking = 0.32;
+  audio.whiff();
+}
+
+function pummel(p) {
+  const e = p.grabTarget;
+  p.grabT = 0;
+  p.pummelCount = (p.pummelCount || 0) + 1;
+  const dir = p.facing;
+  damageEnemy(e, 7, dir, false, p, false);
+  e.grabbed = true; e.grabbedBy = p;
+  floatText(e.x, e.y - e.h - 8, "GRAB", p.col.body, 14);
+  if (e.hp <= 0 || p.pummelCount >= 3) {
+    // auto-throw on last pummel
+    throwEnemy(p);
+  }
+}
+
+function findGrabTarget(p) {
+  let best = null, bd = 1e9;
+  for (const e of game.enemies) {
+    if (!e.alive || e.state === "dying" || e.isBoss || e.grabbed) continue;
+    if (e.state === "knock" || e.knockT > 0) continue;
+    if (!depthOverlap(p, e, CONFIG.grabDepth)) continue;
+    const dx = e.x - p.x;
+    if (sign(dx) !== p.facing && Math.abs(dx) > 8) continue;
+    const d = Math.abs(dx);
+    if (d <= CONFIG.grabRange && d < bd) { bd = d; best = e; }
+  }
+  return best;
+}
+
+function startGrab(p, e) {
+  p.grabTarget = e; p.state = "grab"; p.grabT = 0; p.pummelCount = 0;
+  e.grabbed = true; e.grabbedBy = p; e.hitstun = 0.2; e.state = "grabbed";
+  e.x = p.x + p.facing * 26; e.facing = -p.facing;
+  audio.grab();
+  floatText(e.x, e.y - e.h - 8, "GRABBED", p.col.body, 14);
+}
+
+function throwEnemy(p) {
+  const e = p.grabTarget;
+  if (!e) return;
+  p.grabTarget = null; p.pummelCount = 0; p.state = "idle";
+  e.grabbed = false; e.grabbedBy = null;
+  // throw: knockdown, big knockback, can hit others
+  e.thrown = true; e.throwDir = p.facing; e.vz = 360; e.z = Math.max(e.z, 2);
+  e.throwVx = p.facing * 430; e.knockT = 1.0; e.state = "knock"; e.facing = -p.facing;
+  damageEnemy(e, 14, p.facing, true, p, false);
+  audio.throwSlam();
+  addShake(12, 0.2);
+}
+
+function useSpecial(p) {
+  if (!p.alive || p.downed || p.hitstun > 0) return;
+  if (p.specialCd > 0) return;
+  if (p.hp <= CONFIG.specialCost + 2) { /* still allow but minimal */ }
+  p.hp = Math.max(2, p.hp - CONFIG.specialCost);
+  p.specialCd = 0.9;
+  p.state = "special"; p.atkT = 0;
+  audio.special();
+  ring(p.x, p.y, p.col.body, 0.5, 130);
+  ring(p.x, p.y, "#fff", 0.4, 90);
+  burst(p.x, p.y - 30, 24, p.col.body, 320, 0.6, 6);
+  addShake(14, 0.25);
+  floatText(p.x, p.y - 80, "FURY!", p.col.body, 24);
+  // hit everything around
+  for (const e of game.enemies) {
+    if (!e.alive || e.state === "dying") continue;
+    if (Math.abs(e.x - p.x) < 110 && depthOverlap(p, e, 60)) {
+      damageEnemy(e, 22, sign(e.x - p.x) || p.facing, true, p, false);
+    }
+  }
+}
+
+function pickUpWeapon(p, kind) {
+  p.weapon = "pipe"; p.weaponUses = 6;
+  showToast("P" + (p.idx + 1) + " GRABBED A PLASMA PIPE");
+}
+
+/* ---------------- §N PLAYER UPDATE ---------------- */
+function updatePlayer(p, dt) {
+  if (p.flash > 0) p.flash -= dt;
+  if (p.specialCd > 0) p.specialCd -= dt;
+  if (p.invuln > 0) p.invuln -= dt;
+  if (p.comboT > 0) { p.comboT -= dt; if (p.comboT <= 0) p.atkStep = 0; }
+
+  // downed -> wait, then lose life & respawn (or game over)
+  if (p.downed) {
+    p.downT -= dt;
+    // physics fall
+    p.vz -= CONFIG.gravity * dt; p.z += p.vz * dt;
+    if (p.z < 0) { p.z = 0; p.vz = 0; }
+    if (p.downT <= 0) {
+      loseLifeRespawn(p);
+    }
+    return;
+  }
+  if (!p.alive) return;
+
+  // gravity/jump
+  if (p.z > 0 || p.vz !== 0) {
+    p.vz -= CONFIG.gravity * dt;
+    p.z += p.vz * dt;
+    if (p.z <= 0) {
+      p.z = 0; p.vz = 0;
+      p.jumpKickDone = false; p.jumpKicking = 0;
+      if (p.state === "jump") p.state = "idle";
+    }
+  }
+
+  // hitstun / knockdown handled like downed-but-alive
+  if (p.state === "knockdown") {
+    p.vz -= CONFIG.gravity * dt; p.z += p.vz * dt;
+    if (p.z < 0) { p.z = 0; p.vz = 0; }
+    p.downT -= dt;
+    if (p.downT <= 0 && p.z <= 0) {
+      p.state = "getup"; p.getupT = 0.35; p.invuln = CONFIG.invulnAfterGetup;
+    }
+    return;
+  }
+  if (p.state === "getup") {
+    p.getupT -= dt;
+    if (p.getupT <= 0) p.state = "idle";
+    return;
+  }
+  if (p.hitstun > 0) {
+    p.hitstun -= dt;
+    if (p.hitstun <= 0 && (p.state === "hurt")) p.state = "idle";
+    // still apply slight knock drift
+    return;
+  }
+
+  const inp = p.in;
+  // attacking states
+  if (p.state === "attack") {
+    p.atkT += dt;
+    doAttackHit(p, dt);
+    const dur = 0.26;
+    if (p.atkT >= dur) {
+      p.state = "idle";
+    }
+  } else if (p.state === "special") {
+    p.atkT += dt;
+    if (p.atkT >= 0.4) p.state = "idle";
+  } else if (p.state === "grab") {
+    p.grabT += dt;
+    const e = p.grabTarget;
+    if (!e || !e.alive) { p.grabTarget = null; p.state = "idle"; }
+    else {
+      // hold enemy in front
+      e.x = p.x + p.facing * 26; e.y = p.y; e.facing = -p.facing;
+      e.hitstun = 0.15; e.grabbed = true; e.grabbedBy = p;
+      // special while grabbing -> throw
+      if (inp.special && !inp.pSpecial) throwEnemy(p);
+      // movement breaks grab into idle (release)
+      if (p.grabT > 2.4) { e.grabbed = false; e.grabbedBy = null; p.grabTarget = null; p.state = "idle"; }
+    }
+  }
+
+  // movement (allowed in idle/walk/jump)
+  const canMove = (p.state === "idle" || p.state === "walk" || p.state === "jump");
+  let mvx = 0, mvy = 0;
+  if (canMove) {
+    mvx = inp.mx; mvy = inp.my;
+    const m = Math.hypot(mvx, mvy);
+    if (m > 1) { mvx /= m; mvy /= m; }
+    if (Math.abs(mvx) > 0.15) p.facing = sign(mvx);
+    const spd = CONFIG.pSpeed * (p.weapon ? 0.95 : 1);
+    p.x += mvx * spd * dt;
+    if (p.z <= 0) p.y += mvy * spd * 0.78 * dt; // depth move only while grounded-ish
+    if (m > 0.15 && p.state !== "jump") { p.state = "walk"; p.walkPhase += dt * 10; }
+    else if (p.state === "walk" && m <= 0.15) p.state = "idle";
+  }
+
+  // clamp to belt + camera window
+  p.y = clamp(p.y, CONFIG.beltTop, CONFIG.beltBottom);
+  const leftBound = game.camX + 24;
+  const rightBound = game.camX + playW - 24;
+  p.x = clamp(p.x, leftBound, rightBound);
+
+  // actions (edge-triggered)
+  if (canMove || p.state === "grab") {
+    if (inp.attack && !inp.pAttack) tryAttack(p);
+    if (inp.special && !inp.pSpecial && p.state !== "grab") useSpecial(p);
+    if (inp.jump && !inp.pJump && p.z <= 0 && p.state !== "grab") {
+      p.vz = CONFIG.jumpV; p.state = "jump"; p.jumpKickDone = false;
+    }
+  } else {
+    if (inp.attack && !inp.pAttack) tryAttack(p);
+  }
+
+  // jump-kick active hit
+  if (p.jumpKicking > 0) {
+    p.jumpKicking -= dt;
+    doJumpKick(p);
+  }
+
+  // pickups
+  for (const pk of game.pickups) {
+    if (pk.taken) continue;
+    if (pk.z > 8) continue;
+    if (Math.abs(pk.x - p.x) < 28 && Math.abs(pk.y - p.y) < 24 && p.z < 20) {
+      collectPickup(p, pk);
+    }
+  }
+  // crate break by attacking — handled in doAttackHit
+}
+
+function collectPickup(p, pk) {
+  pk.taken = true;
+  if (pk.kind === "food") {
+    p.hp = Math.min(p.maxHp, p.hp + 35);
+    audio.pickup();
+    floatText(p.x, p.y - 70, "+35 HP", "#6bff8f", 18);
+    ring(p.x, p.y, "#6bff8f", 0.4, 60);
+  } else if (pk.kind === "coin") {
+    addScore(p, 250);
+    audio.coin();
+    floatText(p.x, p.y - 70, "+250", "#ffec6b", 18);
+  } else if (pk.kind === "weapon") {
+    pickUpWeapon(p, pk.kind);
+    audio.pickup();
+    floatText(p.x, p.y - 70, "PIPE x6", p.col.body, 18);
+  }
+}
+
+// connect light attack
+function doAttackHit(p, dt) {
+  // active frames 0.05..0.18
+  if (p.atkT < 0.05 || p.atkT > 0.2) return;
+  const reach = CONFIG.hitReach + (p.weapon ? 16 : 0);
+  const hx = p.x + p.facing * reach * 0.7;
+  const isFinisher = p.atkStep >= CONFIG.comboMax;
+  let connected = false;
+  for (const e of game.enemies) {
+    if (!e.alive || e.state === "dying") continue;
+    if (p.attackHits.indexOf(e) >= 0) continue;
+    if (!depthOverlap(p, e)) continue;
+    const dx = e.x - p.x;
+    if (sign(dx) !== p.facing && Math.abs(dx) > 10) continue;
+    if (Math.abs(dx) <= reach) {
+      p.attackHits.push(e);
+      const dmg = (p.weapon ? 12 : 8) + (isFinisher ? 4 : 0);
+      damageEnemy(e, dmg, p.facing, isFinisher, p, !isFinisher);
+      connected = true;
+    }
+  }
+  // crates
+  for (const cr of game.crates) {
+    if (cr.broken) continue;
+    if (p.attackHits.indexOf(cr) >= 0) continue;
+    if (Math.abs(cr.x - p.x) <= reach && Math.abs(cr.y - p.y) < 36) {
+      p.attackHits.push(cr); cr.hp--; addShake(3, 0.05);
+      if (cr.hp <= 0) breakCrate(cr);
+    }
+  }
+  if (connected && p.weapon) {
+    p.weaponUses--;
+    if (p.weaponUses <= 0) { p.weapon = null; showToast("P" + (p.idx + 1) + " WEAPON BROKE"); }
+  }
+}
+
+function doJumpKick(p) {
+  const reach = 46;
+  for (const e of game.enemies) {
+    if (!e.alive || e.state === "dying") continue;
+    if (p.attackHits.indexOf(e) >= 0) continue;
+    if (!depthOverlap(p, e, 40)) continue;
+    if (Math.abs(e.x - p.x) <= reach && Math.abs((e.y) - p.y) < 40) {
+      p.attackHits.push(e);
+      damageEnemy(e, 12, p.facing, true, p, false);
+    }
+  }
+}
+
+/* ---------------- §O ENEMY UPDATE / AI ---------------- */
+function pickTarget(e) {
+  const cands = livePlayers();
+  if (cands.length === 0) return null;
+  let best = null, bd = 1e9;
+  for (const p of cands) {
+    const d = Math.hypot(p.x - e.x, (p.y - e.y) * 1.4);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+
+function updateEnemy(e, dt) {
+  if (e.flash > 0) e.flash -= dt;
+
+  if (e.state === "dying") {
+    e.dieT -= dt; e.animT += dt;
+    e.vz -= CONFIG.gravity * dt; e.z += e.vz * dt; if (e.z < 0) { e.z = 0; e.vz = 0; }
+    if (e.dieT <= 0) e.remove = true;
+    return;
+  }
+
+  // thrown / knockdown physics
+  if (e.knockT > 0 || e.thrown) {
+    e.knockT -= dt;
+    e.vz -= CONFIG.gravity * dt; e.z += e.vz * dt;
+    if (e.thrown) {
+      e.x += e.throwVx * dt; e.throwVx *= Math.exp(-2 * dt);
+      // thrown enemy hits other enemies
+      for (const o of game.enemies) {
+        if (o === e || !o.alive || o.state === "dying" || o.isBoss) continue;
+        if (Math.abs(o.x - e.x) < 30 && depthOverlap(o, e, 30) && e.z > 10) {
+          damageEnemy(o, 10, sign(e.throwVx) || 1, true, null, false);
+          e.throwVx *= 0.4;
+        }
+      }
+    }
+    if (e.z <= 0) {
+      e.z = 0; e.vz = 0;
+      if (e.knockT <= 0) { e.thrown = false; e.state = "getup"; e.getupT = 0.4; }
+    }
+    e.y = clamp(e.y, CONFIG.beltTop, CONFIG.beltBottom);
+    return;
+  }
+  if (e.state === "getup") {
+    e.getupT -= dt;
+    if (e.getupT <= 0) e.state = "idle";
+    return;
+  }
+  if (e.state === "grabbed") {
+    // held by player; player moves it
+    if (!e.grabbedBy || e.grabbedBy.grabTarget !== e) { e.state = "idle"; e.grabbed = false; }
+    return;
+  }
+  if (e.hitstun > 0) {
+    e.hitstun -= dt;
+    if (e.hitstun <= 0 && (e.state === "hurt")) e.state = "idle";
+    return;
+  }
+
+  if (e.state === "spawn") { e.state = "idle"; }
+
+  if (e.blockT > 0) e.blockT -= dt;
+  if (e.atkT > 0) {
+    e.atkT -= dt;
+    e.animT += dt;
+    // strike frame
+    if (e.atkWind > 0) {
+      e.atkWind -= dt;
+      if (e.atkWind <= 0) enemyStrike(e);
+    }
+    if (e.atkT <= 0) e.state = "idle";
+    return;
+  }
+  if (e.atkCd > 0) e.atkCd -= dt;
+
+  const tgt = pickTarget(e);
+  e.target = tgt;
+  if (!tgt) { e.state = "idle"; return; }
+
+  e.aiT -= dt;
+  const dx = tgt.x - e.x;
+  const dy = tgt.y - e.y;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  e.facing = sign(dx) || e.facing;
+
+  const beh = e.def.behavior;
+  let desireX = dx, desireY = dy;
+  let wantStrike = false;
+
+  if (beh === "ranged") {
+    // keep distance, shoot from afar
+    const ideal = 260;
+    if (adx < ideal - 40) { desireX = -dx; } // back away
+    else if (adx > ideal + 60) { desireX = dx; }
+    else desireX = 0;
+    // line up depth then fire
+    if (ady > 24) desireY = dy; else desireY = 0;
+    if (adx > 120 && ady < 30 && e.atkCd <= 0) { startEnemyAttack(e, true); return; }
+  } else if (beh === "ranged" || (e.isBoss && e.def.ranged)) {
+    // handled in boss section
+  } else {
+    // melee: approach, surround
+    // surround offset based on AI mode
+    if (e.aiT <= 0) {
+      e.aiMode = Math.random() < 0.7 ? "approach" : "flank";
+      e.aiT = rand(0.6, 1.6);
+      e.strafeDir = Math.random() < 0.5 ? 1 : -1;
+    }
+    const reach = e.reach;
+    if (adx <= reach + 6 && ady <= CONFIG.depthTol - 4) {
+      if (e.atkCd <= 0) { wantStrike = true; }
+      else { desireX = -sign(dx) * 0.3; desireY = e.strafeDir; } // shuffle
+    } else {
+      // approach but keep some depth spread when flanking
+      if (e.aiMode === "flank") desireY = dy + e.strafeDir * 40;
+    }
+    if (beh === "grappler") {
+      e.blockT = (adx < 90 && Math.random() < 0.02) ? 0.6 : e.blockT;
+    }
+  }
+
+  if (e.isBoss) { updateBossAI(e, tgt, dt); return; }
+
+  if (wantStrike) { startEnemyAttack(e, beh === "ranged"); return; }
+
+  // move toward desire
+  let mx = desireX, my = desireY;
+  const mm = Math.hypot(mx, my);
+  if (mm > 1) { mx /= mm; my /= mm; }
+  const spd = e.speed * (beh === "rush" && adx > 100 ? 1.25 : 1);
+  e.x += mx * spd * dt;
+  e.y += my * spd * 0.8 * dt;
+  e.y = clamp(e.y, CONFIG.beltTop, CONFIG.beltBottom);
+  // keep enemies from stacking exactly
+  separate(e);
+  if (mm > 0.1) { e.state = "walk"; e.walkPhase += dt * 9; } else e.state = "idle";
+}
+
+function separate(e) {
+  for (const o of game.enemies) {
+    if (o === e || !o.alive || o.state === "dying") continue;
+    const dx = e.x - o.x, dy = (e.y - o.y);
+    const d = Math.hypot(dx, dy * 1.5);
+    const min = (e.w + o.w) * 0.45;
+    if (d > 0 && d < min) {
+      const push = (min - d) * 0.5;
+      e.x += (dx / d) * push;
+      e.y += (dy / d) * push * 0.6;
+    }
+  }
+}
+
+function startEnemyAttack(e, ranged) {
+  e.state = "attack"; e.atkT = ranged ? 0.5 : 0.42; e.atkWind = ranged ? 0.28 : 0.18;
+  e.atkCd = e.def.atkCd + rand(0, 0.3);
+  e.rangedShot = !!ranged;
+}
+
+function enemyStrike(e) {
+  if (e.rangedShot) {
+    fireEnemyProjectile(e);
+    return;
+  }
+  // melee hit zone
+  const reach = e.reach;
+  for (const p of livePlayers()) {
+    if (Math.abs(p.x - e.x) <= reach && depthOverlap(p, e, CONFIG.depthTol) && p.z < 36) {
+      const kd = e.isBoss || e.isMini || Math.random() < 0.25;
+      damagePlayer(p, e.dmg, sign(p.x - e.x) || -e.facing, kd);
+    }
+  }
+  hitSpark(e.x + e.facing * reach * 0.6, e.y - e.h * 0.5, e.col, 4, 120);
+}
+
+function fireEnemyProjectile(e) {
+  const tgt = e.target || pickTarget(e);
+  if (!tgt) return;
+  const sx = e.x + e.facing * 18, sy = e.y - e.h * 0.55;
+  const ang = Math.atan2((tgt.y) - sy, (tgt.x) - sx);
+  const spd = e.isBoss ? 360 : 300;
+  game.projectiles.push({
+    x: sx, y: sy, z: e.h * 0.5,
+    vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd * 0.6,
+    dmg: e.def ? e.dmg : 8, life: 2.4, col: e.col, r: 7, t: 0,
+  });
+  audio.tone && audio.ok() && audio.tone("sawtooth", 600, 300, audio.ctx.currentTime, 0.12, 0.1, false);
+}
+
+function updateProjectile(pr, dt) {
+  pr.t += dt; pr.life -= dt;
+  pr.x += pr.vx * dt; pr.y += pr.vy * dt;
+  for (const p of livePlayers()) {
+    if (Math.abs(pr.x - p.x) < 20 && Math.abs((pr.y) - p.y) < 22 && p.z < 30) {
+      damagePlayer(p, pr.dmg, sign(pr.vx) || 1, false);
+      pr.life = 0;
+      hitSpark(pr.x, pr.y, pr.col, 6, 160);
+      return;
+    }
+  }
+  if (pr.y < CONFIG.beltTop - 30 || pr.y > CONFIG.beltBottom + 30) pr.life = 0;
+}
+
+/* ---------------- §P BOSS AI ---------------- */
+function updateBossAI(e, tgt, dt) {
+  const dx = tgt.x - e.x, dy = tgt.y - e.y;
+  const adx = Math.abs(dx), ady = Math.abs(dy);
+  e.facing = sign(dx) || e.facing;
+  e.aiT -= dt;
+  if (e.aiT <= 0) { e.bossMode = Math.random() < 0.35 ? "charge" : "approach"; e.aiT = rand(1.2, 2.4); }
+
+  if (adx <= e.reach && ady <= CONFIG.depthTol && e.atkCd <= 0) {
+    startEnemyAttack(e, false);
+    return;
+  }
+  // ranged boss lobs sometimes
+  if (e.def.ranged && adx > 200 && ady < 40 && e.atkCd <= 0 && Math.random() < 0.5) {
+    startEnemyAttack(e, true);
+    return;
+  }
+  let mx = dx, my = dy;
+  const mm = Math.hypot(mx, my); if (mm > 1) { mx /= mm; my /= mm; }
+  const spd = e.speed * (e.bossMode === "charge" ? 1.5 : 1);
+  e.x += mx * spd * dt; e.y += my * spd * 0.8 * dt;
+  e.y = clamp(e.y, CONFIG.beltTop, CONFIG.beltBottom);
+  e.state = "walk"; e.walkPhase += dt * 8;
+}
+
+/* ---------------- §Q WAVE / SEGMENT FLOW ---------------- */
+function updateFlow(dt) {
+  // boss warning
+  if (game.bossWarnT > 0) {
+    game.bossWarnT -= dt;
+    if (game.bossWarnT <= 0) spawnBoss();
+    return;
+  }
+
+  // remove dead enemies
+  for (let i = game.enemies.length - 1; i >= 0; i--) {
+    if (game.enemies[i].remove) game.enemies.splice(i, 1);
+  }
+  // remove dead projectiles
+  for (let i = game.projectiles.length - 1; i >= 0; i--) {
+    if (game.projectiles[i].life <= 0) game.projectiles.splice(i, 1);
+  }
+  // pickup lifetime
+  for (let i = game.pickups.length - 1; i >= 0; i--) {
+    const pk = game.pickups[i];
+    if (pk.taken || pk.life <= 0) { game.pickups.splice(i, 1); }
+  }
+
+  if (game.transition > 0) {
+    game.transition -= dt;
+    return;
+  }
+
+  if (game.locked && game.spawnedWave) {
+    // are all wave enemies cleared?
+    if (aliveEnemies() === 0 && !game.bossActive) {
+      // segment cleared
+      const seg = curSeg();
+      if (seg.boss !== undefined) {
+        // boss defeated -> stage clear
+        onStageCleared();
+        return;
+      }
+      game.locked = false; game.go = true; game.goArrowT = 0;
+      audio.go();
+    }
+  } else if (game.locked && curSeg().boss !== undefined && !game.spawnedWave && game.bossWarnT <= 0) {
+    // boss segment but boss died super fast / safety
+    if (!game.bossActive && aliveEnemies() === 0) onStageCleared();
+  }
+
+  // GO! state — advance camera as players push right
+  if (game.go && !game.locked) {
+    game.goArrowT += dt;
+    // advance segment when players reach right side
+    const lead = Math.max.apply(null, livePlayers().map(p => p.x).concat([game.camX]));
+    if (lead > game.camX + playW * 0.62) {
+      advanceCamera(dt);
+      if (game.camX >= game.segWorldX + SEG_SCROLL) {
+        nextSegment();
+      }
+    }
+  }
+}
+
+function advanceCamera(dt) {
+  game.camX += 150 * dt; // scroll speed while advancing
+  game.camTargetX = game.camX;
+}
+
+function nextSegment() {
+  game.seg++;
+  game.go = false;
+  if (game.seg >= curStage().segments.length) {
+    onStageCleared();
+    return;
+  }
+  enterSegment();
+}
+
+function onStageCleared() {
+  game.transition = 0.01;
+  if (game.stage + 1 >= stages.length) {
+    state = "win";
+    audio.stageClear();
+    if (game.score > best) { best = game.score; store.set("best", best); }
+    updateFsBtn();
+  } else {
+    state = "clear";
+    audio.stageClear();
+    game.clearedStage = game.stage;
+  }
+}
+
+function continueAfterClear() {
+  state = "play";
+  startStage(game.stage + 1);
+  updateFsBtn();
+}
+
+/* ---------------- camera follow during locked fights ---------------- */
+function updateCamera(dt) {
+  if (game.locked) {
+    // camera fixed at segment fight zone; nudge to frame both players minimally
+    // (keep camX where it is)
+    return;
+  }
+}
+
+/* ---------------- §R MAIN SIM STEP ---------------- */
+const FIXED = 1 / 60;
+let acc = 0;
+function simStep(dt) {
+  if (state !== "play" || paused) return;
+  if (hitstop > 0) { hitstop -= dt; if (hitstop > 0) { /* freeze sim */ return; } }
+  game.time += dt;
+  if (game.comboT > 0) { game.comboT -= dt; if (game.comboT <= 0) resetCombo(); }
+
+  for (const p of game.players) updatePlayer(p, dt);
+  for (const e of game.enemies) updateEnemy(e, dt);
+  for (const pr of game.projectiles) updateProjectile(pr, dt);
+  // pickups fall
+  for (const pk of game.pickups) {
+    pk.t += dt; pk.life -= dt;
+    if (pk.z > 0 || pk.vz !== 0) { pk.vz -= 600 * dt; pk.z += pk.vz * dt; if (pk.z < 0) { pk.z = 0; pk.vz = 0; } }
+  }
+  for (const cr of game.crates) cr.t += dt;
+
+  updateFlow(dt);
+  updateCamera(dt);
+}
+
+/* ---------------- §S INPUT (keyboard) ---------------- */
+const keys = Object.create(null);
+let firstGesture = false;
+
+function onFirstGesture() {
+  if (!firstGesture) {
+    firstGesture = true;
+    audio.unlock();
+    autoRequestFullscreen();
+  } else {
+    audio.unlock();
+  }
+}
+
+// P1 keyboard: WASD/arrows move, J/Z attack, K/X jump, L/C special
+// P2 keyboard: IJKL move, B attack, N jump, M? -> use ',' to avoid mute conflict? spec says M special.
+//   We use 'm' for P2 special but global mute is 'm' only on title/pause; in play, P2 uses m.
+const KEYMAP_P1 = {
+  up: ["w", "arrowup"], down: ["s", "arrowdown"], left: ["a", "arrowleft"], right: ["d", "arrowright"],
+  attack: ["j", "z"], jump: ["k", "x"], special: ["l", "c"],
+};
+const KEYMAP_P2 = {
+  up: ["i"], down: ["k"], left: ["j"], right: ["l"],
+  attack: ["b"], jump: ["n"], special: ["m"],
+};
+// note: P2 'k' (down) conflicts with P1 'k' (jump). To keep clean & documented,
+// P2 uses IJKL where K=down; P1 jump is 'k' too but P1 only uses k if not in 2P? Keep both —
+// in 2P, players are expected to use distinct devices ideally, but keyboard-vs-keyboard is supported
+// with IJKL+BNM for P2 and WASD+JKL... overlapping. To avoid overlap we make P1 use ZX C combos.
+// Simpler: keep P1 on WASD + J/K/L; P2 on Arrows + ,/./ - but spec asked IJKL+B/N/M. We honor IJKL+B/N/M
+// and set P1 attack/jump/special to J/K/L which do NOT overlap IJKL move (different letters). Good.
+
+function keyToAction(map, k) {
+  for (const act in map) if (map[act].indexOf(k) >= 0) return act;
+  return null;
+}
+
+function applyKeyboardInputs() {
+  if (!game) return;
+  const p1 = game.players[0];
+  if (p1) {
+    p1.in.mx = (keys["d"] || keys["arrowright"] ? 1 : 0) - (keys["a"] || keys["arrowleft"] ? 1 : 0);
+    p1.in.my = (keys["s"] || keys["arrowdown"] ? 1 : 0) - (keys["w"] || keys["arrowup"] ? 1 : 0);
+    setBtn(p1, "attack", !!(keys["j"] || keys["z"]) || padBtn(0, "attack"));
+    setBtn(p1, "jump", !!(keys["k"] || keys["x"]) || padBtn(0, "jump"));
+    setBtn(p1, "special", !!(keys["l"] || keys["c"]) || padBtn(0, "special"));
+    const pm = padMove(0);
+    if (pm) { p1.in.mx = pm.x; p1.in.my = pm.y; }
+    if (touchUI && touch.active) applyTouch(p1);
+  }
+  const p2 = game.players[1];
+  if (p2) {
+    let mx = (keys["l"] ? 1 : 0) - (keys["j"] ? 1 : 0);
+    let my = (keys["k"] ? 1 : 0) - (keys["i"] ? 1 : 0);
+    let atk = !!keys["b"], jmp = !!keys["n"], spc = !!keys["m2"]; // m handled specially
+    spc = !!keys["m"] && state === "play";
+    const pm = padMove(1);
+    if (pm) { mx = pm.x; my = pm.y; }
+    p2.in.mx = mx; p2.in.my = my;
+    setBtn(p2, "attack", atk || padBtn(1, "attack"));
+    setBtn(p2, "jump", jmp || padBtn(1, "jump"));
+    setBtn(p2, "special", spc || padBtn(1, "special"));
+  }
+}
+
+function setBtn(p, name, val) {
+  const inp = p.in;
+  inp["p" + name.charAt(0).toUpperCase() + name.slice(1)] = inp[name];
+  inp[name] = val;
+}
+
+function handleKeydown(e) {
+  const k = (e.key || "").toLowerCase();
+  onFirstGesture();
+  // global keys
+  if (k === "p" || k === "escape") {
+    if (state === "play") { paused = !paused; updateFsBtn(); }
+    e.preventDefault(); return;
+  }
+  if (k === "f") { toggleFullscreen(); updateFsBtn(); e.preventDefault(); return; }
+  if (k === "m") {
+    // mute only when not used as P2 special during 2P play
+    if (!(state === "play" && numPlayers === 2)) { audio.toggleMute(); e.preventDefault(); return; }
+  }
+  keys[k] = true;
+  // menus
+  if (state === "title") {
+    if (k === "arrowup" || k === "w") { titleSel = (titleSel + TITLE_ITEMS - 1) % TITLE_ITEMS; audio.toast(); }
+    else if (k === "arrowdown" || k === "s") { titleSel = (titleSel + 1) % TITLE_ITEMS; audio.toast(); }
+    else if (k === "arrowleft" || k === "arrowright" || k === "a" || k === "d") { if (titleSel >= 1) titleAdjust(); }
+    else if (k === "enter" || k === " " || k === "j" || k === "z") { titleConfirm(); }
+    e.preventDefault(); return;
+  }
+  if (state === "over" || state === "win") {
+    if (k === "enter" || k === " " || k === "j" || k === "z") { goTitle(); }
+    e.preventDefault(); return;
+  }
+  if (state === "clear") {
+    if (k === "enter" || k === " " || k === "j" || k === "z") { continueAfterClear(); }
+    e.preventDefault(); return;
+  }
+  if ([" ", "arrowup", "arrowdown", "arrowleft", "arrowright"].indexOf(k) >= 0) e.preventDefault();
+}
+function handleKeyup(e) {
+  const k = (e.key || "").toLowerCase();
+  keys[k] = false;
+}
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("keydown", handleKeydown);
+  window.addEventListener("keyup", handleKeyup);
+  window.addEventListener("pointerdown", onFirstGesture);
+  window.addEventListener("contextmenu", (e) => e.preventDefault());
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && state === "play") { paused = true; updateFsBtn(); }
+  });
+}
+
+/* ---------------- §T GAMEPAD ---------------- */
+const PAD_DEAD = 0.28;
+const padAssign = [null, null];
+let padPrev = {};
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("gamepadconnected", (e) => { showToast("gamepad " + (e.gamepad.index + 1) + " connected"); reassignPads(); });
+  window.addEventListener("gamepaddisconnected", (e) => { showToast("gamepad " + (e.gamepad.index + 1) + " disconnected"); reassignPads(); });
+}
+function getPads() {
+  try { return navigator.getGamepads ? navigator.getGamepads() : []; }
+  catch (e) { return []; }
+}
+function reassignPads() {
+  const pads = getPads();
+  const idxs = [];
+  for (let i = 0; i < pads.length; i++) if (pads[i]) idxs.push(i);
+  padAssign[0] = null; padAssign[1] = null;
+  if (numPlayers === 2) {
+    if (idxs.length >= 1) padAssign[1] = idxs[0];
+    if (idxs.length >= 2) padAssign[0] = idxs[1];
+  } else {
+    if (idxs.length >= 1) padAssign[0] = idxs[0];
+  }
+}
+function readPadRaw(idx) {
+  if (idx == null) return null;
+  const pads = getPads();
+  const gp = pads[idx];
+  if (!gp) return null;
+  const ax = gp.axes || [];
+  let mx = ax[0] || 0, my = ax[1] || 0;
+  const b = gp.buttons || [];
+  const pressed = (i) => b[i] && b[i].pressed;
+  if (pressed(14)) mx = -1; if (pressed(15)) mx = 1;
+  if (pressed(12)) my = -1; if (pressed(13)) my = 1;
+  if (Math.hypot(mx, my) < PAD_DEAD) { mx = 0; my = 0; }
+  return {
+    mx, my,
+    attack: pressed(2) || pressed(3),          // square / triangle = attack
+    jump: pressed(0),                           // cross / A = jump
+    special: pressed(1) || pressed(5) || pressed(7), // circle/B or R1/R2 = special/grab-throw
+    start: pressed(9),
+    confirm: pressed(0) || pressed(9),
+    up: pressed(12) || (ax[1] || 0) < -0.6,
+    down: pressed(13) || (ax[1] || 0) > 0.6,
+    left: pressed(14) || (ax[0] || 0) < -0.6,
+    right: pressed(15) || (ax[0] || 0) > 0.6,
+  };
+}
+function padMove(playerIdx) {
+  const r = readPadRaw(padAssign[playerIdx]);
+  if (!r) return null;
+  if (r.mx === 0 && r.my === 0) return { x: 0, y: 0 };
+  return { x: r.mx, y: r.my };
+}
+function padBtn(playerIdx, name) {
+  const r = readPadRaw(padAssign[playerIdx]);
+  return r ? !!r[name] : false;
+}
+function padEdge(idx, field, val) {
+  const key = idx + ":" + field;
+  const was = padPrev[key];
+  padPrev[key] = val;
+  return val && !was;
+}
+function pollPadMenus() {
+  const pads = getPads();
+  for (let i = 0; i < pads.length; i++) {
+    if (!pads[i]) continue;
+    const p = readPadRaw(i);
+    if (!p) continue;
+    onFirstGesture();
+    if (state === "title") {
+      if (padEdge(i, "up", p.up)) { titleSel = (titleSel + TITLE_ITEMS - 1) % TITLE_ITEMS; audio.toast(); }
+      if (padEdge(i, "down", p.down)) { titleSel = (titleSel + 1) % TITLE_ITEMS; audio.toast(); }
+      if ((padEdge(i, "left", p.left) || padEdge(i, "right", p.right)) && titleSel >= 1) titleAdjust();
+      if (padEdge(i, "confirm", p.confirm)) titleConfirm();
+    } else if (state === "over" || state === "win") {
+      if (padEdge(i, "confirm", p.confirm)) goTitle();
+    } else if (state === "clear") {
+      if (padEdge(i, "confirm", p.confirm)) continueAfterClear();
+    } else if (state === "play") {
+      if (padEdge(i, "start", p.start)) { paused = !paused; updateFsBtn(); }
+    }
+  }
+}
+
+/* ---------------- §T2 TOUCH ---------------- */
+const touch = { active: false, stickX: 0, stickY: 0, stickId: -1, sx: 0, sy: 0, btn: { attack: false, jump: false, special: false }, btnPrev: {} };
+function touchLayout() {
+  const s = viewScale;
+  return {
+    stick: { cx: playX + ps(120), cy: playY + ps(playH - 120), r: ps(78) },
+    attack: { cx: playX + ps(playW - 90), cy: playY + ps(playH - 100), r: ps(50), label: "ATK" },
+    jump: { cx: playX + ps(playW - 200), cy: playY + ps(playH - 80), r: ps(46), label: "JMP" },
+    special: { cx: playX + ps(playW - 130), cy: playY + ps(playH - 210), r: ps(46), label: "SPC" },
+  };
+}
+function hitBtn(L, x, y, name) {
+  const b = L[name];
+  return Math.hypot(x - b.cx, y - b.cy) <= b.r * 1.15;
+}
+function handleTouch(e) {
+  e.preventDefault();
+  onFirstGesture();
+  if (state !== "play") {
+    // tap = confirm/start
+    if (e.type === "touchstart") {
+      if (state === "title") titleConfirm();
+      else if (state === "clear") continueAfterClear();
+      else if (state === "over" || state === "win") goTitle();
+    }
+    return;
+  }
+  const L = touchLayout();
+  const tlist = e.touches;
+  touch.btn.attack = touch.btn.jump = touch.btn.special = false;
+  let stickFound = false;
+  for (let i = 0; i < tlist.length; i++) {
+    const t = tlist[i];
+    const x = t.clientX, y = t.clientY;
+    if (x < cw * 0.45) {
+      // movement side (virtual stick)
+      const dx = x - L.stick.cx, dy = y - L.stick.cy;
+      const d = Math.hypot(dx, dy);
+      const m = Math.min(1, d / L.stick.r);
+      if (d > 8) { touch.stickX = (dx / (d || 1)) * m; touch.stickY = (dy / (d || 1)) * m; }
+      else { touch.stickX = 0; touch.stickY = 0; }
+      stickFound = true;
+    } else {
+      if (hitBtn(L, x, y, "attack")) touch.btn.attack = true;
+      if (hitBtn(L, x, y, "jump")) touch.btn.jump = true;
+      if (hitBtn(L, x, y, "special")) touch.btn.special = true;
+    }
+  }
+  if (!stickFound) { touch.stickX = 0; touch.stickY = 0; }
+  touch.active = true;
+}
+function applyTouch(p) {
+  p.in.mx = touch.stickX; p.in.my = touch.stickY;
+  setBtn(p, "attack", touch.btn.attack);
+  setBtn(p, "jump", touch.btn.jump);
+  setBtn(p, "special", touch.btn.special);
+}
+if (touchUI && typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("touchstart", handleTouch, { passive: false });
+  window.addEventListener("touchmove", handleTouch, { passive: false });
+  window.addEventListener("touchend", handleTouch, { passive: false });
+  window.addEventListener("touchcancel", handleTouch, { passive: false });
+}
+
+/* ---------------- §U TITLE MENU LOGIC ---------------- */
+let titleSel = 0;
+const TITLE_ITEMS = 3; // 0=start, 1=players, 2=autofs
+function titleAdjust() {
+  if (titleSel === 1) { numPlayers = numPlayers === 1 ? 2 : 1; store.set("players", numPlayers); reassignPads(); audio.toast(); }
+  else if (titleSel === 2) { setAutoFullscreen(!FS.auto); audio.toast(); }
+}
+function titleConfirm() {
+  onFirstGesture();
+  if (titleSel === 0) startGame();
+  else titleAdjust();
+}
+function startGame() {
+  newGame();
+  state = "play";
+  paused = false;
+  reassignPads();
+  updateFsBtn();
+}
+function goTitle() {
+  state = "title"; paused = false; titleSel = 0;
+  updateFsBtn();
+}
+
+/* ============================================================
+   §V RENDERING
+   ============================================================ */
+function clearCanvas() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#04040e";
+  ctx.fillRect(0, 0, cw, ch);
+}
+
+// neon text helper (canvas px coords)
+function neonText(str, x, y, size, color, align) {
+  ctx.save();
+  ctx.font = "700 " + size + "px 'Courier New', monospace";
+  ctx.textAlign = align || "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = color; ctx.shadowBlur = size * 0.7;
+  ctx.fillStyle = color;
+  ctx.fillText(str, x, y);
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+/* ---- parallax backgrounds (3 stage variants) ---- */
+const BG_THEMES = [
+  { sky: ["#0a0a24", "#15043a"], far: "#241a55", mid: "#3a2a7a", near: "#5b3fb0", accent: "#19e6ff" },
+  { sky: ["#1a0420", "#33063a"], far: "#5a1a4a", mid: "#7a2a5a", near: "#b03f8a", accent: "#ff4fd0" },
+  { sky: ["#04121a", "#063340"], far: "#0d4a55", mid: "#1a6a7a", near: "#2a9ab0", accent: "#46ffe6" },
+];
+function drawBackground() {
+  const th = BG_THEMES[curStage() ? curStage().bg : 0];
+  // sky gradient
+  const g = ctx.createLinearGradient(0, playY, 0, playY + ps(CONFIG.beltBottom));
+  g.addColorStop(0, th.sky[0]); g.addColorStop(1, th.sky[1]);
+  ctx.fillStyle = g;
+  ctx.fillRect(playX, playY, playW * viewScale, ps(CONFIG.beltBottom));
+  const cam = game ? game.camX : 0;
+  // distant skyline (slow parallax) — procedural neon towers
+  drawSkyline(cam * 0.15, th.far, 0.5, 120, 0.28, 41);
+  drawSkyline(cam * 0.3, th.mid, 0.7, 170, 0.5, 73);
+  drawSkyline(cam * 0.55, th.near, 1.0, 230, 0.85, 131);
+  // horizon glow
+  ctx.save();
+  ctx.globalAlpha = 0.25;
+  const hg = ctx.createLinearGradient(0, py(CONFIG.beltTop - 60), 0, py(CONFIG.beltTop + 20));
+  hg.addColorStop(0, "rgba(0,0,0,0)"); hg.addColorStop(1, th.accent);
+  ctx.fillStyle = hg;
+  ctx.fillRect(playX, py(CONFIG.beltTop - 60), playW * viewScale, ps(80));
+  ctx.restore();
+}
+function pseudo(n) { const x = Math.sin(n * 12.9898) * 43758.5453; return x - Math.floor(x); }
+function drawSkyline(scroll, color, alpha, baseH, op, seed) {
+  ctx.save();
+  ctx.globalAlpha = op;
+  const tile = 140;
+  const startX = -((scroll % tile) + tile);
+  const groundY = py(CONFIG.beltTop + 10);
+  for (let i = -1, sx = startX; sx < playW * viewScale + tile; i++, sx += tile) {
+    const idx = Math.floor((scroll + (sx - playX)) / tile) + seed;
+    const h = ps(baseH * (0.5 + pseudo(idx) * 0.9));
+    const w = ps(60 + pseudo(idx * 2.3) * 50);
+    const x = playX + sx + ps(20);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, groundY - h, w, h);
+    // windows
+    ctx.fillStyle = color;
+    ctx.globalAlpha = op * 0.6;
+    if (pseudo(idx * 3.1) > 0.4) {
+      ctx.fillStyle = "rgba(255,255,255," + (0.05 + pseudo(idx * 5) * 0.12) + ")";
+      for (let wy = groundY - h + ps(10); wy < groundY - ps(6); wy += ps(16)) {
+        for (let wx = x + ps(6); wx < x + w - ps(6); wx += ps(12)) {
+          if (pseudo(wx * 0.7 + wy * 1.3 + idx) > 0.55) ctx.fillRect(wx, wy, ps(4), ps(7));
+        }
+      }
+    }
+    ctx.globalAlpha = op;
+  }
+  ctx.restore();
+}
+
+/* ---- floor with perspective lines ---- */
+function drawFloor() {
+  const th = BG_THEMES[curStage() ? curStage().bg : 0];
+  const cam = game ? game.camX : 0;
+  const top = py(CONFIG.beltTop), bot = py(CONFIG.beltBottom);
+  // floor base
+  const fg = ctx.createLinearGradient(0, top, 0, bot);
+  fg.addColorStop(0, "#0a0a1e"); fg.addColorStop(1, "#141430");
+  ctx.fillStyle = fg;
+  ctx.fillRect(playX, top, playW * viewScale, bot - top);
+  // perspective vertical lines (scroll with cam)
+  ctx.save();
+  ctx.strokeStyle = th.accent; ctx.globalAlpha = 0.16; ctx.lineWidth = Math.max(1, ps(1.5));
+  const spacing = 90;
+  const vanishX = playX + playW * viewScale * 0.5;
+  for (let wx = -(cam % spacing); wx < playW + spacing; wx += spacing) {
+    const sx = playX + ps(wx);
+    // converge toward vanish a bit at top
+    const topX = lerp(sx, vanishX, 0.18);
+    ctx.beginPath();
+    ctx.moveTo(topX, top);
+    ctx.lineTo(sx, bot);
+    ctx.stroke();
+  }
+  // horizontal depth lines
+  for (let i = 0; i <= 4; i++) {
+    const t = i / 4;
+    const y = lerp(top, bot, t * t * 0.6 + t * 0.4);
+    ctx.globalAlpha = 0.10 + t * 0.08;
+    ctx.beginPath(); ctx.moveTo(playX, y); ctx.lineTo(playX + playW * viewScale, y); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* ---- shadow ---- */
+function drawShadow(x, y, w) {
+  ctx.save();
+  ctx.globalAlpha = 0.35;
+  ctx.fillStyle = "#000";
+  ctx.beginPath();
+  ctx.ellipse(px(x), py(y), ps(w * 0.5), ps(w * 0.22), 0, 0, TAU);
+  ctx.fill();
+  ctx.restore();
+}
+
+/* ---- character figure drawing (procedural neon vector) ----
+   Drawn in canvas px. Each character: legs, torso, head, arms with
+   pose driven by state + animation. */
+function drawBrawler(p) {
+  const x = px(p.x), groundY = py(p.y), z = ps(p.z);
+  const bodyY = groundY - z;
+  const f = p.facing;
+  const col = p.col;
+  const flashing = (p.flash > 0 && Math.floor(p.flash * 30) % 2 === 0) || (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0);
+  const main = flashing ? "#ffffff" : col.body;
+  const scale = ps(1);
+  const w = 18 * scale, hgt = 56 * scale;
+
+  drawShadow(p.x, p.y, 38 + (p.state === "knockdown" || p.downed ? 14 : 0));
+
+  ctx.save();
+  ctx.translate(x, bodyY);
+  ctx.scale(f, 1);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.shadowColor = col.glow; ctx.shadowBlur = 14;
+  ctx.strokeStyle = main; ctx.fillStyle = main;
+
+  let lean = 0, armAng = 0, kneeBend = 0, legSpread = 0;
+  const wp = p.walkPhase || 0;
+
+  if (p.state === "knockdown" || p.downed || p.state === "down") {
+    // lying figure
+    ctx.rotate(-0.0);
+    drawProneFigure(main, col, scale);
+    ctx.restore();
+    drawPTag(p, x, groundY - z - hgt - 18 * scale);
+    return;
+  }
+  if (p.state === "getup") { lean = -0.3; kneeBend = 0.5; }
+  if (p.state === "walk") { legSpread = Math.sin(wp) * 8 * scale; armAng = Math.sin(wp) * 0.5; lean = 0.06; }
+  if (p.state === "attack") {
+    const t = clamp(p.atkT / 0.26, 0, 1);
+    armAng = lerp(-0.4, 1.4, Math.min(1, t * 2.2));
+    lean = 0.12;
+  }
+  if (p.state === "jump") { kneeBend = 0.6; lean = 0.08; if (p.jumpKicking > 0) { legSpread = 16 * scale; } }
+  if (p.state === "special") { lean = 0; armAng = Math.sin(p.atkT * 30) * 0.8; }
+  if (p.state === "hurt") { lean = -0.25; }
+
+  // LEGS
+  const hipY = -22 * scale;
+  ctx.lineWidth = 6 * scale;
+  ctx.beginPath();
+  ctx.moveTo(0, hipY);
+  ctx.lineTo(-legSpread * 0.5, hipY + (18 - kneeBend * 6) * scale);
+  ctx.lineTo(-legSpread * 0.5 - 2 * scale, 0);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0, hipY);
+  ctx.lineTo(legSpread * 0.5 + (p.jumpKicking > 0 ? 14 * scale : 0), hipY + (18 - kneeBend * 6) * scale);
+  ctx.lineTo(legSpread * 0.5 + (p.jumpKicking > 0 ? 28 * scale : 2 * scale), (p.jumpKicking > 0 ? -6 * scale : 0));
+  ctx.stroke();
+
+  // TORSO
+  ctx.save();
+  ctx.translate(0, hipY);
+  ctx.rotate(lean);
+  ctx.lineWidth = 9 * scale;
+  ctx.beginPath();
+  ctx.moveTo(0, 0); ctx.lineTo(0, -22 * scale);
+  ctx.stroke();
+  // chest plate accent
+  ctx.fillStyle = flashing ? "#fff" : col.trim;
+  ctx.globalAlpha = 0.8;
+  ctx.beginPath(); ctx.ellipse(2 * scale, -12 * scale, 5 * scale, 7 * scale, 0, 0, TAU); ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = main;
+
+  // HEAD
+  ctx.beginPath();
+  ctx.arc(1 * scale, -30 * scale, 7 * scale, 0, TAU);
+  ctx.fill();
+  // visor
+  ctx.fillStyle = flashing ? "#222" : "#06121a";
+  ctx.fillRect(2 * scale, -32 * scale, 7 * scale, 3 * scale);
+  ctx.fillStyle = main;
+
+  // ARMS
+  ctx.lineWidth = 5 * scale;
+  const shoulderY = -20 * scale;
+  // back arm
+  ctx.beginPath();
+  ctx.moveTo(-1 * scale, shoulderY);
+  ctx.lineTo(-7 * scale, shoulderY + 12 * scale);
+  ctx.stroke();
+  // front arm (punch)
+  let ax2, ay2;
+  if (p.state === "attack") {
+    const ext = clamp((p.atkT - 0.04) / 0.1, 0, 1);
+    ax2 = lerp(8 * scale, 26 * scale, ext);
+    ay2 = lerp(shoulderY + 6 * scale, shoulderY - 2 * scale, ext);
+    // fist glow
+    if (ext > 0.3) { ctx.save(); ctx.shadowBlur = 18; ctx.beginPath(); ctx.arc(ax2, ay2, 4 * scale, 0, TAU); ctx.fill(); ctx.restore(); }
+  } else if (p.state === "special") {
+    ax2 = 18 * scale + Math.cos(p.atkT * 30) * 6 * scale; ay2 = shoulderY - 4 * scale;
+  } else {
+    ax2 = 6 * scale + armAng * 8 * scale; ay2 = shoulderY + 10 * scale;
+  }
+  ctx.beginPath();
+  ctx.moveTo(3 * scale, shoulderY);
+  ctx.lineTo(ax2 * 0.6, shoulderY + 6 * scale);
+  ctx.lineTo(ax2, ay2);
+  ctx.stroke();
+
+  // weapon (pipe)
+  if (p.weapon) {
+    ctx.save();
+    ctx.shadowBlur = 16; ctx.strokeStyle = "#ffe14a"; ctx.lineWidth = 4 * scale;
+    ctx.beginPath(); ctx.moveTo(ax2, ay2); ctx.lineTo(ax2 + 22 * scale, ay2 - 8 * scale); ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.restore(); // torso
+  ctx.restore(); // figure
+
+  // P tag
+  drawPTag(p, x, bodyY - hgt - 14 * scale);
+}
+
+function drawProneFigure(main, col, scale) {
+  ctx.lineWidth = 7 * scale;
+  ctx.beginPath();
+  ctx.moveTo(-22 * scale, -6 * scale);
+  ctx.lineTo(18 * scale, -6 * scale);
+  ctx.stroke();
+  ctx.beginPath(); ctx.arc(22 * scale, -8 * scale, 6 * scale, 0, TAU); ctx.fill();
+  ctx.lineWidth = 5 * scale;
+  ctx.beginPath(); ctx.moveTo(-10 * scale, -6 * scale); ctx.lineTo(-18 * scale, -14 * scale); ctx.stroke();
+}
+
+function drawPTag(p, x, y) {
+  ctx.save();
+  ctx.font = "700 " + Math.max(9, ps(11)) + "px 'Courier New', monospace";
+  ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  ctx.shadowColor = p.col.body; ctx.shadowBlur = 6;
+  ctx.fillStyle = p.col.body;
+  ctx.fillText("P" + (p.idx + 1), x, y);
+  ctx.restore();
+  // small floating arrow marker
+}
+
+/* ---- enemy figures (distinct silhouettes per type) ---- */
+function drawEnemy(e) {
+  const x = px(e.x), groundY = py(e.y), z = ps(e.z);
+  const bodyY = groundY - z;
+  const f = e.facing;
+  const scale = ps(1) * (e.def.w / 34);
+  const flashing = e.flash > 0 && Math.floor(e.flash * 40) % 2 === 0;
+  const main = flashing ? "#ffffff" : e.col;
+  const dying = e.state === "dying";
+
+  drawShadow(e.x, e.y, e.w * 1.05);
+
+  ctx.save();
+  ctx.translate(x, bodyY);
+  if (dying) { ctx.globalAlpha = clamp(e.dieT / 0.5, 0, 1); ctx.rotate((1 - e.dieT / 0.5) * f * 0.6); }
+  ctx.scale(f, 1);
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.shadowColor = e.glow; ctx.shadowBlur = 12;
+  ctx.strokeStyle = main; ctx.fillStyle = main;
+
+  const lying = (e.knockT > 0 || e.thrown || e.state === "knock");
+  if (lying && !dying) {
+    drawProneFigure(main, e.col, scale);
+    ctx.restore();
+    drawEnemyBar(e);
+    return;
+  }
+
+  const wp = e.walkPhase || 0;
+  let legSpread = e.state === "walk" ? Math.sin(wp) * 7 * scale : 0;
+  let armAng = e.state === "walk" ? Math.sin(wp) * 0.4 : 0;
+  let lean = e.state === "walk" ? 0.05 : 0;
+  let punch = 0;
+  if (e.state === "attack") { punch = clamp(1 - e.atkT / 0.4, 0, 1); lean = 0.12; }
+  if (e.state === "hurt") lean = -0.2;
+
+  const baseH = 50 * scale;
+  const hipY = -22 * scale;
+  // LEGS
+  ctx.lineWidth = 6 * scale;
+  ctx.beginPath(); ctx.moveTo(0, hipY); ctx.lineTo(-legSpread * 0.5, 0); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, hipY); ctx.lineTo(legSpread * 0.5, 0); ctx.stroke();
+
+  ctx.save();
+  ctx.translate(0, hipY);
+  ctx.rotate(lean);
+
+  // type-specific torso/head silhouette
+  const t = e.type;
+  ctx.lineWidth = (t === "bruiser" || t === "boss" || e.isMini ? 12 : 8) * scale;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -22 * scale); ctx.stroke();
+
+  // head shape varies
+  ctx.beginPath();
+  if (t === "dagger") {
+    // sleek, pointed hood
+    ctx.moveTo(-5 * scale, -28 * scale); ctx.lineTo(4 * scale, -36 * scale); ctx.lineTo(8 * scale, -26 * scale); ctx.closePath(); ctx.fill();
+  } else if (t === "gunner") {
+    ctx.arc(1 * scale, -29 * scale, 6 * scale, 0, TAU); ctx.fill();
+    // antenna
+    ctx.lineWidth = 2 * scale; ctx.beginPath(); ctx.moveTo(2 * scale, -34 * scale); ctx.lineTo(6 * scale, -42 * scale); ctx.stroke();
+  } else if (t === "bruiser" || t === "boss" || e.isMini) {
+    // big blocky head + shoulders
+    ctx.fillRect(-7 * scale, -34 * scale, 14 * scale, 12 * scale);
+    ctx.fillStyle = "#06121a"; ctx.fillRect(-3 * scale, -31 * scale, 9 * scale, 3 * scale); ctx.fillStyle = main;
+  } else {
+    ctx.arc(1 * scale, -29 * scale, 6 * scale, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#06121a"; ctx.fillRect(1 * scale, -31 * scale, 6 * scale, 2.5 * scale); ctx.fillStyle = main;
+  }
+
+  // ARMS
+  ctx.lineWidth = (t === "bruiser" || t === "boss" || e.isMini ? 7 : 5) * scale;
+  const sh = -20 * scale;
+  ctx.beginPath(); ctx.moveTo(-1 * scale, sh); ctx.lineTo(-7 * scale, sh + 12 * scale); ctx.stroke();
+  // front arm — weapon for dagger, gun for gunner
+  const ax2 = (8 + punch * 16) * scale, ay2 = sh + (6 - punch * 4) * scale;
+  ctx.beginPath(); ctx.moveTo(2 * scale, sh); ctx.lineTo(ax2, ay2); ctx.stroke();
+  if (t === "dagger") {
+    ctx.save(); ctx.strokeStyle = "#fff"; ctx.shadowBlur = 14; ctx.lineWidth = 2.5 * scale;
+    ctx.beginPath(); ctx.moveTo(ax2, ay2); ctx.lineTo(ax2 + 10 * scale, ay2 - 4 * scale); ctx.stroke(); ctx.restore();
+  } else if (t === "gunner") {
+    ctx.save(); ctx.fillStyle = "#888"; ctx.shadowBlur = 8;
+    ctx.fillRect(ax2, ay2 - 2 * scale, 12 * scale, 4 * scale); ctx.restore();
+    if (e.state === "attack" && punch > 0.5) { ctx.save(); ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(ax2 + 14 * scale, ay2, 3 * scale, 0, TAU); ctx.fill(); ctx.restore(); }
+  } else if (e.blockT > 0) {
+    // block pose: arm forward as guard
+    ctx.save(); ctx.lineWidth = 8 * scale; ctx.beginPath(); ctx.moveTo(2 * scale, sh); ctx.lineTo(12 * scale, sh + 2 * scale); ctx.stroke(); ctx.restore();
+  }
+
+  ctx.restore(); // torso
+  ctx.restore(); // figure
+
+  drawEnemyBar(e);
+}
+
+function drawEnemyBar(e) {
+  if (!(e.isBoss || e.isMini)) return;
+  if (e.state === "dying") return;
+  const w = ps(e.isBoss ? 60 : 46), x = px(e.x) - w / 2, y = py(e.y - e.h - e.z / viewScale) - ps(18);
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(x - 1, y - 1, w + 2, ps(5) + 2);
+  ctx.fillStyle = e.hp / e.maxHp > 0.3 ? "#ff5a78" : "#ff2040";
+  ctx.fillRect(x, y, w * clamp(e.hp / e.maxHp, 0, 1), ps(5));
+  ctx.restore();
+}
+
+/* ---- pickups & crates ---- */
+function drawCrate(cr) {
+  if (cr.broken) return;
+  const x = px(cr.x), y = py(cr.y);
+  drawShadow(cr.x, cr.y, 40);
+  ctx.save();
+  ctx.translate(x, y - ps(20));
+  ctx.shadowColor = "rgba(120,220,255,0.5)"; ctx.shadowBlur = 12;
+  ctx.strokeStyle = "#8fdcff"; ctx.lineWidth = ps(3);
+  const s = ps(18);
+  ctx.strokeRect(-s, -s, s * 2, s * 2);
+  ctx.beginPath(); ctx.moveTo(-s, -s); ctx.lineTo(s, s); ctx.moveTo(s, -s); ctx.lineTo(-s, s); ctx.stroke();
+  ctx.restore();
+}
+function drawPickup(pk) {
+  const x = px(pk.x), y = py(pk.y) - ps(pk.z);
+  drawShadow(pk.x, pk.y, 22);
+  ctx.save();
+  ctx.translate(x, y - ps(8));
+  const bob = Math.sin(pk.t * 5) * ps(3);
+  ctx.translate(0, bob);
+  ctx.shadowBlur = 14;
+  if (pk.kind === "food") {
+    ctx.shadowColor = "#6bff8f"; ctx.fillStyle = "#6bff8f";
+    ctx.beginPath(); ctx.arc(0, 0, ps(9), 0, TAU); ctx.fill();
+    ctx.fillStyle = "#063"; ctx.fillRect(-ps(2), -ps(11), ps(4), ps(4));
+  } else if (pk.kind === "coin") {
+    ctx.shadowColor = "#ffec6b"; ctx.fillStyle = "#ffec6b";
+    ctx.beginPath(); ctx.arc(0, 0, ps(8), 0, TAU); ctx.fill();
+    ctx.fillStyle = "#a80"; ctx.font = "700 " + ps(10) + "px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText("$", 0, ps(1));
+  } else {
+    ctx.shadowColor = "#ffe14a"; ctx.strokeStyle = "#ffe14a"; ctx.lineWidth = ps(4);
+    ctx.beginPath(); ctx.moveTo(-ps(12), ps(6)); ctx.lineTo(ps(12), -ps(6)); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawProjectile(pr) {
+  const x = px(pr.x), y = py(pr.y) - ps(pr.z * 0.0);
+  ctx.save();
+  ctx.shadowColor = pr.col; ctx.shadowBlur = 14; ctx.fillStyle = pr.col;
+  ctx.beginPath(); ctx.arc(x, y, ps(pr.r), 0, TAU); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(x, y, ps(pr.r * 0.4), 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+/* ---- y-sorted scene render ---- */
+function renderScene() {
+  // collect drawables with sort key = y (depth) + z handled via draw
+  const drawables = [];
+  for (const cr of game.crates) if (!cr.broken) drawables.push({ y: cr.y, fn: () => drawCrate(cr) });
+  for (const pk of game.pickups) if (!pk.taken) drawables.push({ y: pk.y - 0.1, fn: () => drawPickup(pk) });
+  for (const e of game.enemies) drawables.push({ y: e.y, fn: () => drawEnemy(e) });
+  for (const p of game.players) if (p.alive || p.downed) drawables.push({ y: p.y, fn: () => drawBrawler(p) });
+  drawables.sort((a, b) => a.y - b.y);
+  for (const d of drawables) d.fn();
+  // projectiles on top
+  for (const pr of game.projectiles) drawProjectile(pr);
+}
+
+function renderParticles() {
+  for (const p of parts) {
+    if (!p.on) continue;
+    const a = clamp(p.life / p.max, 0, 1);
+    if (p.kind === 0) {
+      ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = p.col; ctx.shadowColor = p.col; ctx.shadowBlur = ps(6);
+      ctx.beginPath(); ctx.arc(px(p.x), py(p.y), ps(p.size) * a, 0, TAU); ctx.fill(); ctx.restore();
+    } else {
+      const r = ps(p.size) * (1 - a);
+      ctx.save(); ctx.globalAlpha = a * 0.7; ctx.strokeStyle = p.col; ctx.shadowColor = p.col; ctx.shadowBlur = ps(8); ctx.lineWidth = ps(3);
+      ctx.beginPath(); ctx.arc(px(p.x), py(p.y), r, 0, TAU); ctx.stroke(); ctx.restore();
+    }
+  }
+  for (const s of sparks) {
+    if (!s.on) continue;
+    const a = clamp(s.life / s.max, 0, 1);
+    ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = s.col; ctx.shadowColor = s.col; ctx.shadowBlur = ps(8);
+    const sz = ps(s.size) * a;
+    ctx.translate(px(s.x), py(s.y)); ctx.rotate(Math.atan2(s.vy, s.vx));
+    ctx.fillRect(-sz, -sz * 0.3, sz * 2, sz * 0.6);
+    ctx.restore();
+  }
+}
+function renderTexts() {
+  for (const t of texts) {
+    if (!t.on) continue;
+    const a = clamp(t.life / t.max, 0, 1);
+    ctx.save(); ctx.globalAlpha = a;
+    neonText(t.str, px(t.x), py(t.y), Math.max(11, ps(t.size)), t.col);
+    ctx.restore();
+  }
+}
+
+/* ---- HUD ---- */
+function drawHUD() {
+  const pad = ps(14);
+  // player panels
+  game.players.forEach((p, i) => {
+    const x = i === 0 ? playX + pad : playX + playW * viewScale - pad - ps(220);
+    const y = playY + pad;
+    drawPlayerPanel(p, x, y, i === 1);
+  });
+  // score center
+  neonText("SCORE " + game.score, playX + playW * viewScale / 2, playY + pad + ps(8), Math.max(13, ps(18)), "#bff8ff");
+  neonText("BEST " + best, playX + playW * viewScale / 2, playY + pad + ps(30), Math.max(10, ps(12)), "#7fd6ff");
+  // stage
+  neonText("STAGE " + (game.stage + 1) + "-" + (game.seg + 1), playX + playW * viewScale / 2, playY + pad + ps(50), Math.max(10, ps(12)), "#9be7ff");
+
+  // combo
+  if (game.combo >= 3 && game.comboT > 0) {
+    ctx.save();
+    const a = clamp(game.comboT, 0, 1);
+    ctx.globalAlpha = a;
+    neonText(game.combo + " COMBO", playX + playW * viewScale / 2, playY + ps(110), Math.max(16, ps(26 + Math.min(game.combo, 20))), "#ffec6b");
+    ctx.restore();
+  }
+
+  // boss bar
+  if (game.bossActive) {
+    const b = game.bossActive;
+    const bw = playW * viewScale * 0.6, bx = playX + (playW * viewScale - bw) / 2, by = playY + playH * viewScale - ps(40);
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.55)"; ctx.fillRect(bx - 2, by - 2, bw + 4, ps(14) + 4);
+    ctx.fillStyle = "#ff3b6b"; ctx.shadowColor = "#ff3b6b"; ctx.shadowBlur = ps(8);
+    ctx.fillRect(bx, by, bw * clamp(b.hp / b.maxHp, 0, 1), ps(14));
+    ctx.restore();
+    neonText(b.name || "BOSS", playX + playW * viewScale / 2, by - ps(12), Math.max(11, ps(14)), "#ffd0d8");
+  }
+
+  // GO! arrow
+  if (game.go && !game.locked) {
+    const blink = Math.floor(performance.now() / 250) % 2 === 0;
+    if (blink) {
+      const gx = playX + playW * viewScale - ps(70), gy = playY + playH * viewScale * 0.32;
+      neonText("GO!", gx, gy, Math.max(20, ps(34)), "#6bff8f");
+      ctx.save();
+      ctx.strokeStyle = "#6bff8f"; ctx.shadowColor = "#6bff8f"; ctx.shadowBlur = ps(10); ctx.lineWidth = ps(4);
+      ctx.beginPath(); ctx.moveTo(gx - ps(24), gy + ps(28)); ctx.lineTo(gx + ps(24), gy + ps(28));
+      ctx.lineTo(gx + ps(8), gy + ps(16)); ctx.moveTo(gx + ps(24), gy + ps(28)); ctx.lineTo(gx + ps(8), gy + ps(40));
+      ctx.stroke(); ctx.restore();
+    }
+  }
+
+  // boss warning
+  if (game.bossWarnT > 0) {
+    const a = Math.abs(Math.sin(game.bossWarnT * 8));
+    ctx.save(); ctx.globalAlpha = a;
+    neonText("⚠ WARNING ⚠", playX + playW * viewScale / 2, playY + playH * viewScale * 0.4, Math.max(20, ps(40)), "#ff3b6b");
+    ctx.restore();
+  }
+}
+
+function drawPlayerPanel(p, x, y, right) {
+  const w = ps(210), bh = ps(14);
+  ctx.save();
+  // tag
+  neonText("P" + (p.idx + 1), x + ps(14), y + ps(8), Math.max(12, ps(15)), p.col.body, "left");
+  // hp bar
+  const hx = x + ps(36);
+  ctx.fillStyle = "rgba(0,0,0,0.5)"; ctx.fillRect(hx, y, w - ps(36), bh);
+  if (p.alive) {
+    const t = clamp(p.hp / p.maxHp, 0, 1);
+    ctx.fillStyle = t > 0.3 ? p.col.body : "#ff4040"; ctx.shadowColor = p.col.glow; ctx.shadowBlur = ps(6);
+    ctx.fillRect(hx, y, (w - ps(36)) * t, bh);
+    ctx.shadowBlur = 0;
+  } else {
+    ctx.fillStyle = "#440"; ctx.fillRect(hx, y, w - ps(36), bh);
+  }
+  ctx.strokeStyle = p.col.body; ctx.globalAlpha = 0.7; ctx.lineWidth = 1; ctx.strokeRect(hx, y, w - ps(36), bh);
+  ctx.globalAlpha = 1;
+  // lives icons
+  for (let i = 0; i < p.lives; i++) {
+    ctx.fillStyle = p.col.body; ctx.shadowColor = p.col.glow; ctx.shadowBlur = ps(4);
+    ctx.beginPath(); ctx.arc(hx + ps(8) + i * ps(14), y + bh + ps(10), ps(4), 0, TAU); ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+  if (p.weapon) neonText("PIPE x" + p.weaponUses, hx + ps(70), y + bh + ps(10), Math.max(9, ps(11)), "#ffe14a", "left");
+  if (!p.alive && p.downed) neonText("DOWN", hx + ps(110), y + ps(7), Math.max(10, ps(12)), "#ff6080", "left");
+  ctx.restore();
+}
+
+/* ---- touch controls overlay ---- */
+function drawTouchControls() {
+  if (!touchUI || state !== "play") return;
+  const L = touchLayout();
+  ctx.save();
+  ctx.globalAlpha = 0.32;
+  // stick
+  ctx.strokeStyle = "#9be7ff"; ctx.lineWidth = ps(3);
+  ctx.beginPath(); ctx.arc(L.stick.cx, L.stick.cy, L.stick.r, 0, TAU); ctx.stroke();
+  ctx.fillStyle = "#9be7ff";
+  ctx.beginPath(); ctx.arc(L.stick.cx + touch.stickX * L.stick.r * 0.6, L.stick.cy + touch.stickY * L.stick.r * 0.6, L.stick.r * 0.4, 0, TAU); ctx.fill();
+  // buttons
+  const btns = [["attack", "#ff4fd0"], ["jump", "#19e6ff"], ["special", "#ffec6b"]];
+  for (const [name, c] of btns) {
+    const b = L[name];
+    ctx.strokeStyle = c; ctx.fillStyle = c; ctx.lineWidth = ps(3);
+    ctx.globalAlpha = touch.btn[name] ? 0.5 : 0.28;
+    ctx.beginPath(); ctx.arc(b.cx, b.cy, b.r, 0, TAU); ctx.stroke();
+    ctx.globalAlpha = 0.6;
+    ctx.font = "700 " + ps(13) + "px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(b.label, b.cx, b.cy);
+  }
+  ctx.restore();
+}
+
+/* ---- title / over / clear screens ---- */
+function howToLines() {
+  if (touchUI) {
+    return [
+      "移动：左侧虚拟摇杆 — move (left stick)",
+      "ATK 攻击 · JMP 跳 · SPC 必杀 — attack / jump / special",
+      "走向敌人拓击，可投技 — walk into a foe to grab/throw",
+      "目标：清场推进，击败BOSS — clear waves, beat the boss",
+    ];
+  }
+  const pad = padAssign.some(p => p != null);
+  if (pad) {
+    return [
+      "移动：摇杆/方向键 — move (stick / d-pad)",
+      "□ 攻击 · × 跳 · ○/R1 必杀 — attack / jump / special",
+      "走向敌人拓击，○ 投技 — walk into a foe to grab/throw",
+      "目标：清场推进，击败BOSS — clear waves, beat the boss",
+      "Start 开始/暂停 · P 暂停 · M 静音 · F 全屏",
+    ];
+  }
+  return [
+    "P1 移动：WASD/方向键 — move (8-dir)",
+    "J 攻击 · K 跳 · L 必杀 — attack / jump / special",
+    "走向敌人拓击，L 投技 — walk into a foe to grab/throw",
+    "P2 键盘：IJKL 移动 · B 攻击 · N 跳 · M 必杀",
+    "目标：清场推进，击败BOSS — clear waves, beat the boss",
+    "P 暂停 · M 静音 · F 全屏",
+  ];
+}
+
+function drawTitle() {
+  // animated bg
+  drawBackground();
+  drawFloor();
+  const cx = playX + playW * viewScale / 2;
+  const topY = playY + playH * viewScale * 0.16;
+  // title
+  ctx.save();
+  const pulse = 1 + Math.sin(performance.now() / 500) * 0.03;
+  ctx.translate(cx, topY); ctx.scale(pulse, pulse);
+  neonText("NEON", 0, -ps(22), Math.max(36, ps(64)), "#19e6ff");
+  neonText("FURY", 0, ps(34), Math.max(36, ps(64)), "#ff4fd0");
+  ctx.restore();
+  neonText("belt-scroll brawler", cx, topY + ps(78), Math.max(11, ps(14)), "#9be7ff");
+
+  // menu items
+  const items = [
+    "START",
+    (numPlayers === 2 ? "PLAYERS: 2  (CO-OP)" : "PLAYERS: 1"),
+    "AUTO-FULLSCREEN: " + (FS.auto ? "ON" : "OFF"),
+  ];
+  const my0 = playY + playH * viewScale * 0.5;
+  items.forEach((it, i) => {
+    const sel = i === titleSel;
+    const y = my0 + i * ps(40);
+    const c = i === 0 ? "#6bff8f" : (i === 1 ? "#ff4fd0" : "#9be7ff");
+    neonText((sel ? "▸ " : "  ") + it + (sel && i > 0 ? " ◂" : ""), cx, y, Math.max(14, ps(sel ? 22 : 18)), sel ? "#ffffff" : c);
+  });
+  neonText(touchUI ? "tap to start · 点击开始" : "ENTER / □ / J to start · 回车开始", cx, my0 + ps(140), Math.max(11, ps(14)), "#ffec6b");
+  neonText("BEST " + best, cx, my0 + ps(166), Math.max(11, ps(14)), "#bff8ff");
+
+  // how-to panel
+  const lines = howToLines();
+  const hy = my0 + ps(196);
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  neonText("操作说明 · HOW TO PLAY", cx, hy, Math.max(12, ps(15)), "#19e6ff");
+  ctx.restore();
+  lines.forEach((ln, i) => {
+    ctx.save(); ctx.globalAlpha = 0.85;
+    ctx.font = Math.max(10, ps(12)) + "px 'Courier New', monospace";
+    ctx.fillStyle = "#bfe9ff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(ln, cx, hy + ps(22) + i * ps(18));
+    ctx.restore();
+  });
+}
+
+function drawOverlayCenter(title, titleCol, sub, sub2) {
+  ctx.save();
+  ctx.fillStyle = "rgba(2,2,12,0.72)";
+  ctx.fillRect(playX, playY, playW * viewScale, playH * viewScale);
+  ctx.restore();
+  const cx = playX + playW * viewScale / 2, cy = playY + playH * viewScale * 0.42;
+  neonText(title, cx, cy, Math.max(28, ps(54)), titleCol);
+  if (sub) neonText(sub, cx, cy + ps(60), Math.max(13, ps(18)), "#bff8ff");
+  if (sub2) neonText(sub2, cx, cy + ps(92), Math.max(11, ps(14)), "#9be7ff");
+}
+
+function drawPauseOverlay() {
+  drawOverlayCenter("PAUSED", "#19e6ff", "P / Esc / Start — resume 继续", "M 静音 · F 全屏 — mute / fullscreen");
+}
+
+/* ---------------- §W RENDER ROOT ---------------- */
+function render() {
+  clearCanvas();
+  // shake offset
+  let ox = 0, oy = 0;
+  if (shakeT > 0) { ox = rand(-shakeMag, shakeMag); oy = rand(-shakeMag, shakeMag); }
+  ctx.save();
+  ctx.translate(ox, oy);
+
+  if (state === "title") {
+    drawTitle();
+  } else {
+    drawBackground();
+    drawFloor();
+    renderParticles(); // ground sparks behind chars (will also draw after); cheap
+    renderScene();
+    renderTexts();
+    drawHUD();
+    drawTouchControls();
+    if (state === "over") drawOverlayCenter("GAME OVER", "#ff3b6b", "SCORE " + game.score, touchUI ? "tap to continue 点击继续" : "ENTER / □ — title 回标题");
+    else if (state === "clear") drawOverlayCenter("STAGE CLEAR", "#6bff8f", "STAGE " + ((game.clearedStage || 0) + 1) + " — " + stages[game.clearedStage || 0].name, touchUI ? "tap to continue 点击继续" : "ENTER / □ — next stage 下一关");
+    else if (state === "win") drawOverlayCenter("YOU WIN!", "#ffec6b", "FINAL SCORE " + game.score, touchUI ? "tap to continue 点击继续" : "ENTER / □ — title 回标题");
+    if (paused && state === "play") drawPauseOverlay();
+  }
+
+  // toast
+  if (toastT > 0) {
+    ctx.save(); ctx.globalAlpha = clamp(toastT, 0, 1);
+    neonText(toastMsg, playX + playW * viewScale / 2, playY + playH * viewScale * 0.14, Math.max(13, ps(18)), "#9be7ff");
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/* ---------------- §X MAIN LOOP ---------------- */
+let lastT = 0;
+function frame(now) {
+  const t = now / 1000;
+  let dt = lastT ? t - lastT : 0;
+  lastT = t;
+  if (dt > 0.1) dt = 0.1;
+
+  pollPadMenus();
+  applyKeyboardInputs();
+
+  // fixed-timestep sim
+  acc += dt;
+  let steps = 0;
+  while (acc >= FIXED && steps < 8) {
+    simStep(FIXED);
+    acc -= FIXED; steps++;
+  }
+  if (steps === 8) acc = 0;
+
+  // real-time effect timers (tick even when paused / on menus)
+  updateParts(dt); updateSparks(dt); updateTexts(dt);
+  if (shakeT > 0) { shakeT -= dt; if (shakeT <= 0) shakeMag = 0; }
+  if (toastT > 0) toastT -= dt;
+
+  render();
+  requestAnimationFrame(frame);
+}
+reassignPads();
+updateFsBtn();
+if (typeof requestAnimationFrame === "function") requestAnimationFrame(frame);
+
+/* ---------------- §Y HEADLESS TEST HOOKS ---------------- */
+if (typeof window !== "undefined") {
+  window.__NF = {
+    get state() { return state; }, set state(v) { state = v; },
+    get game() { return game; },
+    get paused() { return paused; }, set paused(v) { paused = v; },
+    get numPlayers() { return numPlayers; }, set numPlayers(v) { numPlayers = v; },
+    get best() { return best; },
+    CONFIG, ENEMY_DEF, BOSS_DEF, stages,
+    newGame, simStep, startGame, goTitle, startStage, enterSegment, spawnWave, spawnBoss,
+    spawnEnemy, spawnPickup, spawnCrate, breakCrate,
+    damageEnemy, killEnemy, damagePlayer, downPlayer, loseLifeRespawn, checkGameOver, endGame,
+    tryAttack, startSwing, jumpKick, useSpecial, startGrab, throwEnemy, findGrabTarget,
+    aliveEnemies, livePlayers, updateFlow, onStageCleared, continueAfterClear, nextSegment,
+    parts, sparks, texts, keys, padPrev,
+    reassignPads, pollPadMenus, applyKeyboardInputs, padBtn, padMove, readPadRaw,
+    setPlayers(n) { numPlayers = n; },
+    get padAssign() { return padAssign; },
+    render, resize, depthOverlap, COL,
+    titleConfirm, titleAdjust, get titleSel() { return titleSel; }, set titleSel(v) { titleSel = v; },
+  };
+}
+</script>
+</body>
+</html>
