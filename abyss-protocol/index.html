@@ -100,7 +100,19 @@
 
 /* ---------------- §B CONFIG ---------------- */
 const CONFIG = Object.freeze({
-  arenaW: 960, arenaH: 600,     // logical arena size
+  // logical arena size — now LARGER than one screen; a scrolling follow camera
+  // (see computeView/updateCamera) shows only a sliding window of this space.
+  // ~2x the legacy 960x600 so the hero roams a real room bigger than the view.
+  arenaW: 2000, arenaH: 1280,   // logical arena size
+  // follow-camera tuning (all screen-px / world-px ratios unless noted):
+  camZoom: 1.55,                // base 1P world->screen scale (combat readability)
+  camZoomMin: 0.62,             // never zoom out past this (readability floor; 2P fit)
+  camZoomMax: 2.0,              // never zoom in past this (e.g. tiny screens)
+  camLerp: 7.0,                 // follow smoothing (per-second lerp rate)
+  camLook: 0.18,                // look-ahead fraction toward aim/velocity
+  camLookMax: 150,              // max look-ahead offset (world px)
+  coopMargin: 200,             // world-px padding kept around both players in 2P fit
+  coopMaxSep: 1100,             // soft tether: max 2P separation the camera will allow
   wall: 14,                     // wall inset
   playerR: 13,
   playerSpeed: 252,
@@ -163,8 +175,34 @@ const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const arcadeLink = document.getElementById("arcade");
 let cw = 0, ch = 0, dpr = 1;
-let aS = 1, aOX = 0, aOY = 0;   // arena scale & offset (screen px)
+let aS = 1, aOX = 0, aOY = 0;   // arena scale & offset (screen px) — derived from cam each frame
 let vigGrad = null, lowHpGrad = null;
+
+/* ---- SCROLLING FOLLOW CAMERA ----
+   The arena is now bigger than the screen. `cam` holds the world point shown at the
+   centre of the available (HUD-inset) view band, plus the world->screen zoom. Each
+   frame updateCamera() lerps cam toward the player(s) (with look-ahead) and picks a
+   zoom (1P: a fixed combat zoom; 2P: zoom out to frame both), then computeView()
+   derives the legacy aS/aOX/aOY transform from cam and CLAMPS so the view never shows
+   past the arena edges. All existing world<->screen helpers (w2sX/s2wX/...) stay valid
+   because they only read aS/aOX/aOY. */
+const cam = {
+  cx: CONFIG.arenaW / 2, cy: CONFIG.arenaH / 2, // world point at view centre
+  zoom: CONFIG.camZoom,
+  tx: CONFIG.arenaW / 2, ty: CONFIG.arenaH / 2, // smoothed look-ahead target
+  inited: false,
+};
+// available (HUD-inset) view rectangle in screen px — also where the view is centred
+function viewBand() {
+  const u = clamp(Math.min(cw, ch) / 640, 0.72, 1.25); // mirrors us()
+  const topHud = 46 * u;          // boss bar + depth/cores readout clearance
+  const botHud = 78 * u;          // player HP/energy/dash/boon block (P1 left / P2 right)
+  const sideMargin = 16;
+  const x = sideMargin, y = topHud;
+  const w = Math.max(80, cw - sideMargin * 2);
+  const h = Math.max(80, ch - topHud - botHud);
+  return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
+}
 
 function resize() {
   dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -177,32 +215,37 @@ function resize() {
   vigGrad = null;
   lowHpGrad = null;
 }
+/* lowest zoom that still keeps a span of (spanW x spanH) world px inside the view band */
+function fitZoom(spanW, spanH) {
+  const vb = viewBand();
+  return Math.min(vb.w / Math.max(1, spanW), vb.h / Math.max(1, spanH));
+}
+/* derive the legacy aS/aOX/aOY transform from cam; clamp so the WHOLE screen stays in-bounds
+   (not just the HUD-inset band) — nothing past the arena edges is ever shown anywhere. */
 function computeView() {
   const A = CONFIG;
-  // Reserve screen-anchored HUD insets (scaled by the UI scale us()), then fit the
-  // fixed-size arena into the remaining space and let it scale UP on large displays.
-  // The whole arena is always drawn (camera never tracks a sub-region), so fitting the
-  // full room here guarantees both players + room bounds stay in frame at any zoom.
-  // UI scale (mirrors us()); inlined so computeView is safe to call during early init.
-  const u = clamp(Math.min(cw, ch) / 640, 0.72, 1.25);
-  const topHud = 46 * u;          // boss bar + depth/cores readout clearance
-  const botHud = 78 * u;          // player HP/energy/dash/boon block (P1 left / P2 right)
-  const sideMargin = 16;          // small breathing room at the screen edges
-  // 2P spreads players wider, so give it a touch more vertical clearance for the
-  // mirrored bars but it shares the same fit logic (one screen, whole arena visible).
-  const availW = Math.max(80, cw - sideMargin * 2);
-  const availH = Math.max(80, ch - topHud - botHud);
-  let fit = Math.min(availW / A.arenaW, availH / A.arenaH);
-  // Fill the available real estate: raise the cap further so big/4K monitors in
-  // fullscreen get a large arena. `fit` (whole 960x600 room into the HUD-inset band)
-  // is always the limiter, so the full arena + both players stay on-screen; the cap
-  // is only an upper bound to avoid pathological zoom. 2P is allowed slightly more.
-  const maxZoom = nPlayersSafe() > 1 ? 4.0 : 3.8;
-  aS = clamp(fit, 0.35, maxZoom);
-  // Center the arena within the free band between the top and bottom HUD insets.
-  aOX = (cw - A.arenaW * aS) / 2;
-  aOY = topHud + (availH - A.arenaH * aS) / 2;
+  const vb = viewBand();
+  aS = clamp(cam.zoom, 0.05, 8);
+  // place the camera's world centre at the view-band centre (screen px)
+  let ox = vb.cx - cam.cx * aS;
+  let oy = vb.cy - cam.cy * aS;
+  // clamp the offsets so the full screen window [0,cw]x[0,ch] stays within [0,arena].
+  // world->screen: screen = world*aS + offset, so the screen edge 0 maps to world (-offset/aS)
+  // and edge cw to world (cw-offset)/aS. Require those within [0, arenaW] (resp. H).
+  const wScreenW = A.arenaW * aS, wScreenH = A.arenaH * aS;
+  if (wScreenW <= cw) ox = (cw - wScreenW) / 2;        // arena narrower than screen -> centre
+  else ox = clamp(ox, cw - wScreenW, 0);               // else keep edges covered
+  if (wScreenH <= ch) oy = (ch - wScreenH) / 2;
+  else oy = clamp(oy, ch - wScreenH, 0);
+  aOX = ox; aOY = oy;
+  // back-solve the (clamped) world centre actually shown so cam stays consistent for follow
+  cam.cx = (vb.cx - aOX) / aS;
+  cam.cy = (vb.cy - aOY) / aS;
 }
+// Reads numPlayers if initialized; returns 1 during early module init (TDZ-safe).
+function nPlayersSafe() { try { return numPlayers; } catch (e) { return 1; } }
+window.addEventListener("resize", resize);
+resize();
 // Reads numPlayers if initialized; returns 1 during early module init (TDZ-safe).
 function nPlayersSafe() { try { return numPlayers; } catch (e) { return 1; } }
 window.addEventListener("resize", resize);
@@ -213,6 +256,114 @@ const s2wY = (sy) => (sy - aOY) / aS;
 const w2sX = (wx) => wx * aS + aOX;
 const w2sY = (wy) => wy * aS + aOY;
 const us = () => clamp(Math.min(cw, ch) / 640, 0.72, 1.25);  // ui scale
+
+/* ---- camera follow update ----
+   Called once per render frame with the real frame dt. Picks a desired centre + zoom
+   from the live player(s), smoothly lerps toward it, then computeView() clamps to bounds.
+   1P: centre on the player with a small look-ahead toward aim/velocity at the base zoom.
+   2P: centre on the players' midpoint and zoom OUT to frame both (clamped min/max zoom);
+   if they separate beyond what min-zoom can show, the view soft-clamps to keep both in. */
+function alivePlayersForCam() {
+  const out = [];
+  if (typeof players === "undefined" || !players) return out;
+  for (const p of players) if (p && (p.hp > 0 || p.downed)) out.push(p);
+  return out;
+}
+function cameraDesired() {
+  const A = CONFIG;
+  const ps = alivePlayersForCam();
+  // fallback: no live players -> arena centre at base zoom
+  if (!ps.length) return { cx: A.arenaW / 2, cy: A.arenaH / 2, zoom: A.camZoom };
+  if (ps.length === 1 || nPlayersSafe() <= 1) {
+    const p = ps[0];
+    // look-ahead toward aim, blended with velocity, capped
+    let lx = 0, ly = 0;
+    if (typeof p.aim === "number") { lx = Math.cos(p.aim); ly = Math.sin(p.aim); }
+    const vmag = Math.hypot(p.vx || 0, p.vy || 0);
+    if (vmag > 1) { lx = (lx + (p.vx / vmag)) * 0.5; ly = (ly + (p.vy / vmag)) * 0.5; }
+    const look = Math.min(A.camLookMax, A.camLook * 600);
+    return { cx: p.x + lx * look, cy: p.y + ly * look, zoom: A.camZoom };
+  }
+  // 2P: frame both. Soft-tether: clamp the span used for fit to coopMaxSep so we never
+  // zoom out absurdly far; the spawn/movement also gets nudged in updateCamera below.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, sx = 0, sy = 0;
+  for (const p of ps) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); sx += p.x; sy += p.y; }
+  const cx = sx / ps.length, cy = sy / ps.length;
+  let spanW = (maxX - minX) + A.coopMargin * 2;
+  let spanH = (maxY - minY) + A.coopMargin * 2;
+  let z = fitZoom(spanW, spanH);
+  z = clamp(z, A.camZoomMin, A.camZoom); // never tighter than base in 2P, never below floor
+  return { cx, cy, zoom: z };
+}
+function updateCamera(dt) {
+  const A = CONFIG;
+  const want = cameraDesired();
+  // clamp zoom to global min/max
+  want.zoom = clamp(want.zoom, A.camZoomMin, A.camZoomMax);
+  if (!cam.inited) { cam.cx = want.cx; cam.cy = want.cy; cam.zoom = want.zoom; cam.inited = true; }
+  // boss entrance: focus/zoom toward the boss within the scrolling view (overrides follow).
+  // Centre directly on the boss for the cutscene (the bounds clamp in computeView keeps it on
+  // screen even near an edge); zoom pulses in toward the slam then settles.
+  if (typeof bossEntrance !== "undefined" && bossEntrance) {
+    const be = bossEntrance;
+    const pr = clamp(be.t / be.dur, 0, 1);
+    const env = Math.sin(pr * Math.PI); // 0..1..0 ease
+    want.cx = be.x;
+    want.cy = be.y;
+    want.zoom = clamp(A.camZoom * (1 + 0.45 * env), A.camZoomMin, A.camZoomMax);
+  }
+  const t = 1 - Math.exp(-A.camLerp * Math.max(0, dt)); // frame-rate-independent lerp
+  cam.cx += (want.cx - cam.cx) * t;
+  cam.cy += (want.cy - cam.cy) * t;
+  cam.zoom += (want.zoom - cam.zoom) * t;
+  computeView();
+}
+/* snap the camera instantly to its desired pose (room entry, hub, etc.) — no easing */
+function snapCamera() {
+  const want = cameraDesired();
+  want.zoom = clamp(want.zoom, CONFIG.camZoomMin, CONFIG.camZoomMax);
+  cam.cx = want.cx; cam.cy = want.cy; cam.zoom = want.zoom; cam.inited = true;
+  computeView();
+}
+/* visible world rectangle (with a margin) for culling off-view draws. Cheap: reads aS/aOX/aOY.
+   Returns {x0,y0,x1,y1}. A reusable object to avoid per-frame allocation in hot loops. */
+const _viewRect = { x0: 0, y0: 0, x1: 0, y1: 0 };
+function viewWorldRect(margin) {
+  const m = margin || 0;
+  _viewRect.x0 = (0 - aOX) / aS - m;
+  _viewRect.y0 = (0 - aOY) / aS - m;
+  _viewRect.x1 = (cw - aOX) / aS + m;
+  _viewRect.y1 = (ch - aOY) / aS + m;
+  return _viewRect;
+}
+/* is a world circle (x,y,r) within the current view (plus margin)? for per-entity culling */
+function inView(x, y, r) {
+  const v = _viewRect;
+  return x + r >= v.x0 && x - r <= v.x1 && y + r >= v.y0 && y - r <= v.y1;
+}
+
+/* 2P soft tether: if players drift beyond coopMaxSep, pull them gently toward the midpoint
+   so neither leaves the framed view. Called from step() each tick (gameplay-fair, tiny). */
+function applyCoopTether(dt) {
+  if (nPlayersSafe() <= 1) return;
+  const ps = alivePlayersForCam();
+  if (ps.length < 2) return;
+  let cx = 0, cy = 0;
+  for (const p of ps) { cx += p.x; cy += p.y; }
+  cx /= ps.length; cy /= ps.length;
+  const maxHalf = CONFIG.coopMaxSep / 2;
+  for (const p of ps) {
+    const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy);
+    if (d > maxHalf && d > 0.001) {
+      // pull the overshoot back toward the centre (soft spring; firm enough that a player can't
+      // drag the framed view past coopMaxSep, gentle enough not to fight normal movement).
+      const over = d - maxHalf;
+      const k = Math.min(1, 14 * dt);
+      p.x -= (dx / d) * over * k;
+      p.y -= (dy / d) * over * k;
+    }
+  }
+}
 
 /* ---------------- §C2 FULLSCREEN ----------------
    Browsers only grant requestFullscreen() from a user gesture, so we fire it from
@@ -1378,11 +1529,13 @@ const STYLE_RANKS = [
 ];
 
 const HUB = {
-  termX: CONFIG.arenaW * 0.74, termY: CONFIG.arenaH * 0.52, termR: 52,
-  heatX: CONFIG.arenaW * 0.26, heatY: CONFIG.arenaH * 0.52, heatR: 52,
-  rackX: CONFIG.arenaW * 0.26, rackY: CONFIG.arenaH * 0.84, rackR: 52,
-  statX: CONFIG.arenaW * 0.74, statY: CONFIG.arenaH * 0.84, statR: 52,
-  exitX: CONFIG.arenaW / 2, exitY: 52, exitW: 130, exitH: 36,
+  // kept compact around the arena centre (the arena is much larger than the screen now) so the
+  // hub stays a cozy room the player can roam between stations with the follow camera.
+  termX: CONFIG.arenaW * 0.62, termY: CONFIG.arenaH * 0.46, termR: 52,
+  heatX: CONFIG.arenaW * 0.38, heatY: CONFIG.arenaH * 0.46, heatR: 52,
+  rackX: CONFIG.arenaW * 0.38, rackY: CONFIG.arenaH * 0.66, rackR: 52,
+  statX: CONFIG.arenaW * 0.62, statY: CONFIG.arenaH * 0.66, statR: 52,
+  exitX: CONFIG.arenaW / 2, exitY: CONFIG.arenaH * 0.30, exitW: 130, exitH: 36,
 };
 
 /* ---------------- §H INPUT ---------------- */
@@ -2993,18 +3146,28 @@ function clearSpawnPoint() {
 
 function queueWave(list) {
   eliteSpawned = false; // one elite per wave in elite rooms
-  let cx = rand(180, CONFIG.arenaW - 180), cy = rand(140, CONFIG.arenaH - 200);
+  const A = CONFIG;
+  // The arena is now bigger than the screen, so spawn enemies in a ring at a moderate
+  // distance AROUND the players' centroid (not anywhere in the room) — close enough that
+  // they reach the fight quickly and stay near/on-screen, far enough to telegraph fairly.
+  let pcx = player.x, pcy = player.y, pn = 1;
+  for (const p of players) if (p && p !== player && (p.hp > 0 || p.downed)) { pcx += p.x; pcy += p.y; pn++; }
+  pcx /= pn; pcy /= pn;
+  let ringA = rand(0, TAU); // a cluster bearing, jittered per enemy, occasionally re-rolled
   for (const type of list) {
     let x = 0, y = 0, tries = 0, ok = false;
     while (tries++ < 30 && !ok) {
-      x = clamp(cx + rand(-220, 220), 60, CONFIG.arenaW - 60);
-      y = clamp(cy + rand(-180, 180), 70, CONFIG.arenaH - 70);
-      ok = dist(x, y, player.x, player.y) > 170;
+      const ang = ringA + rand(-0.7, 0.7);
+      const r = rand(280, 560); // spawn band: outside melee but well within travel range
+      x = clamp(pcx + Math.cos(ang) * r, 60, A.arenaW - 60);
+      y = clamp(pcy + Math.sin(ang) * r, 70, A.arenaH - 70);
+      ok = dist(x, y, player.x, player.y) > 200;
+      for (const p of players) if (p && dist(x, y, p.x, p.y) < 180) ok = false;
       for (const p of pillars) if (dist(x, y, p.x, p.y) < p.r + 30) ok = false;
     }
     if (!ok) { const f = clearSpawnPoint(); x = f.x; y = f.y; } // guaranteed never inside a wall
     spawnQ.push({ type, x, y, t: rand(0.7, 1.1) });
-    if (Math.random() < 0.35) { cx = rand(180, CONFIG.arenaW - 180); cy = rand(140, CONFIG.arenaH - 200); }
+    if (Math.random() < 0.4) ringA = rand(0, TAU); // spread successive clusters around the players
   }
 }
 
@@ -3233,6 +3396,7 @@ function genRoom() {
   pendingRoom = null;
   runTrack[depth] = roomType;
   placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH - 90);
+  snapCamera(); // jump the follow camera to the new spawn so the room doesn't pan in
   roomFade = 1;
   if (roomType === "shop") {
     // Charon-style shop room: combat-free, pedestals priced in cores
@@ -3477,6 +3641,7 @@ function spawnPlayers() {
   player = players[0];
   ctxP = players[0];
   placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH * 0.62);
+  snapCamera();
 }
 /* arrange players around a spawn anchor so they don't fully overlap */
 function placePlayers(cx, cy) {
@@ -5471,6 +5636,14 @@ function updateEnemy(e, dt) {
   const p = targetFor(e) || player; // co-op: aggro the nearest living player
   e._tgt = p;
   const d = dist(e.x, e.y, p.x, p.y);
+  // ANTI-STALL on the bigger arena: a foe far from every player drifts in a touch faster so
+  // wave-clears never hang on a straggler stuck off-screen. Applied as a small extra position
+  // nudge toward the target (doesn't touch e.speed, so enrage/elite/totem buffs are preserved).
+  if (e.type !== "totem" && d > 640) {
+    const boost = clamp((d - 640) / 16, 0, 70); // up to ~70 px/s extra closing speed
+    e.x += (p.x - e.x) / d * boost * dt;
+    e.y += (p.y - e.y) / d * boost * dt;
+  }
 
   if (e.type === "chaser") {
     e.cd = Math.max(0, e.cd - dt);
@@ -6518,6 +6691,7 @@ function step(dt) {
   for (const p of players) {
     if (p && (p.hp > 0 || p.downed)) updatePlayer(p, dt);
   }
+  applyCoopTether(dt); // 2P: keep both players within the framed view (soft pull at max sep)
   ctxP = players[0] || null;
 
   // style meter chain decay
@@ -6852,7 +7026,8 @@ function step(dt) {
 
 function updateMotes(dt) {
   if (!ffx.ambient) { if (motes.length) motes.length = 0; return; }
-  const want = ffx.level === "full" ? 34 : 18;
+  // scaled up for the larger arena so on-screen mote density stays similar (off-view culled)
+  const want = ffx.level === "full" ? 90 : 48;
   while (motes.length < want) {
     motes.push({
       x: rand(0, CONFIG.arenaW), y: rand(0, CONFIG.arenaH),
@@ -6908,22 +7083,29 @@ function biomeForDepth(d) {
 function drawArenaFloor() {
   const A = CONFIG;
   const bi = state === "hub" ? BIOMES[0] : biomeForDepth(depth);
-  // floor
+  // floor — fill only the visible window (arena is bigger than the screen now).
+  // Compute the visible rect LOCALLY (don't clobber the shared _viewRect used for cull margins).
+  const vx0 = (0 - aOX) / aS - 8, vy0 = (0 - aOY) / aS - 8;
+  const vx1 = (cw - aOX) / aS + 8, vy1 = (ch - aOY) / aS + 8;
+  const fx0 = clamp(vx0, 0, A.arenaW), fy0 = clamp(vy0, 0, A.arenaH);
+  const fx1 = clamp(vx1, 0, A.arenaW), fy1 = clamp(vy1, 0, A.arenaH);
   ctx.fillStyle = bi.floor;
-  ctx.fillRect(0, 0, A.arenaW, A.arenaH);
-  // grid
+  ctx.fillRect(fx0, fy0, fx1 - fx0, fy1 - fy0);
+  // grid — only the lines crossing the visible window
   ctx.strokeStyle = bi.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let x = 60; x < A.arenaW; x += 60) { ctx.moveTo(x, 0); ctx.lineTo(x, A.arenaH); }
-  for (let y = 60; y < A.arenaH; y += 60) { ctx.moveTo(0, y); ctx.lineTo(A.arenaW, y); }
+  const gx0 = Math.max(60, Math.floor(fx0 / 60) * 60), gx1 = Math.min(A.arenaW - 1, fx1);
+  const gy0 = Math.max(60, Math.floor(fy0 / 60) * 60), gy1 = Math.min(A.arenaH - 1, fy1);
+  for (let x = gx0; x < gx1; x += 60) { ctx.moveTo(x, fy0); ctx.lineTo(x, fy1); }
+  for (let y = gy0; y < gy1; y += 60) { ctx.moveTo(fx0, y); ctx.lineTo(fx1, y); }
   ctx.stroke();
-  // soft center light
-  const g = ctx.createRadialGradient(A.arenaW / 2, A.arenaH / 2, 50, A.arenaW / 2, A.arenaH / 2, A.arenaW * 0.7);
+  // soft center light (arena centre)
+  const g = ctx.createRadialGradient(A.arenaW / 2, A.arenaH / 2, 50, A.arenaW / 2, A.arenaH / 2, A.arenaW * 0.5);
   g.addColorStop(0, bi.light);
   g.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = g;
-  ctx.fillRect(0, 0, A.arenaW, A.arenaH);
+  ctx.fillRect(fx0, fy0, fx1 - fx0, fy1 - fy0);
   // walls
   const w = A.wall;
   glow(state === "hub" ? "#44ddaa" : "#3355ff", 14);
@@ -6942,7 +7124,8 @@ function drawLighting() {
   lights.length = 0;
   if (ffx.level === "off") return;
   const cap = ffx.lightCap;
-  const add = (x, y, r, col, a) => { if (lights.length < cap) lights.push({ x, y, r, col, a }); };
+  // cull lights outside the visible window (arena is bigger than the screen)
+  const add = (x, y, r, col, a) => { if (lights.length < cap && inView(x, y, r)) lights.push({ x, y, r, col, a }); };
   // player core glow (per player; weapon-tinted slash glow)
   if (state === "play" || state === "hub") {
     for (const p of players) {
@@ -7018,6 +7201,7 @@ function bloomCircle(x, y, r, col, a) {
 function drawMotes() {
   if (!ffx.ambient || !motes.length) return;
   for (const m of motes) {
+    if (!inView(m.x, m.y, m.r + 4)) continue; // cull off-view ambient motes
     const tw = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(timeNow * 2 + m.ph));
     ctx.fillStyle = m.col + tw + ")";
     ctx.beginPath(); ctx.arc(m.x, m.y, m.r, 0, TAU); ctx.fill();
@@ -9097,6 +9281,7 @@ function drawBeamsParts() {
     ctx.restore();
   }
   for (const p of parts) {
+    if (!inView(p.x, p.y, p.r + 2)) continue; // cull off-view particles
     ctx.globalAlpha = clamp(p.t / p.tm, 0, 1);
     ctx.fillStyle = p.col;
     ctx.fillRect(p.x - p.r / 2, p.y - p.r / 2, p.r, p.r);
@@ -9555,6 +9740,69 @@ function drawBossEntrance() {
   ctx.restore();
 }
 
+/* ---- MINIMAP ----
+   The arena is bigger than the screen, so a small screen-anchored neon minimap (mid-right
+   edge) shows the whole room: bounds, obstacles, hazards/exits, the player(s), enemies and
+   the boss as dots, plus the current view rectangle. Cheap: simple rects/arcs, no gradients. */
+function drawMinimap(u) {
+  if (state !== "play") return;
+  const A = CONFIG;
+  // size scales with UI; keep aspect of the arena. Anchor to the right edge, vertically centred.
+  const mw = clamp(cw * 0.16, 110, 200) * (0.7 + 0.3 * u);
+  const mh = mw * (A.arenaH / A.arenaW);
+  const mx = cw - mw - 12, my = ch * 0.5 - mh / 2;
+  const sx = mw / A.arenaW, sy = mh / A.arenaH;
+  const wx = (x) => mx + x * sx, wy = (y) => my + y * sy;
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  // panel bg + neon border
+  ctx.fillStyle = "rgba(6,8,22,0.62)";
+  rrect(mx - 4, my - 4, mw + 8, mh + 8, 5); ctx.fill();
+  ctx.strokeStyle = "rgba(94,230,255,0.5)";
+  ctx.lineWidth = 1;
+  rrect(mx - 4, my - 4, mw + 8, mh + 8, 5); ctx.stroke();
+  // arena bounds
+  ctx.strokeStyle = "rgba(90,110,255,0.55)";
+  ctx.strokeRect(mx, my, mw, mh);
+  // obstacles
+  ctx.fillStyle = "rgba(80,110,200,0.5)";
+  for (const pl of pillars) { ctx.beginPath(); ctx.arc(wx(pl.x), wy(pl.y), Math.max(1.2, pl.r * sx), 0, TAU); ctx.fill(); }
+  // hazards
+  ctx.fillStyle = "rgba(255,90,90,0.7)";
+  for (const h of hazards) {
+    if (h.kind === "spike") { ctx.fillRect(wx(h.x) - 1.5, wy(h.y) - 1.5, 3, 3); }
+    else if (h.kind === "fence") { ctx.beginPath(); ctx.moveTo(wx(h.x1), wy(h.y1)); ctx.lineTo(wx(h.x2), wy(h.y2)); ctx.strokeStyle = "rgba(255,90,140,0.7)"; ctx.lineWidth = 1; ctx.stroke(); }
+  }
+  for (const b of barrels) { if (!b.dead) { ctx.fillStyle = "rgba(255,176,80,0.8)"; ctx.fillRect(wx(b.x) - 1.5, wy(b.y) - 1.5, 3, 3); } }
+  // exits (doors) when the room is clear
+  if (roomClear) {
+    ctx.fillStyle = "rgba(120,255,180,0.95)";
+    for (const d of doors) { ctx.fillRect(wx(d.x) - 2, wy(d.y) - 2, 4, 4); }
+  }
+  // enemies / boss dots
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    if (e.type === "boss") { ctx.fillStyle = "#ff3366"; ctx.beginPath(); ctx.arc(wx(e.x), wy(e.y), 4, 0, TAU); ctx.fill(); }
+    else { ctx.fillStyle = "rgba(255,90,120,0.95)"; ctx.beginPath(); ctx.arc(wx(e.x), wy(e.y), 1.8, 0, TAU); ctx.fill(); }
+  }
+  // current view rectangle (what's on screen)
+  const v = viewWorldRect(0);
+  ctx.strokeStyle = "rgba(255,255,255,0.45)";
+  ctx.lineWidth = 1;
+  const rx0 = clamp(v.x0, 0, A.arenaW), ry0 = clamp(v.y0, 0, A.arenaH);
+  const rx1 = clamp(v.x1, 0, A.arenaW), ry1 = clamp(v.y1, 0, A.arenaH);
+  ctx.strokeRect(wx(rx0), wy(ry0), (rx1 - rx0) * sx, (ry1 - ry0) * sy);
+  // players (own colours, brighter)
+  for (const p of players) {
+    if (!p || (p.hp <= 0 && !p.downed)) continue;
+    glow(p.col, 6);
+    ctx.fillStyle = p.downed ? "rgba(120,120,140,0.9)" : p.col;
+    ctx.beginPath(); ctx.arc(wx(p.x), wy(p.y), 3, 0, TAU); ctx.fill();
+    noglow();
+  }
+  ctx.restore();
+}
+
 function drawHUD() {
   const u = us();
   const p = player;
@@ -9592,6 +9840,8 @@ function drawHUD() {
   }
   // run progress depth track (top-left)
   drawDepthTrack(u);
+  // navigation minimap (mid-right) — the arena is bigger than the screen now
+  drawMinimap(u);
   // per-player boon icon rows: P1 on its own side (left), P2 on its own side (right),
   // each rendered identically. (Fix: previously only P1's boons drew, anchored left.)
   drawPlayerBoons(player, u, by, "left");
@@ -10316,9 +10566,12 @@ function uiClick(x, y) {
 }
 
 /* ---------------- §U RENDER: MAIN ---------------- */
-function render() {
+function render(frameDt) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  computeView();
+  // advance the scrolling follow camera (1P/2P fit + boss focus), then derive the transform.
+  // updateCamera() calls computeView() internally (clamps the view to arena bounds).
+  if (state === "play" || state === "hub") updateCamera(frameDt || 0);
+  else computeView();
   // bg
   ctx.fillStyle = "#050514";
   ctx.fillRect(0, 0, cw, ch);
@@ -10340,30 +10593,22 @@ function render() {
   }
   ctx.save();
   ctx.translate(aOX, aOY);
-  if (srot) { // rotate about arena center for the trauma roll
-    const cx = (CONFIG.arenaW / 2) * aS, cy = (CONFIG.arenaH / 2) * aS;
-    ctx.translate(cx, cy); ctx.rotate(srot); ctx.translate(-cx, -cy);
+  if (srot) { // rotate about the view centre (screen px) for the trauma roll
+    const vb = viewBand();
+    ctx.translate(vb.cx - aOX, vb.cy - aOY); ctx.rotate(srot); ctx.translate(-(vb.cx - aOX), -(vb.cy - aOY));
   }
   ctx.translate(sx2, sy2);
   ctx.scale(aS, aS);
-  if (slowmoT > 0) { // execution slow-mo: subtle zoom pulse on the arena
+  if (slowmoT > 0) { // execution slow-mo: subtle zoom pulse about the camera centre
     const z = 1 + 0.05 * Math.sin((slowmoT / 0.5) * Math.PI);
-    ctx.translate(CONFIG.arenaW / 2, CONFIG.arenaH / 2);
+    ctx.translate(cam.cx, cam.cy);
     ctx.scale(z, z);
-    ctx.translate(-CONFIG.arenaW / 2, -CONFIG.arenaH / 2);
+    ctx.translate(-cam.cx, -cam.cy);
   }
-  // BOSS ENTRANCE: camera focuses/zooms toward the boss for the cutscene beat, easing in
-  // then settling. Drawn in the same arena transform so everything stays aligned.
-  if (bossEntrance) {
-    const be = bossEntrance;
-    const p = clamp(be.t / be.dur, 0, 1);
-    // zoom in toward ~1.5x by the slam, then ease back as it ends
-    const env = Math.sin(clamp(p, 0, 1) * Math.PI); // 0..1..0
-    const z = 1 + 0.5 * env;
-    ctx.translate(be.x, be.y);
-    ctx.scale(z, z);
-    ctx.translate(-be.x, -be.y);
-  }
+  // BOSS ENTRANCE focus/zoom is now handled by the scrolling follow camera (updateCamera),
+  // so everything stays aligned under scrolling — no extra world transform needed here.
+  // refresh the visible-world rect (with a generous margin) for off-view draw culling
+  viewWorldRect(160);
   drawArenaFloor();
   drawMotes();
   drawLighting();
@@ -10377,7 +10622,7 @@ function render() {
   if (roomClear) drawDoors();
   drawPillars();
   drawSpawnTelegraphs();
-  for (const e of enemies) drawEnemy(e);
+  for (const e of enemies) { if (inView(e.x, e.y, e.r + 60)) drawEnemy(e); } // cull off-view foes
   drawPlayer();
   drawGlaives();
   drawSpells();
@@ -10608,7 +10853,7 @@ function loop(now) {
       acc -= S;
     }
   }
-  render();
+  render(paused ? 0 : dt);
 }
 requestAnimationFrame(loop);
 </script>
