@@ -845,7 +845,7 @@ const WEAPONS = [
   { id: "lance", name: "LANCE", zh: "长枪", col: "#ffd27a", glyph: "†", rangeMul: 1.6,  arcMul: 0.8, dmgMul: 1,    cdMul: 1.2,  durMul: 1.05, critBase: 0 },
   { id: "maul",  name: "MAUL",  zh: "重锤", col: "#ff8866", glyph: "◉", rangeMul: 0.95, arcMul: 1,   dmgMul: 1.4,  cdMul: 1.6,  durMul: 1.45, critBase: 0 },
   // TWIN FANG: very fast, short reach, low per-hit dmg, high crit; every 3rd hit flurries
-  { id: "fang",  name: "TWIN FANG", zh: "双牙", col: "#ff5fa8", glyph: "⪜", rangeMul: 0.82, arcMul: 0.95, dmgMul: 0.6,  cdMul: 0.52, durMul: 0.62, critBase: 0.16 },
+  { id: "fang",  name: "TWIN FANG", zh: "双牙", col: "#ff5fa8", glyph: "⪜", rangeMul: 0.82, arcMul: 0.95, dmgMul: 0.62, cdMul: 0.56, durMul: 0.62, critBase: 0.16 },
   // ARC CASTER: medium-long sweeping cone beam, chains a zap between hit foes
   { id: "arc",   name: "ARC CASTER", zh: "电弧", col: "#7fe9ff", glyph: "ϟ", rangeMul: 1.45, arcMul: 1.45, dmgMul: 0.85, cdMul: 1.18, durMul: 1.1,  critBase: 0 },
   // GRAVITON MACE: slow heavy swing -> mini singularity pulls then implodes
@@ -860,7 +860,7 @@ const WEAPONS = [
      (ranged/area magic) instead of a melee swing. Casters trade melee reach for range,
      each gated by its own castCD cadence so they sit at a comparable power budget. ---- */
   // EMBER STAFF: lobs a fireball that bursts in an AoE on impact + leaves a burning patch; applies BURN. Area denial + DoT.
-  { id: "ember", name: "EMBER STAFF", zh: "火焰法杖", col: "#ff7a3c", glyph: "🜂", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isCaster: true, castCD: 0.62 },
+  { id: "ember", name: "EMBER STAFF", zh: "火焰法杖", col: "#ff7a3c", glyph: "🜂", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isCaster: true, castCD: 0.54 },
   // FROST WAND: fires a fast piercing icebolt that slows and builds FREEZE stacks; shatter setups. Control.
   { id: "frost", name: "FROST WAND",  zh: "冰霜法杖", col: "#7fd8ff", glyph: "❅", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.04, isCaster: true, castCD: 0.42 },
   // STORM STAFF: emits a chaining lightning bolt that arcs to several nearby foes, applying SHOCK. Multi-target chain.
@@ -976,6 +976,57 @@ const BOONS = [
   { id: "dbarrel",name: "DOUBLE BARREL",desc: "Scattergun fires an extra pellet in the spread", col: "#ffd29a", glyph: "⋔", max: 2, weapon: "scatter" },
   { id: "ocharge2",name: "OVERCHARGE",  desc: "Railgun: full-charge shots crit and pierce further", col: "#7fd0ff", glyph: "⇈", max: 2, weapon: "rail" },
   { id: "recoild",name: "RECOIL DASH",  desc: "Railgun firing dashes you back a step with brief i-frames", col: "#bfeaff", glyph: "⇤", max: 2, weapon: "rail" },
+  /* ============================================================================
+     ADDITIONAL weapon-exclusive boons — deeper build paths (4 per weapon total).
+     BLADE had none, so it gains four; every other form gains two. Each is build-
+     defining and hooks the shared status / crit / dash / freeze systems. */
+  /* ---- BLADE (was 0 exclusives → 4) ---- */
+  { id: "riposte",  name: "RIPOSTE",      desc: "Blade: the first slash right after a dash crits and stuns",       col: "#aaf6ff", glyph: "⤬", max: 2, weapon: "blade" },
+  { id: "cleave",   name: "CLEAVE",       desc: "Blade slashes cleave wider and make foes bleed (DoT)",            col: "#bff4ff", glyph: "≫", max: 2, weapon: "blade" },
+  { id: "tempo",    name: "TEMPO EDGE",   desc: "Blade: each chained slash ramps damage (resets if you pause)",    col: "#8fe8ff", glyph: "♪", max: 2, weapon: "blade" },
+  { id: "execorder",name: "EXECUTE ORDER",desc: "Blade slashes deal bonus vs low-HP foes; kills refund energy",   col: "#cffaff", glyph: "†", max: 2, weapon: "blade" },
+  /* ---- LANCE ---- */
+  { id: "gungnir",  name: "GUNGNIR",      desc: "Lance thrusts fire a piercing energy spike along the line",       col: "#ffd27a", glyph: "↑", max: 2, weapon: "lance" },
+  { id: "vault",    name: "VAULT",        desc: "Lance lunge is longer, leaves a burning wake, and refreshes dash",col: "#ffe6aa", glyph: "⇡", max: 2, weapon: "lance" },
+  /* ---- MAUL ---- */
+  { id: "seismic",  name: "SEISMIC",      desc: "Maul slam radius +35% and knocks down (longer stun)",             col: "#ff9966", glyph: "◍", max: 2, weapon: "maul" },
+  { id: "magma",    name: "MAGMA CORE",   desc: "Maul slams ignite the ground and set struck foes burning",        col: "#ff7a44", glyph: "♨", max: 2, weapon: "maul" },
+  /* ---- TWIN FANG ---- */
+  { id: "venom",    name: "VENOM FANGS",  desc: "Every Fang hit applies a stacking poison (DoT)",                  col: "#ff5fa8", glyph: "ψ", max: 2, weapon: "fang" },
+  { id: "phantstk", name: "PHANTOM STEP", desc: "Fang kills briefly cloak you (i-frames) and refund a dash",       col: "#ff9fcf", glyph: "✦", max: 2, weapon: "fang" },
+  /* ---- ARC CASTER ---- */
+  { id: "supercond",name: "SUPERCONDUCT", desc: "Arc shock spreads freeze-shatter combos along the chain",         col: "#7fe9ff", glyph: "❄", max: 2, weapon: "arc" },
+  { id: "arcfield", name: "ARC FIELD",    desc: "Arc swing leaves a lingering shocking field",                     col: "#aef3ff", glyph: "◈", max: 2, weapon: "arc" },
+  /* ---- GRAVITON MACE ---- */
+  { id: "singpull", name: "DENSITY",      desc: "Graviton singularities last longer and pull bosses too",          col: "#b98cff", glyph: "⊛", max: 2, weapon: "grav" },
+  { id: "darkstar", name: "DARK STAR",    desc: "Graviton implosion crits and applies shock to all caught",        col: "#caa6ff", glyph: "✷", max: 2, weapon: "grav" },
+  /* ---- GLAIVE ---- */
+  { id: "tempest2", name: "CYCLONE",      desc: "Glaive hovers and spins at full reach before returning",          col: "#7fffd0", glyph: "✺", max: 2, weapon: "glaive" },
+  { id: "twinblade",name: "TWIN GLAIVE",  desc: "Throw a second glaive in a mirrored arc",                         col: "#aeffe8", glyph: "✶", max: 1, weapon: "glaive" },
+  /* ---- CHAIN WHIP ---- */
+  { id: "electrowhip",name:"LIVE WIRE",   desc: "Whip hits shock and chain lightning between yanked foes",         col: "#ffcf5e", glyph: "ϟ", max: 2, weapon: "whip" },
+  { id: "constrict",name: "CONSTRICT",    desc: "Yanked foes are bound (rooted) and take ramping damage",          col: "#ffe09a", glyph: "∞", max: 2, weapon: "whip" },
+  /* ---- PRISM SABER ---- */
+  { id: "prismburn",name: "SOLAR FLARE",  desc: "Prism beam ignites foes and pierces shields",                    col: "#9d7bff", glyph: "☀", max: 2, weapon: "prism" },
+  { id: "lightspeed",name:"LIGHTSPEED",   desc: "Charged prism beam dashes you forward through foes (i-frames)",   col: "#bda6ff", glyph: "⇒", max: 2, weapon: "prism" },
+  /* ---- EMBER STAFF ---- */
+  { id: "firewall", name: "FIRE WALL",    desc: "Ember patches burn longer, larger, and slow foes",               col: "#ff7a3c", glyph: "▦", max: 2, weapon: "ember" },
+  { id: "cinderbrst",name:"CINDER BURST", desc: "Burning foes that die explode, spreading fire",                  col: "#ffaa55", glyph: "✸", max: 2, weapon: "ember" },
+  /* ---- FROST WAND ---- */
+  { id: "frostnova",name: "FROST NOVA",   desc: "Frozen foes struck again emit a chilling nova",                  col: "#7fd8ff", glyph: "❉", max: 2, weapon: "frost" },
+  { id: "blizzard", name: "BLIZZARD",     desc: "Frost shots split into 3 chilling shards",                       col: "#bfeeff", glyph: "❅", max: 2, weapon: "frost" },
+  /* ---- STORM STAFF ---- */
+  { id: "thunderclap",name:"THUNDERCLAP", desc: "Storm's first target takes an AoE shockblast",                  col: "#ffe24a", glyph: "✺", max: 2, weapon: "storm" },
+  { id: "ballight", name: "BALL LIGHTNING",desc: "Storm casts also lob a slow orb that zaps nearby foes",         col: "#fff39a", glyph: "◉", max: 2, weapon: "storm" },
+  /* ---- AUTO-RIFLE ---- */
+  { id: "apr",      name: "AP ROUNDS",    desc: "Rifle rounds pierce +2 foes and crit more",                     col: "#cfd8e6", glyph: "⊳", max: 2, weapon: "rifle" },
+  { id: "tracer",   name: "TRACER FIRE",  desc: "Rifle hits stack a mark; marked foes take bonus damage",         col: "#ffae6b", glyph: "◎", max: 2, weapon: "rifle" },
+  /* ---- SCATTERGUN ---- */
+  { id: "slugs",    name: "SLUG ROUNDS",  desc: "Scatter pellets travel far with less falloff and knock back hard",col: "#ffb86b", glyph: "●", max: 2, weapon: "scatter" },
+  { id: "dragonsbreath",name:"DRAGON'S BREATH",desc:"Scatter pellets are incendiary — they set foes burning",     col: "#ffd29a", glyph: "🔥", max: 2, weapon: "scatter" },
+  /* ---- RAILGUN ---- */
+  { id: "siege",    name: "SIEGE MODE",   desc: "Railgun shots detonate a blast at the impact point",             col: "#7fd0ff", glyph: "✸", max: 2, weapon: "rail" },
+  { id: "chargeshot",name:"CAPACITOR",    desc: "Holding fire charges the rail for big bonus damage",             col: "#bfeaff", glyph: "⊞", max: 2, weapon: "rail" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -1523,6 +1574,9 @@ function newPlayer(idx) {
     glaiveOut: false, glaiveSpeed: 0,  // GLAIVE: true while a thrown blade is in flight (melee locked)
     prismN: 0, prismT: 0,              // PRISM SABER OVERCHARGE+ consecutive-hit charge
     velBuffT: 0,                       // RETURN VELOCITY catch speed buff timer
+    dashedT: 0,                        // BLADE RIPOSTE: time since last dash (post-dash slash window)
+    tempoN: 0, tempoT: 0,              // BLADE TEMPO EDGE consecutive-slash damage ramp
+    railChargeT: 0,                    // RAILGUN CAPACITOR hold-charge accumulator
     castCD: 0, castN: 0,               // STAFF/WAND cast cadence + cast counter (METEOR cadence)
     gunCD: 0, gunN: 0,                  // GUN fire cadence + shots-fired counter
     heatN: 0, heatT: 0,                 // AUTO-RIFLE OVERHEAT sustained-fire ramp
@@ -1533,6 +1587,7 @@ function newPlayer(idx) {
     aimDraw: -Math.PI / 2, walkT: 0, moveAmt: 0, recoilT: 0, // render-anim state
     freezeCD: 0, freezeCDMax: 0, buyCD: 0,
     meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
+    stealBudget: 0,                    // SIPHON EDGE lifesteal-per-second throttle
     boons: {}, boonPow: {}, boonBest: {},
     downed: false, reviveT: 0,         // co-op down/revive state
     slashBuf: 0, dashBuf: 0, freezeBuf: 0, lastDir: { x: 1, y: 0 }, // per-player buffered inputs
@@ -1543,8 +1598,24 @@ function weaponDefP(p) { p = p || ctxP || player; const id = (p && p.weapon) || 
 function boonLv(id) { const p = ctxP || player; return (p && p.boons[id]) || 0; }
 /* rarity-scaled boon power: sum of rarity multipliers across picks of this boon */
 function boonPow(id) { const p = ctxP || player; return (p && p.boonPow && p.boonPow[id]) || 0; }
-function dmgMul() { return 1 + meta.dmg * 0.10; }
-function dashRegenMul() { return 1 + 0.05 * Math.max(0, (meta.dash || 0) - 4); }
+/* META EFFECT SOFT-CAPS: levels stay purchasable forever (geometric cost), but the *effect*
+   has diminishing returns past a knee so stacking can't break the game (no hard "MAX" on the
+   purchase — only the benefit tapers). Damage past +150% and dash recharge past +100% each
+   feed through a soft curve toward an asymptote, keeping high-meta runs strong but not absurd. */
+function softCap(x, knee, ceil) {
+  // identity below the knee; smoothly approaches `ceil` above it (never reaches/exceeds it)
+  if (x <= knee) return x;
+  const over = x - knee, room = ceil - knee;
+  return knee + room * (over / (over + room));
+}
+function dmgMul() {
+  const raw = meta.dmg * 0.10;                 // +10% per level, raw
+  return 1 + softCap(raw, 1.5, 4.0);           // soft knee at +150%, asymptote ~+400%
+}
+function dashRegenMul() {
+  const raw = 0.05 * Math.max(0, (meta.dash || 0) - 4);
+  return 1 + softCap(raw, 1.0, 2.4);           // soft knee at +100% recharge, asymptote ~+240%
+}
 function meleeDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weaponDefP(p).dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * p.meleeMul; }
 /* base spell-cast damage for STAFF/WAND casters. Scales with the same global/meta/run mods
    as melee (HEAVY EDGE applies, slash button drives both) so casters share the power budget. */
@@ -1638,9 +1709,15 @@ function rerollBoons() {
 }
 
 /* ---------------- §K ENEMIES ---------------- */
-/* difficulty keeps climbing harder past depth 12 to keep unlimited training honest */
-function hpMul() { return (1 + (depth - 1) * 0.17 + Math.max(0, depth - 12) * 0.06) * (1 + 0.2 * (runHeat.ehp || 0)); }
-function eDmgMul() { return (1 + (depth - 1) * 0.07 + Math.max(0, depth - 12) * 0.03) * (1 + 0.15 * (runHeat.edmg || 0)); }
+/* difficulty keeps climbing harder past depth 12 to keep unlimited training honest.
+   Co-op: each extra living player adds enemy HP so 2P (≈2x DPS + 2x bodies) stays a real
+   fight rather than trivial. Damage is left near-1P (two targets already split aggro), with a
+   tiny bump, so 2P is harder than 1P without being unfairly spiky. */
+function playerCountSafe() { const n = (players && players.length) || numPlayers || 1; return clamp(n, 1, 2); }
+function coopHpMul() { return 1 + 0.6 * (playerCountSafe() - 1); }     // +60% enemy HP at 2P
+function coopDmgMul() { return 1 + 0.08 * (playerCountSafe() - 1); }   // +8% enemy dmg at 2P
+function hpMul() { return (1 + (depth - 1) * 0.17 + Math.max(0, depth - 12) * 0.06) * (1 + 0.2 * (runHeat.ehp || 0)) * coopHpMul(); }
+function eDmgMul() { return (1 + (depth - 1) * 0.07 + Math.max(0, depth - 12) * 0.03) * (1 + 0.15 * (runHeat.edmg || 0)) * coopDmgMul(); }
 
 const ENEMY_DEFS = {
   chaser:  { r: 14, hp: 30, speed: 116, col: "#ff5577", cost: 1.5 },
@@ -1791,7 +1868,15 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
     freezeT = Math.max(freezeT, CONFIG.hitStop);
     if (boonLv("steal")) {
       const sp = ctxP || player;
-      sp.hp = Math.min(sp.maxHp, sp.hp + Math.max(1, Math.round(boonPow("steal"))));
+      // SIPHON EDGE: heal per hit, but cap healing per second so multi-hit weapons
+      // (twin fang flurry, etc.) + stacked lifesteal can't out-heal damage into immortality.
+      const heal = Math.max(1, Math.round(boonPow("steal")));
+      const capPerSec = 8 + 6 * boonPow("steal");          // soft lifesteal throughput cap
+      if ((sp.stealBudget || 0) < capPerSec) {
+        const give = Math.min(heal, capPerSec - (sp.stealBudget || 0));
+        sp.hp = Math.min(sp.maxHp, sp.hp + give);
+        sp.stealBudget = (sp.stealBudget || 0) + give;
+      }
     }
   }
   if (e.hp <= 0) killEnemy(e);
@@ -1840,6 +1925,11 @@ function applyShock(e, dmg, chains) {
     }
   }
 }
+
+/* freeze gate: bosses can't be re-frozen during their thaw-resistance window, so even
+   FROST WAND + PERMAFROST or a fast freeze-nova loop can't perma-lock a boss. Normal
+   enemies are always freezable (crowd control stays satisfying). */
+function canFreeze(e) { return e.type !== "boss" || (e.freezeImmT || 0) <= 0; }
 
 /* FREEZE + SHOCK = SHATTER: burst damage, consumes both statuses */
 function shatterCombo(e) {
@@ -1953,6 +2043,28 @@ function killEnemy(e) {
     // rarity bonus: above-common KILL DRIVE also refunds a little energy
     const xPow = Math.max(0, boonPow("reset") - 1);
     if (xPow > 0) kp.energy = Math.min(kp.maxEnergy, kp.energy + 6 * xPow);
+  }
+  // TWIN FANG PHANTOM STEP: kills briefly phase the wielder (i-frames) + refund a dash
+  {
+    const kp = ctxP || player;
+    if (kp && kp.weapon === "fang" && (kp.boons && kp.boons.phantstk)) {
+      kp.ifr = Math.max(kp.ifr, 0.25 + 0.12 * (kp.boonPow.phantstk || 0));
+      kp.dashCharges = Math.min(kp.dashMax, kp.dashCharges + 1);
+      burst(kp.x, kp.y, "#ff9fcf", 8, 160, 0.3, 2.2);
+    }
+    // EMBER CINDER BURST: a burning foe that dies bursts into fire, igniting nearby foes
+    if (kp && kp.weapon === "ember" && (kp.boons && kp.boons.cinderbrst) && (e.burnT || 0) > 0) {
+      const cbR = 80, ex = e.x, ey = e.y;
+      burst(ex, ey, "#ff8844", 16, 280, 0.5, 3.2);
+      ffx.ring(ex, ey, cbR, "#ff8844", 0.35, 4);
+      for (const o of enemies) {
+        if (o === e || o.hp <= 0) continue;
+        if (dist(ex, ey, o.x, o.y) < cbR + o.r) {
+          statusDamage(o, (8 + depth * 0.8) * (kp.boonPow.cinderbrst || 1) * dmgMul(), "#ff8844");
+          if (o.hp > 0) applyBurn(o, (4 + depth * 0.4) * dmgMul());
+        }
+      }
+    }
   }
   // core drops (splitter fragments drop a share each)
   let n = e.type === "boss" ? (e.gen ? randi(3, 5) : randi(14, 18)) : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
@@ -2232,8 +2344,10 @@ function genArena(d) {
 function buildWaves(d) {
   waves = [];
   const nWaves = d <= 1 ? 1 : clamp(1 + randi(0, Math.min(2, Math.floor(d / 2))), 1, 3);
+  // co-op spawns more bodies per wave so two players have enough to fight
+  const coopBudget = 1 + 0.45 * (playerCountSafe() - 1);
   for (let w = 0; w < nWaves; w++) {
-    let budget = 2.6 + d * 1.25 + w * 1.1;
+    let budget = (2.6 + d * 1.25 + w * 1.1) * coopBudget;
     const wave = [];
     const types = ["chaser", "swarmer"];
     if (d >= 2) types.push("shooter");
@@ -2987,17 +3101,39 @@ function trySlash(p) {
   if (fang) p.frenzyT = 1.2; // frenzy decay window
   if (lunge) { // dash a short step forward along the thrust
     burst(p.x, p.y, W.col, 8, 150, 0.3, 2.5);
-    p.x += Math.cos(p.slashAng) * 64;
-    p.y += Math.sin(p.slashAng) * 64;
+    // LANCE VAULT: longer lunge, burning wake, and refunds a dash charge
+    const vault = boonLv("vault");
+    const lungeStep = 64 * (vault ? 1 + 0.25 * boonPow("vault") : 1);
+    if (vault) {
+      addZone(p.x, p.y);
+      p.dashCharges = Math.min(p.dashMax, p.dashCharges + 1);
+    }
+    p.x += Math.cos(p.slashAng) * lungeStep;
+    p.y += Math.sin(p.slashAng) * lungeStep;
+    if (vault) addZone(p.x, p.y);
     collidePillars(p); collideArena(p);
     p.ifr = Math.max(p.ifr, 0.1);
     audio.dash();
   }
+  const blade = W.id === "blade";
+  // BLADE TEMPO EDGE: each chained slash ramps damage (decays via tempoT)
+  let tempoMul = 1;
+  if (blade && boonLv("tempo")) {
+    p.tempoN = Math.min(8, (p.tempoN || 0) + 1); p.tempoT = 1.5;
+    tempoMul = 1 + 0.06 * boonPow("tempo") * (p.tempoN - 1);
+  }
+  // BLADE RIPOSTE: the first slash within the post-dash window crits & stuns
+  const riposte = blade && boonLv("riposte") && (p.dashedT || 0) > 0;
+  if (riposte) p.dashedT = 0;
   // immediate hit detection — snappy
-  const range = meleeRangeNow() * (lunge ? 1.15 : 1);
-  const arc = lunge ? meleeArcNow() * 0.6 : meleeArcNow();
+  let range = meleeRangeNow() * (lunge ? 1.15 : 1);
+  if (maul && boonLv("seismic")) range *= 1 + 0.18 * boonPow("seismic"); // SEISMIC widens the slam (~+35% at II)
+  let arc = lunge ? meleeArcNow() * 0.6 : meleeArcNow();
+  if (blade && boonLv("cleave")) arc *= 1 + 0.25 * boonPow("cleave"); // CLEAVE widens the blade arc
   // twin fang per-hit is low; the flurry distributes its dmg across rapid sub-slashes
-  const dmg = meleeDamage() * (lunge ? 1.3 : 1) * (flurry ? 0.6 : 1);
+  // (each flurry sub-swing deals 0.42x so 3 swings ≈ 1.26x a normal hit — rewarding but
+  // not the dominant outlier it was at 0.6x/3 ≈ 1.8x).
+  const dmg = meleeDamage() * (lunge ? 1.3 : 1) * (flurry ? 0.42 : 1) * tempoMul;
   const kb = maul ? 400 * (1 + 0.5 * boonPow("jugg")) : (fang ? 150 : (whip ? 0 : 260)); // JUGGERNAUT; fang barely knocks back; whip yanks (handled per-hit)
   // swing trail ribbon (weapon-tinted; style chosen at render time)
   slashGhosts.push({ x: p.x, y: p.y, ang: p.slashAng, side: p.slashSide, arc, range, t: 0.32, tm: 0.32, col: W.col, lunge, weapon: W.id, flurry });
@@ -3009,9 +3145,14 @@ function trySlash(p) {
     const sx = p.x + Math.cos(p.slashAng) * range * 0.8;
     const sy = p.y + Math.sin(p.slashAng) * range * 0.8;
     const pullR = (120 + range * 0.6) * (1 + 0.5 * boonPow("horizon"));
+    const density = boonLv("singpull");
+    const life = 0.4 * (density ? 1 + 0.4 * boonPow("singpull") : 1); // DENSITY: longer-lived
     singularities.push({
-      x: sx, y: sy, t: 0.4, tm: 0.4, pullR,
+      x: sx, y: sy, t: life, tm: life, pullR,
       dmg: dmg * 1.6, slow: boonLv("horizon") > 0, col: W.col, pulled: [], done: false,
+      pullBoss: density > 0,        // DENSITY: singularities also drag bosses
+      darkstar: boonLv("darkstar"), // DARK STAR: implosion crits + shocks everything caught
+      owner: p,                     // boon/crit context for the delayed implosion
     });
     if (singularities.length > 6) singularities.shift();
     burst(sx, sy, W.col, 14, 180, 0.4, 3);
@@ -3060,10 +3201,32 @@ function trySlash(p) {
       // PHALANX: lance crits far more often at the tip of its reach
       let crit = critRoll();
       if (!crit && boonLv("phalanx") && d > range * 0.66) crit = Math.random() < 0.25 * boonPow("phalanx");
-      hitEnemy(e, dmg, Math.cos(a) * kb, Math.sin(a) * kb, crit, true);
+      // BLADE RIPOSTE: post-dash slash always crits
+      if (riposte) crit = true;
+      // BLADE EXECUTE ORDER: bonus damage to wounded foes (energy refund handled on kill below)
+      let hitDmg = dmg;
+      if (blade && boonLv("execorder") && e.type !== "boss" && e.hp < e.maxHp * 0.5) {
+        hitDmg *= 1 + 0.4 * boonPow("execorder");
+      }
+      const wasAlive = e.hp;
+      hitEnemy(e, hitDmg, Math.cos(a) * kb, Math.sin(a) * kb, crit, true);
+      // BLADE RIPOSTE: post-dash strike also stuns
+      if (riposte && e.hp > 0) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.3 : 0.7);
+      // BLADE CLEAVE: slashes make foes bleed
+      if (blade && boonLv("cleave") && e.hp > 0) applyBurn(e, (2.5 + depth * 0.3) * boonPow("cleave") * dmgMul());
+      // BLADE EXECUTE ORDER: refund energy when a slash finishes a foe
+      if (blade && boonLv("execorder") && wasAlive > 0 && e.hp <= 0) {
+        p.energy = Math.min(p.maxEnergy, p.energy + 8 * boonPow("execorder"));
+      }
       if (maul && boonLv("jugg") && e.hp > 0) {
         e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.25 : 0.55);
       }
+      // MAUL SEISMIC: slams knock foes down (longer stun)
+      if (maul && boonLv("seismic") && e.hp > 0) {
+        e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.3 : 0.6 + 0.2 * boonPow("seismic"));
+      }
+      // MAUL MAGMA CORE: slams set struck foes burning
+      if (maul && boonLv("magma") && e.hp > 0) applyBurn(e, (4 + depth * 0.5) * boonPow("magma") * dmgMul());
       if (lunge && boonLv("skewer") && e.hp > 0) {
         e.kbx = (p.x - e.x) * 6; e.kby = (p.y - e.y) * 6;
       }
@@ -3077,15 +3240,25 @@ function trySlash(p) {
           hitEnemy(e, dmg * 0.45 * boonPow("hookshot"), 0, 0, false, false); // HOOKSHOT bonus damage
           if (e.hp > 0) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.2 : 0.45); // brief stun (reuses shock-stun)
         }
+        // WHIP LIVE WIRE: hits shock & chain lightning (works with freeze->shatter)
+        if (boonLv("electrowhip") && e.hp > 0) applyShock(e, 5 * boonPow("electrowhip") * dmgMul(), 1);
+        // WHIP CONSTRICT: yanked foes are rooted briefly and take ramping damage
+        if (boonLv("constrict") && e.hp > 0) {
+          e.constrictT = Math.max(e.constrictT || 0, e.type === "boss" ? 0.5 : 1.1);
+          e.constrictDps = (4 + depth * 0.5) * boonPow("constrict") * dmgMul();
+        }
       }
       if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE
-      // TWIN FANG: frenzy ramp + EXSANGUINATE bleed-on-crit
+      // TWIN FANG: frenzy ramp + EXSANGUINATE bleed-on-crit + VENOM stacking poison
       if (fang) {
         p.frenzyN = Math.min(8, (p.frenzyN || 0) + 1); p.frenzyT = 1.2;
         if (crit && boonLv("exsang") && e.hp > 0) applyBurn(e, (3 + depth * 0.4) * boonPow("exsang") * dmgMul());
+        if (boonLv("venom") && e.hp > 0) applyBurn(e, (2 + depth * 0.3) * boonPow("venom") * dmgMul());
       }
       // ARC CASTER: CONDUCTOR always shocks struck foes
       if (arcW && boonLv("conduct") && e.hp > 0) applyShock(e, 4 * dmgMul(), 0);
+      // ARC SUPERCONDUCT: shock that chains 1 (applyShock auto-triggers FREEZE->SHATTER on frozen foes)
+      if (arcW && boonLv("supercond") && e.hp > 0) applyShock(e, 4 * boonPow("supercond") * dmgMul(), 1);
       if (arcW && !arcHits.includes(e)) arcHits.push(e);
       hitAny = true;
       // chain lightning (boon, all weapons)
@@ -3140,6 +3313,12 @@ function trySlash(p) {
     }
     audio.arcZap();
   }
+  // ARC FIELD: the arc swing leaves a lingering shocking field at its reach
+  if (arcW && boonLv("arcfield")) {
+    const fx = p.x + Math.cos(p.slashAng) * range * 0.7, fy = p.y + Math.sin(p.slashAng) * range * 0.7;
+    zones.push({ x: fx, y: fy, r: 54, t: 1.4 + 0.3 * boonPow("arcfield"), tick: 0, shock: true, dps: (4 + depth * 0.5) * boonPow("arcfield") * dmgMul() });
+    ffx.spawnLight(fx, fy, 60, W.col, 0.5);
+  }
   // PRISM SABER signature: the slash emits a forward piercing energy beam (a second damage tick in a line ahead).
   // OVERCHARGE+ grows the beam with consecutive hits; REFRACTION fans it into a V.
   if (prism) {
@@ -3148,7 +3327,7 @@ function trySlash(p) {
     const charge = boonLv("ocharge") ? Math.min(1, 0.18 * boonPow("ocharge") * p.prismN) : 0;
     const beamLen = range * (1.45 + charge * 0.8);
     const beamW = (16 + charge * 18); // half-width of the in-line hit band
-    const beamDmg = dmg * (0.65 + charge * 0.6); // second tick; balanced vs power budget
+    const beamDmg = dmg * (0.55 + charge * 0.6); // second tick; balanced vs power budget (forward-only payoff)
     const angs = boonLv("refract") ? [0, -0.32, 0.32] : [0]; // REFRACTION: V-split
     const piercedAny = [];
     for (const off of angs) {
@@ -3169,11 +3348,38 @@ function trySlash(p) {
         const crit = critRoll();
         hitEnemy(e, beamDmg, Math.cos(ba) * 90, Math.sin(ba) * 90, crit, true); // pierces (no break)
         if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        // PRISM SOLAR FLARE: the beam ignites foes (and naturally pierces shields, being a beam)
+        if (e.hp > 0 && boonLv("prismburn")) applyBurn(e, (4 + depth * 0.5) * boonPow("prismburn") * dmgMul());
         piercedAny.push(e);
         hitAny = true;
       }
     }
+    // PRISM LIGHTSPEED: a charged beam blinks the wielder forward through foes with i-frames
+    if (boonLv("lightspeed") && charge > 0.45) {
+      p.dashDX = Math.cos(p.slashAng); p.dashDY = Math.sin(p.slashAng);
+      p.dashT = Math.max(p.dashT, 0.12);
+      p.ifr = Math.max(p.ifr, 0.18 + 0.06 * boonPow("lightspeed"));
+      burst(p.x, p.y, W.col, 8, 180, 0.3, 2.4);
+    }
     audio.prismBeam();
+  }
+  // LANCE GUNGNIR: every thrust fires a piercing energy spike down the line
+  if (W.id === "lance" && boonLv("gungnir")) {
+    const ba = p.slashAng;
+    const beamLen = range * 2.2;
+    const ex = p.x + Math.cos(ba) * beamLen, ey = p.y + Math.sin(ba) * beamLen;
+    const spikeDmg = dmg * (0.55 + 0.15 * boonPow("gungnir"));
+    beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.16, col: W.col });
+    sparkLine(p.x, p.y, ex, ey, W.col, 6);
+    const dx = ex - p.x, dy = ey - p.y, len2 = dx * dx + dy * dy || 1;
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      let t = clamp(((e.x - p.x) * dx + (e.y - p.y) * dy) / len2, 0, 1);
+      if (dist(p.x + dx * t, p.y + dy * t, e.x, e.y) > 14 + e.r) continue;
+      hitEnemy(e, spikeDmg, Math.cos(ba) * 80, Math.sin(ba) * 80, critRoll(), true);
+      if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+      hitAny = true;
+    }
   }
   // volatile barrels can be struck by melee
   for (const b of barrels) {
@@ -3214,6 +3420,19 @@ function trySlash(p) {
   if (hitAny) shake(2.5, 0.1);
 }
 
+/* spawn a single pooled glaive along an angle (shared by throw + TWIN GLAIVE) */
+function spawnGlaive(p, W, ang, dmg, reach, speed) {
+  let g = glaivePool.pop();
+  if (!g) g = { x: 0, y: 0, ang: 0, dist: 0, reach: 0, speed: 0, dmg: 0, leg: 0, spin: 0,
+                col: "#7fffd0", owner: null, hitSet: [], bounces: 0, t: 0, hoverT: 0 };
+  g.x = p.x; g.y = p.y; g.ang = ang; g.dist = 0; g.reach = reach;
+  g.speed = speed; g.dmg = dmg; g.leg = 0 /* 0 = outbound, 1 = returning */; g.spin = 0;
+  g.col = W.col; g.owner = p; g.hitSet.length = 0; g.bounces = 0; g.t = 0;
+  // CYCLONE: the blade hovers and spins at full reach before returning (extra hit window)
+  g.hoverT = boonLv("tempest2") ? 0.5 + 0.25 * boonPow("tempest2") : 0;
+  glaives.push(g);
+}
+
 /* GLAIVE: hurl a spinning blade out along the aim; it flies out, then returns to the wielder,
    damaging foes on BOTH legs (each enemy can be hit once per leg). Pooled to avoid per-throw allocs. */
 function throwGlaive(p, W) {
@@ -3225,13 +3444,9 @@ function throwGlaive(p, W) {
   const reach = meleeRangeNow() * 3.1; // ranged-ish: travels well past normal melee
   const speed = 760;
   const dmg = meleeDamage();
-  let g = glaivePool.pop();
-  if (!g) g = { x: 0, y: 0, ang: 0, dist: 0, reach: 0, speed: 0, dmg: 0, leg: 0, spin: 0,
-                col: "#7fffd0", owner: null, hitSet: [], bounces: 0, t: 0 };
-  g.x = p.x; g.y = p.y; g.ang = p.slashAng; g.dist = 0; g.reach = reach;
-  g.speed = speed; g.dmg = dmg; g.leg = 0 /* 0 = outbound, 1 = returning */; g.spin = 0;
-  g.col = W.col; g.owner = p; g.hitSet.length = 0; g.bounces = 0; g.t = 0;
-  glaives.push(g);
+  spawnGlaive(p, W, p.slashAng, dmg, reach, speed);
+  // TWIN GLAIVE: hurl a second blade in a mirrored arc (slightly weaker so it isn't a flat 2x)
+  if (boonLv("twinblade")) spawnGlaive(p, W, p.slashAng + 0.4, dmg * 0.8, reach, speed);
   ffx.spawnLight(p.x, p.y, 50, W.col, 0.5);
   burst(p.x + Math.cos(p.slashAng) * 16, p.y + Math.sin(p.slashAng) * 16, W.col, 6, 160, 0.25, 2.5);
 }
@@ -3246,7 +3461,16 @@ function updateGlaives(dt) {
       g.x += Math.cos(g.ang) * g.speed * dt;
       g.y += Math.sin(g.ang) * g.speed * dt;
       g.dist += g.speed * dt;
-      if (g.dist >= g.reach) { g.leg = 1; g.hitSet.length = 0; } // returning leg can re-hit
+      if (g.dist >= g.reach) {
+        if ((g.hoverT || 0) > 0) { g.leg = 2; g.hoverTick = 0; } // CYCLONE: hover & spin at reach
+        else { g.leg = 1; g.hitSet.length = 0; } // returning leg can re-hit
+      }
+    } else if (g.leg === 2) {
+      // CYCLONE hover: spin in place, re-arming its hit set periodically so it grinds foes
+      g.hoverT -= dt;
+      g.hoverTick = (g.hoverTick || 0) - dt;
+      if (g.hoverTick <= 0) { g.hoverTick = 0.18; g.hitSet.length = 0; }
+      if (g.hoverT <= 0) { g.leg = 1; g.hitSet.length = 0; }
     } else {
       // home back toward the (possibly moved) owner
       if (p) {
@@ -3331,14 +3555,14 @@ function castSpell(p, W) {
   if (W.id === "ember") {
     // EMBER STAFF: lob a fireball; explodes in an AoE on impact + leaves a burning patch.
     // METEOR: every few casts launch an empowered, stunning fireball.
-    p.castCD = 0.62;
+    p.castCD = 0.54;
     const meteor = boonLv("meteor") && (p.castN % 4 === 0);
     const s = getSpell();
     s.kind = "fire"; s.x = p.x + Math.cos(a) * 16; s.y = p.y + Math.sin(a) * 16;
     const spd = 360;
     s.vx = Math.cos(a) * spd; s.vy = Math.sin(a) * spd; s.ang = a;
     s.r = meteor ? 9 : 6; s.t = 1.4; s.tm = 1.4;
-    s.dmg = base * (meteor ? 1.5 : 1.0); s.col = W.col; s.owner = p;
+    s.dmg = base * (meteor ? 1.6 : 1.15); s.col = W.col; s.owner = p;
     s.blastR = (70 + 18 * boonPow("conflag")) * (meteor ? 1.35 : 1);
     s.empowered = meteor;
     spells.push(s);
@@ -3347,18 +3571,25 @@ function castSpell(p, W) {
     audio.emberCast(meteor);
   } else if (W.id === "frost") {
     // FROST WAND: fast piercing icebolt; slows + builds FREEZE stacks. ICE LANCE: pierces all & shatters frozen.
+    // BLIZZARD: the shot splits into 3 chilling shards (slightly weaker each).
     p.castCD = 0.42;
-    const s = getSpell();
-    s.kind = "ice"; s.x = p.x + Math.cos(a) * 16; s.y = p.y + Math.sin(a) * 16;
-    const spd = 720;
-    s.vx = Math.cos(a) * spd; s.vy = Math.sin(a) * spd; s.ang = a;
-    s.r = 6; s.t = 1.0; s.tm = 1.0;
-    s.dmg = base * 0.85; s.col = W.col; s.owner = p;
-    s.pierce = boonLv("icelance") ? 99 : (1 + Math.round(boonPow("pierce")));
-    s.slow = 0.55;
-    spells.push(s);
-    ffx.spawnLight(s.x, s.y, 44, W.col, 0.45);
-    burst(s.x, s.y, W.col, 5, 160, 0.2, 2.2);
+    const blizzard = boonLv("blizzard");
+    const angs = blizzard ? [0, -0.18, 0.18] : [0];
+    const shardDmg = base * 0.92 * (blizzard ? 0.7 : 1);
+    for (const off of angs) {
+      const ca = a + off;
+      const s = getSpell();
+      s.kind = "ice"; s.x = p.x + Math.cos(ca) * 16; s.y = p.y + Math.sin(ca) * 16;
+      const spd = 720;
+      s.vx = Math.cos(ca) * spd; s.vy = Math.sin(ca) * spd; s.ang = ca;
+      s.r = 6; s.t = 1.0; s.tm = 1.0;
+      s.dmg = shardDmg; s.col = W.col; s.owner = p;
+      s.pierce = boonLv("icelance") ? 99 : (1 + Math.round(boonPow("pierce")));
+      s.slow = 0.55;
+      spells.push(s);
+    }
+    ffx.spawnLight(p.x + Math.cos(a) * 16, p.y + Math.sin(a) * 16, 44, W.col, 0.45);
+    burst(p.x + Math.cos(a) * 16, p.y + Math.sin(a) * 16, W.col, 5, 160, 0.2, 2.2);
     audio.frostCast();
   } else { // storm
     // STORM STAFF: emit a chaining lightning bolt that arcs to several nearby foes, applying SHOCK.
@@ -3417,6 +3648,31 @@ function castStorm(p, W, a, base) {
     }
     cur = nxt; jumps++;
   }
+  // THUNDERCLAP: the first struck target detonates a shock AoE around itself
+  if (boonLv("thunderclap") && first && first.hp > 0) {
+    const tr = 80 + 12 * boonPow("thunderclap"), tx = first.x, ty = first.y;
+    novas.push({ x: tx, y: ty, t: 0.28, tm: 0.28, maxR: tr, col: W.col });
+    ffx.ring(tx, ty, tr, W.col, 0.32, 4);
+    burst(tx, ty, W.col, 14, 240, 0.4, 3);
+    for (const o of enemies) {
+      if (o.hp <= 0 || o === first) continue;
+      if (dist(tx, ty, o.x, o.y) < tr + o.r) {
+        statusDamage(o, base * (0.5 + 0.12 * boonPow("thunderclap")), "#ffee55");
+        if (o.hp > 0) applyShock(o, 4 * dmgMul(), 0);
+      }
+    }
+  }
+  // BALL LIGHTNING: lob a slow orb that drifts forward and zaps nearby foes
+  if (boonLv("ballight")) {
+    const s = getSpell();
+    s.kind = "ball"; s.x = p.x + Math.cos(a) * 18; s.y = p.y + Math.sin(a) * 18;
+    s.vx = Math.cos(a) * 150; s.vy = Math.sin(a) * 150; s.ang = a;
+    s.r = 10; s.t = 1.8; s.tm = 1.8;
+    s.dmg = base * (0.35 + 0.08 * boonPow("ballight")); s.col = W.col; s.owner = p;
+    s.zapTick = 0;
+    spells.push(s);
+    ffx.spawnLight(s.x, s.y, 48, W.col, 0.5);
+  }
   shake(2, 0.08);
 }
 
@@ -3461,6 +3717,23 @@ function updateSpells(dt) {
         if (dist(s.x, s.y, bl.x, bl.y) < s.r + bl.r) { igniteBarrel(bl, 0.06); if (s.pierce > 0) s.pierce--; else detonate = true; break; }
       }
       if (detonate) { burst(s.x, s.y, s.col, 6, 150, 0.25, 2.4); freeSpell(s); continue; }
+    } else if (s.kind === "ball") {
+      // BALL LIGHTNING: slow orb that periodically zaps + shocks nearby foes; fades out
+      s.vx *= Math.pow(0.45, dt); s.vy *= Math.pow(0.45, dt); // drag to a hover
+      s.zapTick = (s.zapTick || 0) - dt;
+      if (s.zapTick <= 0) {
+        s.zapTick = 0.22;
+        for (const e of enemies) {
+          if (e.hp <= 0) continue;
+          if (dist(s.x, s.y, e.x, e.y) < 90 + e.r) {
+            beams.push({ x1: s.x, y1: s.y, x2: e.x, y2: e.y, t: 0.12, col: s.col });
+            statusDamage(e, s.dmg, "#ffee55");
+            if (e.hp > 0) applyShock(e, 3 * dmgMul(), 0);
+          }
+        }
+      }
+      if (Math.random() < 0.5) sparkLine(s.x + rand(-8, 8), s.y + rand(-8, 8), s.x + rand(-8, 8), s.y + rand(-8, 8), s.col, 2);
+      if (detonate) { burst(s.x, s.y, s.col, 8, 160, 0.3, 2.6); freeSpell(s); continue; }
     }
   }
 }
@@ -3470,6 +3743,20 @@ function updateSpells(dt) {
 function frostHitEnemy(s, e) {
   const crit = critRoll();
   const a = Math.atan2(s.vy, s.vx);
+  // FROST NOVA: striking an already-frozen foe emits a chilling nova (slow + chip + freeze-build to nearby)
+  if (boonLv("frostnova") && e.frozenT > 0) {
+    const nr = 70 + 10 * boonPow("frostnova"), nx = e.x, ny = e.y;
+    novas.push({ x: nx, y: ny, t: 0.3, tm: 0.3, maxR: nr, col: "#bfeeff" });
+    burst(nx, ny, "#bfe8ff", 12, 200, 0.4, 2.6);
+    for (const o of enemies) {
+      if (o === e || o.hp <= 0) continue;
+      if (dist(nx, ny, o.x, o.y) < nr + o.r) {
+        statusDamage(o, (5 + depth * 0.5) * boonPow("frostnova") * dmgMul(), "#bfeeff");
+        o.iceSlow = Math.max(o.iceSlow || 0, 0.5); o.iceSlowT = Math.max(o.iceSlowT || 0, 1.0);
+        o.freezeBuild = (o.freezeBuild || 0) + 0.35;
+      }
+    }
+  }
   // ICE LANCE: striking a frozen foe shatters it for bonus damage
   if (boonLv("icelance") && e.frozenT > 0) {
     e.frozenT = 0;
@@ -3485,7 +3772,7 @@ function frostHitEnemy(s, e) {
   // build freeze: stacks accumulate to a full freeze; PERMAFROST builds faster + lasts longer
   const buildRate = boonLv("permaf") ? 0.5 + 0.18 * boonPow("permaf") : 0.34;
   e.freezeBuild = (e.freezeBuild || 0) + buildRate;
-  if (e.frozenT <= 0 && e.freezeBuild >= 1) {
+  if (e.frozenT <= 0 && e.freezeBuild >= 1 && canFreeze(e)) {
     e.freezeBuild = 0;
     if ((e.shockT || 0) > 0) { shatterCombo(e); return; } // FREEZE + SHOCK = SHATTER
     if ((e.burnT || 0) > 0) { thermalSnap(e); return; }   // BURN + FREEZE = THERMAL SNAP
@@ -3530,8 +3817,14 @@ function emberBlast(s) {
       }
     }
   }
-  // leave a brief burning patch (reuses the AFTERBURN zone path but with its own DPS)
-  zones.push({ x: s.x, y: s.y, r: R * 0.6, t: 1.6, tick: 0, ember: true, dps: (4 + depth * 0.6) * dmgMul() });
+  // leave a burning patch (reuses the AFTERBURN zone path but with its own DPS).
+  // FIRE WALL: bigger, longer-lasting, and chills (slows) foes standing in it.
+  const fw = boonLv("firewall");
+  zones.push({
+    x: s.x, y: s.y, r: R * 0.6 * (fw ? 1 + 0.3 * boonPow("firewall") : 1),
+    t: 1.6 * (fw ? 1 + 0.5 * boonPow("firewall") : 1), tick: 0, ember: true,
+    dps: (4 + depth * 0.6) * dmgMul(), fireslow: fw > 0,
+  });
   for (const bl of barrels) {
     if (!bl.dead && bl.fuse < 0 && dist(s.x, s.y, bl.x, bl.y) < R + bl.r) igniteBarrel(bl, 0.06);
   }
@@ -3544,8 +3837,9 @@ function getBullet() {
   let b = bulletPool.pop();
   if (!b) b = { kind: "", x: 0, y: 0, vx: 0, vy: 0, ang: 0, r: 0, t: 0, tm: 0,
                 dmg: 0, kb: 0, col: "#fff", owner: null, hitSet: [], pierce: 0,
-                bounces: 0, falloff: 0, crit: false, pblank: false };
+                bounces: 0, falloff: 0, crit: false, pblank: false, ignite: 0, tracer: 0 };
   b.hitSet.length = 0; b.pierce = 0; b.bounces = 0; b.falloff = 0; b.crit = false; b.pblank = false; b.kb = 0;
+  b.ignite = 0; b.tracer = 0;
   return b;
 }
 function freeBullet(b) {
@@ -3569,6 +3863,8 @@ function spawnBullet(p, kind, a, spd, dmg, col, r, opts) {
   b.crit = !!(opts && opts.crit);
   b.pblank = !!(opts && opts.pblank);
   b.bounces = (opts && opts.bounces) || 0;
+  b.ignite = (opts && opts.ignite) || 0;   // DRAGON'S BREATH incendiary burn power
+  b.tracer = (opts && opts.tracer) || 0;   // TRACER FIRE mark power
   bullets.push(b);
   return b;
 }
@@ -3600,9 +3896,14 @@ function fireRifle(p, W, a, base) {
   const spread = (0.10 - heat * 0.04) * (Math.random() * 2 - 1); // recoil/spread, tightens as it heats
   const aa = a + spread;
   const dmg = base * 0.34 * (1 + heat * 0.5); // per-round low; OVERHEAT up to +50%
+  // AP ROUNDS: rounds pierce extra foes and crit more often
+  let crit = critRoll();
+  if (boonLv("apr") && !crit) crit = Math.random() < 0.10 * boonPow("apr");
   spawnBullet(p, "rifle", aa, 760, dmg, W.col, 3.2, {
-    life: 1.0, kb: 60, crit: critRoll(),
+    life: 1.0, kb: 60, crit,
+    pierce: boonLv("apr") ? 2 * Math.round(boonPow("apr")) : 0,
     bounces: boonLv("ricoR") ? Math.round(boonPow("ricoR")) : 0,
+    tracer: boonLv("tracer") ? boonPow("tracer") : 0,
   });
   audio.rifleShot();
   if (Math.random() < 0.5) burst(p.x + Math.cos(aa) * 18, p.y + Math.sin(aa) * 18, "#ffe6b0", 2, 120, 0.14, 1.8);
@@ -3615,11 +3916,18 @@ function fireScatter(p, W, a, base) {
   p.recoilT = 0.2;
   const pellets = 6 + (boonLv("dbarrel") ? 1 + Math.round(boonPow("dbarrel")) : 0);
   const spread = 0.5;
+  // SLUG ROUNDS: pellets fly far with far less falloff and hit much harder physically
+  const slug = boonLv("slugs");
+  const dragon = boonLv("dragonsbreath");
   for (let i = 0; i < pellets; i++) {
     const off = (i / (pellets - 1) - 0.5) * spread + rand(-0.04, 0.04);
     const aa = a + off;
-    spawnBullet(p, "pellet", aa, 640 + rand(-40, 60), base * 0.42, W.col, 2.6, {
-      life: 0.34, kb: 220, falloff: 0.0042, crit: critRoll(), pblank: boonLv("pblank") > 0,
+    spawnBullet(p, "pellet", aa, 640 + rand(-40, 60), base * 0.42, W.col, slug ? 3.2 : 2.6, {
+      life: slug ? 0.34 + 0.12 * boonPow("slugs") : 0.34,
+      kb: slug ? 220 + 90 * boonPow("slugs") : 220,
+      falloff: slug ? 0.0042 / (1 + 0.6 * boonPow("slugs")) : 0.0042,
+      crit: critRoll(), pblank: boonLv("pblank") > 0,
+      ignite: dragon ? boonPow("dragonsbreath") : 0,
     });
   }
   // recoil shove backward (mechanical kick)
@@ -3638,7 +3946,15 @@ function fireRail(p, W, a, base) {
   const over = boonLv("ocharge2");
   const reachMul = over ? 1.35 + 0.15 * boonPow("ocharge2") : 1;
   const len = (560 * reachMul);
-  const dmg = base * 2.3 * (over ? 1.15 : 1);   // single big hit; balanced vs slow cadence
+  // CAPACITOR: holding off between shots stores charge for bonus damage (capped); consumed here
+  let capMul = 1;
+  if (boonLv("chargeshot")) {
+    const charge = Math.min(1, (p.railChargeT || 0) / 1.4); // ~1.4s to full
+    capMul = 1 + charge * (0.6 + 0.3 * boonPow("chargeshot"));
+    p.railChargeT = 0;
+    if (charge > 0.5) { ffx.spawnLight(p.x, p.y, 80, W.col, 0.7); }
+  }
+  const dmg = base * 2.3 * (over ? 1.15 : 1) * capMul; // single big hit; balanced vs slow cadence
   const ex = clamp(p.x + Math.cos(a) * len, CONFIG.wall, CONFIG.arenaW - CONFIG.wall);
   const ey = clamp(p.y + Math.sin(a) * len, CONFIG.wall, CONFIG.arenaH - CONFIG.wall);
   // visual rail beam + sparks
@@ -3667,6 +3983,25 @@ function fireRail(p, W, a, base) {
     if (bl.dead || bl.fuse >= 0) continue;
     let t = ((bl.x - p.x) * dx + (bl.y - p.y) * dy) / len2; t = clamp(t, 0, 1);
     if (dist(p.x + dx * t, p.y + dy * t, bl.x, bl.y) < bandW + bl.r) igniteBarrel(bl, 0.06);
+  }
+  // SIEGE MODE: the rail detonates a blast at the impact point
+  if (boonLv("siege")) {
+    const sr = 70 + 14 * boonPow("siege");
+    novas.push({ x: ex, y: ey, t: 0.3, tm: 0.3, maxR: sr, col: W.col });
+    ffx.ring(ex, ey, sr, W.col, 0.35, 5);
+    burst(ex, ey, W.col, 18, 280, 0.5, 3.4);
+    shake(3, 0.12);
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      if (dist(ex, ey, e.x, e.y) < sr + e.r) {
+        const a2 = angTo(ex, ey, e.x, e.y);
+        hitEnemy(e, dmg * 0.5, Math.cos(a2) * 160, Math.sin(a2) * 160, critRoll(), false);
+        if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+      }
+    }
+    for (const bl of barrels) {
+      if (!bl.dead && bl.fuse < 0 && dist(ex, ey, bl.x, bl.y) < sr + bl.r) igniteBarrel(bl, 0.06);
+    }
   }
   // RECOIL DASH: fire dashes the wielder backward a step with brief i-frames
   if (boonLv("recoild")) {
@@ -3702,9 +4037,15 @@ function bulletHitEnemy(b, e) {
     statusDamage(e, e.hp + 999, "#ffd29a");
     return;
   }
+  // TRACER FIRE: marked foes take bonus damage; this hit consumes & re-applies the mark
+  if ((e.markT || 0) > 0) dmg *= 1 + 0.12 * (e.markPow || 0);
   hitEnemy(e, dmg, Math.cos(b.ang) * b.kb, Math.sin(b.ang) * b.kb, b.crit, false);
   if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
   if (e.hp > 0 && b.crit && boonLv("volt")) applyShock(e, 7 * boonPow("volt") * dmgMul(), 1); // VOLT ROUNDS works for guns too
+  // DRAGON'S BREATH: incendiary pellets/rounds set foes burning
+  if (e.hp > 0 && b.ignite > 0) applyBurn(e, (3 + depth * 0.4) * b.ignite * dmgMul());
+  // TRACER FIRE: (re)apply the damage-amp mark
+  if (e.hp > 0 && b.tracer > 0) { e.markT = 3; e.markPow = b.tracer; }
 }
 
 /* pooled bullet update: motion, wall/pillar collision (with RICOCHET bounce), enemy hits with
@@ -3796,6 +4137,7 @@ function tryFreeze(p) {
     if (dist(p.x, p.y, e.x, e.y) < CONFIG.freezeR + e.r) {
       if ((e.shockT || 0) > 0) { shatterCombo(e); continue; }  // FREEZE + SHOCK = SHATTER
       if ((e.burnT || 0) > 0) { thermalSnap(e); continue; }    // BURN + FREEZE = THERMAL SNAP
+      if (!canFreeze(e)) continue;                             // boss thaw-resistance window
       e.frozenT = e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur;
       e.vx = 0; e.vy = 0;
       burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
@@ -3814,6 +4156,7 @@ function tryDash(p) {
   const m = Math.hypot(dx, dy);
   p.dashDX = dx / m; p.dashDY = dy / m;
   p.dashT = CONFIG.dashDur;
+  p.dashedT = 0.45;                 // BLADE RIPOSTE: arm the post-dash empowered slash
   p.ifr = Math.max(p.ifr, CONFIG.dashIfr);
   p.dashCharges--;
   if (p.dashCD <= 0) p.dashCD = CONFIG.dashCD;
@@ -3889,11 +4232,20 @@ function updatePlayer(p, dt) {
   if (p.frenzyT <= 0) p.frenzyN = 0;
   p.prismT = Math.max(0, p.prismT - dt);
   if (p.prismT <= 0) p.prismN = 0;
+  p.tempoT = Math.max(0, (p.tempoT || 0) - dt);   // BLADE TEMPO EDGE ramp window
+  if (p.tempoT <= 0) p.tempoN = 0;
+  p.dashedT = Math.max(0, (p.dashedT || 0) - dt); // BLADE RIPOSTE post-dash window
   p.velBuffT = Math.max(0, (p.velBuffT || 0) - dt);
+  // SIPHON EDGE lifesteal budget refills (drains toward 0) over real time, so the cap is
+  // genuinely "per second" — a satisfying steady heal, never a runaway immortality loop.
+  const stealCap = 8 + 6 * (p.boonPow && p.boonPow.steal ? p.boonPow.steal : 0);
+  p.stealBudget = Math.max(0, (p.stealBudget || 0) - stealCap * dt);
   p.castCD = Math.max(0, (p.castCD || 0) - dt);
   p.gunCD = Math.max(0, (p.gunCD || 0) - dt);
   p.heatT = Math.max(0, (p.heatT || 0) - dt);
   if (p.heatT <= 0) p.heatN = 0; // OVERHEAT ramp decays when fire isn't sustained
+  // RAILGUN CAPACITOR: store charge while the rail is between shots (caps ~1.6s of charge)
+  if (p.weapon === "rail" && p.gunCD <= 0) p.railChargeT = Math.min(1.6, (p.railChargeT || 0) + dt);
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
   p.freezeCD = Math.max(0, p.freezeCD - dt);
@@ -4089,6 +4441,7 @@ function updateEnemy(e, dt) {
   if (e.spawnT > 0) return;
   if ((e.sdCD || 0) > 0) e.sdCD -= dt;
   if ((e.hazCD || 0) > 0) e.hazCD -= dt;
+  if ((e.markT || 0) > 0) e.markT -= dt; // TRACER FIRE damage-amp mark
   // BURN: damage-over-time ticks (works alongside any state)
   if ((e.burnT || 0) > 0) {
     e.burnT -= dt;
@@ -4115,6 +4468,7 @@ function updateEnemy(e, dt) {
     collideArena(e);
     return;
   }
+  if ((e.freezeImmT || 0) > 0) e.freezeImmT -= dt; // freeze-resistance window (anti perma-freeze on bosses)
   // frozen: no movement, no attacks — cheap early-out
   if (e.frozenT > 0) {
     e.frozenT -= dt;
@@ -4122,6 +4476,8 @@ function updateEnemy(e, dt) {
     if (Math.random() < dt * 5) {
       addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: 0, vy: 26, t: 0.4, tm: 0.4, col: "#bfe8ff", r: rand(1.5, 3), drag: 0 });
     }
+    // when a boss thaws, it briefly resists being re-frozen so it can't be perma-locked
+    if (e.frozenT <= 0 && e.type === "boss") e.freezeImmT = 2.6;
     collideArena(e);
     return;
   }
@@ -4337,6 +4693,14 @@ function updateEnemy(e, dt) {
 
   if ((e.gravSlow || 0) > 0) { e.vx *= 0.45; e.vy *= 0.45; } // EVENT HORIZON: pulled foes are sluggish
   if ((e.iceSlowT || 0) > 0) { e.iceSlowT -= dt; e.vx *= (1 - (e.iceSlow || 0)); e.vy *= (1 - (e.iceSlow || 0)); } // FROST WAND chill
+  // WHIP CONSTRICT: rooted foe (no movement) taking ramping damage
+  if ((e.constrictT || 0) > 0) {
+    e.constrictT -= dt;
+    const cm = e.type === "boss" ? 0.6 : 0.05; // bosses only slowed, not fully rooted
+    e.vx *= cm; e.vy *= cm;
+    e.constrictTick = (e.constrictTick || 0) - dt;
+    if (e.constrictTick <= 0) { e.constrictTick = 0.3; statusDamage(e, (e.constrictDps || 0) * 0.3, "#ffe09a"); if (e.hp <= 0) return; }
+  }
   e.x += e.vx * dt; e.y += e.vy * dt;
   if (!(e.type === "boss" && (e.state === "dash" || e.state === "charge"))) collidePillars(e);
   collideArena(e);
@@ -5063,18 +5427,20 @@ function step(dt) {
   }
   ebolts = ebolts.filter((b) => b.t > 0);
 
-  // burn zones (dash AFTERBURN trail + EMBER STAFF burning patches)
+  // ground zones (dash AFTERBURN trail · EMBER STAFF burning patches · ARC FIELD shock fields)
   for (const z of zones) {
     z.t -= dt; z.tick -= dt;
     if (z.tick <= 0) {
-      z.tick = 0.18;
-      const zdps = z.ember ? z.dps : 4 * dmgMul() * boonPow("trail");
+      z.tick = z.shock ? 0.3 : 0.18;
+      const zdps = (z.ember || z.shock) ? z.dps : 4 * dmgMul() * boonPow("trail");
       for (const e of enemies) {
         if (e.hp > 0 && dist(z.x, z.y, e.x, e.y) < z.r + e.r) {
-          if (z.ember) statusDamage(e, zdps, "#ffaa44"); else hitEnemy(e, zdps, 0, 0, false, false);
+          if (z.shock) { statusDamage(e, zdps, "#ffee55"); if (e.hp > 0) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.12 : 0.3); }
+          else if (z.ember) { statusDamage(e, zdps, "#ffaa44"); if (z.fireslow) { e.iceSlow = Math.max(e.iceSlow || 0, 0.4); e.iceSlowT = Math.max(e.iceSlowT || 0, 0.4); } }
+          else hitEnemy(e, zdps, 0, 0, false, false);
         }
       }
-      addPart({ x: z.x + rand(-14, 14), y: z.y + rand(-14, 14), vx: 0, vy: -40, t: 0.4, tm: 0.4, col: "#ffaa44", r: rand(2, 4), drag: 1 });
+      addPart({ x: z.x + rand(-14, 14), y: z.y + rand(-14, 14), vx: 0, vy: z.shock ? 0 : -40, t: 0.4, tm: 0.4, col: z.shock ? "#ffee55" : "#ffaa44", r: rand(2, 4), drag: 1 });
     }
   }
   zones = zones.filter((z) => z.t > 0);
@@ -5126,14 +5492,17 @@ function step(dt) {
 
   // graviton singularities: pull nearby foes inward, then implode
   for (const sg of singularities) {
+    ctxP = sg.owner || player; // boon/crit context = the wielder who cast it
     sg.t -= dt;
     const pr = 1 - clamp(sg.t / sg.tm, 0, 1);
     for (const e of enemies) {
-      if (e.hp <= 0 || e.type === "boss") continue; // bosses resist the pull
+      if (e.hp <= 0) continue;
+      if (e.type === "boss" && !sg.pullBoss) continue; // bosses resist the pull unless DENSITY
       const d = dist(sg.x, sg.y, e.x, e.y);
       if (d < sg.pullR && d > 1) {
         const a = angTo(e.x, e.y, sg.x, sg.y);
-        const force = (1 - d / sg.pullR) * 1400 * dt;
+        const bossResist = e.type === "boss" ? 0.22 : 1; // DENSITY drags bosses, but gently
+        const force = (1 - d / sg.pullR) * 1400 * dt * bossResist;
         e.kbx += Math.cos(a) * force; e.kby += Math.sin(a) * force;
         if (sg.slow) e.gravSlow = 0.12;
         if (!sg.pulled.includes(e)) sg.pulled.push(e);
@@ -5156,8 +5525,9 @@ function step(dt) {
       for (const e of enemies) {
         if (e.hp <= 0) continue;
         if (dist(sg.x, sg.y, e.x, e.y) < ir + e.r) {
-          const crit = critRoll();
+          const crit = critRoll() || sg.darkstar;     // DARK STAR: implosion always crits
           hitEnemy(e, idmg, 0, 0, crit, true);
+          if (e.hp > 0 && sg.darkstar) applyShock(e, 6 * dmgMul(), 1); // DARK STAR: shock all caught
           if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
         }
       }
