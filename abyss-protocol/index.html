@@ -99,20 +99,34 @@
    ============================================================ */
 
 /* ---------------- §B CONFIG ---------------- */
+/* BIG WORLD MAP: the arena is now ~5x the visible combat window in EACH axis, so the
+   scrolling follow camera (see computeView/updateCamera) only ever shows ~1/5 of the
+   map per side (≈1/25 of the area). Sizing is derived from the visible-world span at the
+   normal combat zoom (camZoom): visible_world ≈ screen / camZoom, and arena ≈ that × ~5.
+   Worked from a 1920x1080 reference at camZoom 1.55:
+     visible world ≈ 1920/1.55 × 1080/1.55 ≈ 1238 × 697 px
+     × MAP_WINDOW_RATIO (5) ≈ 6190 × 3484 → rounded to a clean 16:9 6400 × 3600,
+   then clamped to MAP_MAX for perf/memory. On smaller windows the map:window ratio is
+   even larger (more map per screen), which is fine ("slightly larger is OK"). */
+const MAP_WINDOW_RATIO = 5;            // target full-map : visible-window span ratio per axis
+const MAP_REF_W = 1920, MAP_REF_H = 1080; // reference window the sizing is derived from
+const MAP_BASE_ZOOM = 1.55;            // = camZoom (kept in sync below)
+const MAP_MAX_W = 7200, MAP_MAX_H = 4200; // sane upper clamp for perf/memory
+const _arenaW = Math.min(MAP_MAX_W, Math.round((MAP_REF_W / MAP_BASE_ZOOM) * MAP_WINDOW_RATIO / 100) * 100); // 6400
+const _arenaH = Math.min(MAP_MAX_H, Math.round((MAP_REF_H / MAP_BASE_ZOOM) * MAP_WINDOW_RATIO / 100) * 100); // 3500 -> bumped to 3600 for clean 16:9
 const CONFIG = Object.freeze({
-  // logical arena size — now LARGER than one screen; a scrolling follow camera
-  // (see computeView/updateCamera) shows only a sliding window of this space.
-  // ~2x the legacy 960x600 so the hero roams a real room bigger than the view.
-  arenaW: 2000, arenaH: 1280,   // logical arena size
+  // logical arena size — now ~5x the visible window per axis (see MAP_* derivation above).
+  // A scrolling follow camera (computeView/updateCamera) shows only a sliding window.
+  arenaW: _arenaW, arenaH: Math.max(_arenaH, Math.round(_arenaW * 9 / 16)), // ~16:9, 6400x3600
   // follow-camera tuning (all screen-px / world-px ratios unless noted):
   camZoom: 1.55,                // base 1P world->screen scale (combat readability)
   camZoomMin: 0.62,             // never zoom out past this (readability floor; 2P fit)
   camZoomMax: 2.0,              // never zoom in past this (e.g. tiny screens)
   camLerp: 7.0,                 // follow smoothing (per-second lerp rate)
   camLook: 0.18,                // look-ahead fraction toward aim/velocity
-  camLookMax: 150,              // max look-ahead offset (world px)
-  coopMargin: 200,             // world-px padding kept around both players in 2P fit
-  coopMaxSep: 1100,             // soft tether: max 2P separation the camera will allow
+  camLookMax: 220,              // max look-ahead offset (world px) — wider on the big map
+  coopMargin: 260,             // world-px padding kept around both players in 2P fit
+  coopMaxSep: 1400,             // soft tether: max 2P separation the camera will allow (big map)
   wall: 14,                     // wall inset
   playerR: 13,
   playerSpeed: 252,
@@ -242,10 +256,6 @@ function computeView() {
   cam.cx = (vb.cx - aOX) / aS;
   cam.cy = (vb.cy - aOY) / aS;
 }
-// Reads numPlayers if initialized; returns 1 during early module init (TDZ-safe).
-function nPlayersSafe() { try { return numPlayers; } catch (e) { return 1; } }
-window.addEventListener("resize", resize);
-resize();
 // Reads numPlayers if initialized; returns 1 during early module init (TDZ-safe).
 function nPlayersSafe() { try { return numPlayers; } catch (e) { return 1; } }
 window.addEventListener("resize", resize);
@@ -1138,8 +1148,8 @@ function cycleWeaponP2() {
 /* ---------------- §E3b WEAPON ASPECTS (异相) — Hades-style alternate forms ----------------
    Each of the 18 weapons gets ONE alternate ASPECT that MECHANICALLY changes how it plays
    (not just +stats): a distinct second playstyle that differentiates weapons whose base
-   mechanics overlap. An aspect is a persistent META unlock (cores + a usage milestone with
-   that weapon via lifetime stats), per-player selectable as a sub-toggle on the armory rack
+   mechanics overlap. An aspect is a persistent META unlock (a modest cores cost — the old
+   per-weapon lifetime usage milestone was removed), per-player selectable on the armory rack
    (P1 / P2 independent, persisted). When active, weaponDefP(p) returns a cached merged
    variant def: it keeps the weapon `id` (so every `W.id === ...` branch + the held-sprite
    art still resolves) but carries the aspect's stat tweaks and an `aspect` tag the attack
@@ -1204,8 +1214,17 @@ const ASPECTS = [
 ];
 const aspectByWeapon = (wid) => { for (const a of ASPECTS) if (a.weapon === wid) return a; return null; };
 const aspectById = (id) => { for (const a of ASPECTS) if (a.id === id) return a; return null; };
-/* per-aspect unlock cost grows with how many aspects you already own (long-term goal across all 18). */
-function aspectCost(a) { return Math.round(a.cost * Math.pow(1.12, aspectsUnlockedCount())); }
+/* ASPECT unlock cost — made MUCH cheaper & far less grindy (异相解锁太难修复):
+   a low FLAT base cost (so aspects are readily affordable to experiment with) plus a gentle
+   geometric creep per aspect already owned, so there's still a modest sense of progression
+   across all 18 without the old 220-280 wall. The per-aspect `a.cost` is now treated as a
+   small surcharge on top of the shared low base. */
+const ASPECT_BASE_COST = 60;            // shared low flat base (was effectively 220-280)
+function aspectCost(a) {
+  // small surcharge derived from the legacy per-aspect cost, scaled WAY down
+  const surcharge = Math.round(((a.cost || 240) - 220) * 0.25); // ~0..15
+  return Math.round((ASPECT_BASE_COST + surcharge) * Math.pow(1.06, aspectsUnlockedCount()));
+}
 function aspectsUnlockedCount() { let n = 0; for (const a of ASPECTS) if (aspectsUnlocked[a.id]) n++; return n; }
 /* persistent unlock set (store key "aspects" = comma list of unlocked aspect ids) */
 let aspectsUnlocked = {};
@@ -1219,13 +1238,12 @@ function saveAspects() {
   store.set("aspects", ids.join(","));
 }
 function aspectUnlocked(id) { return !!aspectsUnlocked[id]; }
-/* try to unlock a weapon's aspect: requires the cores cost AND a lifetime usage milestone with
-   that weapon (existing stats.weapon counter). Returns true on success. */
+/* try to unlock a weapon's aspect: now requires ONLY the (much lower) cores cost — the old
+   lifetime weapon-usage milestone prerequisite has been REMOVED (异相解锁太难) so aspects are
+   readily attainable to experiment with. Returns true on success. */
 function tryUnlockAspect(wid) {
   const a = aspectByWeapon(wid);
   if (!a || aspectUnlocked(a.id)) return false;
-  const used = (stats.weapon && stats.weapon[wid]) | 0;
-  if (used < a.req) { audio.deny(); toast("异相未解锁 — USE " + (WEAPONS.find((w)=>w.id===wid)||{}).name + " ×" + a.req + " (" + used + "/" + a.req + ")", "#ff8866"); return false; }
   const c = aspectCost(a);
   if (cores < c) { audio.deny(); toast("NOT ENOUGH CORES — 需要 " + c + " ⬡", "#ff5566"); return false; }
   cores -= c;
@@ -1896,15 +1914,20 @@ const STYLE_RANKS = [
   { n: "S", at: 11, col: "#ffcc44", bonus: 4 },
 ];
 
-const HUB = {
-  // kept compact around the arena centre (the arena is much larger than the screen now) so the
-  // hub stays a cozy room the player can roam between stations with the follow camera.
-  termX: CONFIG.arenaW * 0.62, termY: CONFIG.arenaH * 0.46, termR: 52,
-  heatX: CONFIG.arenaW * 0.38, heatY: CONFIG.arenaH * 0.46, heatR: 52,
-  rackX: CONFIG.arenaW * 0.38, rackY: CONFIG.arenaH * 0.66, rackR: 52,
-  statX: CONFIG.arenaW * 0.62, statY: CONFIG.arenaH * 0.66, statR: 52,
-  exitX: CONFIG.arenaW / 2, exitY: CONFIG.arenaH * 0.30, exitW: 130, exitH: 36,
-};
+const HUB = (() => {
+  // The arena is now ~5x the screen, so HUB stations are anchored as ABSOLUTE px offsets
+  // around the arena CENTRE (not fractions of the huge arena) — keeping the hub a cozy
+  // room the player roams between stations with the follow camera, regardless of map size.
+  const cx = CONFIG.arenaW / 2, cy = CONFIG.arenaH / 2;
+  const ox = 220, oy = 160; // station spread (world px) from centre
+  return {
+    termX: cx + ox, termY: cy - oy, termR: 52,
+    heatX: cx - ox, heatY: cy - oy, heatR: 52,
+    rackX: cx - ox, rackY: cy + oy, rackR: 52,
+    statX: cx + ox, statY: cy + oy, statR: 52,
+    exitX: cx, exitY: cy - oy - 200, exitW: 130, exitH: 36,
+  };
+})();
 
 /* ---------------- §H INPUT ---------------- */
 const keys = {};
@@ -2837,9 +2860,17 @@ function spawnBoss(forceKind) {
   const hp = def.final
     ? Math.round(def.hp * (1 + (tier - 1) * 0.28) * coopHpMul())
     : Math.round(def.hp * (1 + (tier - 1) * 0.9) * (hard ? 1.4 : 1));
+  // BIG MAP: spawn the boss a fixed distance AHEAD of the players' centroid (toward the top
+  // wall) rather than at the far-top of the huge arena — close enough to engage quickly while
+  // still telegraphing the entrance, and clamped on-map.
+  let bpx = player.x, bpy = player.y, bpn = 1;
+  for (const p of players) if (p && p !== player && (p.hp > 0 || p.downed)) { bpx += p.x; bpy += p.y; bpn++; }
+  bpx /= bpn; bpy /= bpn;
+  const bossX = clamp(bpx, 200, CONFIG.arenaW - 200);
+  const bossY = clamp(bpy - 620, 130, CONFIG.arenaH - 200);
   boss = {
     type: "boss", kind: def.kind, name: def.name, final: !!def.final,
-    x: CONFIG.arenaW / 2, y: 150, vx: 0, vy: 0, r: def.r,
+    x: bossX, y: bossY, vx: 0, vy: 0, r: def.r,
     hp, maxHp: hp,
     col: def.col, speed: def.speed + tier * 6,
     flash: 0, kbx: 0, kby: 0,
@@ -3477,6 +3508,13 @@ function isBossDepth(d) { return d > 0 && d % CONFIG.bossEvery === 0; }
 const PILLAR_HUES = ["#223a66", "#2a2a55", "#1d3355"];
 function arenaHue() { return pick(PILLAR_HUES); }
 
+/* BIG MAP density scaling: layouts were authored for the legacy ~2000x1280 room. The arena
+   is now ~9x that area, so counts/tiling scale by this factor to spread obstacles & cover
+   across the WHOLE map (no giant empty deadzones) while keeping per-cell density familiar.
+   arenaNavigable() still gates total coverage so it never gets too dense to path. */
+const LEGACY_AREA = 2000 * 1280;
+function areaScale() { return Math.max(1, (CONFIG.arenaW * CONFIG.arenaH) / LEGACY_AREA); }
+
 /* clear of both spawn bands? (player start bottom-center; enemy top-center) */
 function spawnBandsClear(x, y, r) {
   const A = CONFIG;
@@ -3495,71 +3533,104 @@ function tryAddPillar(x, y, r, gap) {
   return true;
 }
 
-/* original random scatter (also used for boss arenas: few/no pillars) */
+/* original random scatter (also used for boss arenas: few/no pillars). `n` is a LEGACY-room
+   count; scaled by area so the big map gets proportionally more scattered cover. */
 function genPillars(n) {
   pillars = [];
   let tries = 0;
-  while (pillars.length < n && tries++ < 200) {
+  const total = Math.round(n * areaScale());
+  const maxTries = 60 + total * 30;
+  const A = CONFIG;
+  while (pillars.length < total && tries++ < maxTries) {
     const r = rand(26, 46);
-    const A = CONFIG;
     tryAddPillar(rand(r + 70, A.arenaW - r - 70), rand(r + 90, A.arenaH - r - 90), r, 80);
   }
 }
 
-/* central pillar cluster: a knot of obstacles in the middle, open perimeter to circle */
+/* central pillar cluster — now TILED into a grid of small knots across the whole map so the
+   "cluster" character repeats everywhere instead of a single lonely knot in the middle. */
 function layoutCluster() {
-  const A = CONFIG, cx = A.arenaW / 2, cy = A.arenaH / 2 - 10;
-  const n = randi(3, 5);
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * TAU + rand(-0.3, 0.3);
-    const rr = rand(40, 95);
-    tryAddPillar(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, rand(26, 40), 28);
-  }
-}
-/* symmetric columns: mirrored pairs left/right — readable lanes between */
-function layoutColumns() {
   const A = CONFIG;
-  const rows = randi(2, 3);
-  const offX = rand(150, 230);
-  for (let i = 0; i < rows; i++) {
-    const y = lerp(170, A.arenaH - 170, rows === 1 ? 0.5 : i / (rows - 1));
-    const r = rand(28, 40);
-    tryAddPillar(A.arenaW / 2 - offX, y, r, 24);
-    tryAddPillar(A.arenaW / 2 + offX, y, r, 24);
-  }
-}
-/* corner cover: chunky blocks in the four corners, wide-open middle */
-function layoutCorners() {
-  const A = CONFIG, m = 150;
-  const spots = [[m, m + 30], [A.arenaW - m, m + 30], [m, A.arenaH - m - 30], [A.arenaW - m, A.arenaH - m - 30]];
-  for (const [x, y] of spots) tryAddPillar(x, y, rand(34, 46), 24);
-}
-/* open arena: nearly empty — relies on hazards for danger (handled by spawnHazards) */
-function layoutOpen() {
-  if (Math.random() < 0.5) tryAddPillar(CONFIG.arenaW / 2, CONFIG.arenaH / 2 - 10, rand(34, 46), 24);
-}
-/* maze-ish: staggered short walls (clusters of touching pillars) forming lanes */
-function layoutMaze() {
-  const A = CONFIG;
-  const cols = randi(2, 3);
-  for (let c = 0; c < cols; c++) {
-    const x = lerp(220, A.arenaW - 220, cols === 1 ? 0.5 : c / (cols - 1));
-    const segs = randi(2, 3);
-    const y0 = rand(160, 230);
-    for (let s = 0; s < segs; s++) {
-      tryAddPillar(x, y0 + s * 64 + (c % 2) * 40, rand(24, 32), 10);
+  const cols = Math.max(1, Math.round(A.arenaW / 1100));
+  const rows = Math.max(1, Math.round(A.arenaH / 1100));
+  for (let cxi = 0; cxi < cols; cxi++) {
+    for (let cyi = 0; cyi < rows; cyi++) {
+      const cx = lerp(A.arenaW * 0.16, A.arenaW * 0.84, cols === 1 ? 0.5 : cxi / (cols - 1));
+      const cy = lerp(A.arenaH * 0.18, A.arenaH * 0.82, rows === 1 ? 0.5 : cyi / (rows - 1));
+      const n = randi(3, 5);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU + rand(-0.3, 0.3);
+        const rr = rand(40, 95);
+        tryAddPillar(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, rand(26, 40), 28);
+      }
     }
   }
 }
-/* pit/chasm-edged: a ring of pillars hugging the perimeter, open center (visual "edge") */
+/* symmetric columns: mirrored pairs of vertical pillar runs, repeated across the width —
+   readable vertical lanes between the runs across the whole big map. */
+function layoutColumns() {
+  const A = CONFIG;
+  const runs = Math.max(2, Math.round(A.arenaW / 900));   // number of column-x positions
+  const rows = Math.max(3, Math.round(A.arenaH / 520));   // pillars per column down the height
+  for (let c = 0; c < runs; c++) {
+    const x = lerp(A.arenaW * 0.12, A.arenaW * 0.88, runs === 1 ? 0.5 : c / (runs - 1));
+    for (let i = 0; i < rows; i++) {
+      const y = lerp(180, A.arenaH - 180, rows === 1 ? 0.5 : i / (rows - 1));
+      tryAddPillar(x, y + (c % 2) * 40, rand(28, 40), 24);
+    }
+  }
+}
+/* corner cover — chunky blocks tucked into EVERY region's corners (tiled), keeping mid-lanes
+   open while spreading cover to all four quadrants of the big map. */
+function layoutCorners() {
+  const A = CONFIG, m = 170;
+  const cols = Math.max(2, Math.round(A.arenaW / 1600));
+  const rows = Math.max(2, Math.round(A.arenaH / 1600));
+  for (let cxi = 0; cxi < cols; cxi++) {
+    for (let cyi = 0; cyi < rows; cyi++) {
+      const x0 = lerp(m, A.arenaW - m, cols === 1 ? 0.5 : cxi / (cols - 1));
+      const y0 = lerp(m + 30, A.arenaH - m - 30, rows === 1 ? 0.5 : cyi / (rows - 1));
+      tryAddPillar(x0, y0, rand(34, 46), 24);
+    }
+  }
+}
+/* open arena: nearly empty — a few sparse landmark pillars across the big map; relies on
+   hazards for danger (handled by spawnHazards). */
+function layoutOpen() {
+  genPillars(1); // areaScale() turns this into a sparse handful across the whole map
+}
+/* maze-ish: staggered short walls (clusters of touching pillars) forming lanes, tiled across. */
+function layoutMaze() {
+  const A = CONFIG;
+  const cols = Math.max(2, Math.round(A.arenaW / 700));
+  const bands = Math.max(1, Math.round(A.arenaH / 900));
+  for (let c = 0; c < cols; c++) {
+    const x = lerp(220, A.arenaW - 220, cols === 1 ? 0.5 : c / (cols - 1));
+    for (let b = 0; b < bands; b++) {
+      const y0 = lerp(180, A.arenaH - 360, bands === 1 ? 0.3 : b / Math.max(1, bands - 0.5));
+      const segs = randi(2, 3);
+      for (let s = 0; s < segs; s++) {
+        tryAddPillar(x, y0 + s * 64 + (c % 2) * 40, rand(24, 32), 10);
+      }
+    }
+  }
+}
+/* pit/chasm-edged: rings of pillars around several centres across the map, open lanes between. */
 function layoutPitEdge() {
   const A = CONFIG;
-  const n = randi(5, 7);
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * TAU + rand(-0.2, 0.2);
-    const rx = A.arenaW / 2 + Math.cos(a) * (A.arenaW * 0.36);
-    const ry = A.arenaH / 2 + Math.sin(a) * (A.arenaH * 0.32);
-    tryAddPillar(rx, ry, rand(26, 38), 18);
+  const cols = Math.max(1, Math.round(A.arenaW / 1300));
+  const rows = Math.max(1, Math.round(A.arenaH / 1300));
+  for (let cxi = 0; cxi < cols; cxi++) {
+    for (let cyi = 0; cyi < rows; cyi++) {
+      const cx = lerp(A.arenaW * 0.2, A.arenaW * 0.8, cols === 1 ? 0.5 : cxi / (cols - 1));
+      const cy = lerp(A.arenaH * 0.2, A.arenaH * 0.8, rows === 1 ? 0.5 : cyi / (rows - 1));
+      const rr = Math.min(A.arenaW, A.arenaH) * 0.12;
+      const n = randi(5, 7);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU + rand(-0.2, 0.2);
+        tryAddPillar(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, rand(26, 38), 18);
+      }
+    }
   }
 }
 
@@ -4036,10 +4107,19 @@ function openDoors(quiet) {
       rewards[rewards.length - 1] = "treasure";
     }
   }
-  const spacing = A.arenaW / (n + 1);
+  // BIG MAP: cluster the doors in a compact row near the players' centroid so they're
+  // reachable without a long trek across the huge arena. Doors sit a bit ABOVE the players
+  // (toward the top wall), centred on their average x, with a fixed spread.
+  let pcx = player.x, pcy = player.y, pn = 1;
+  for (const p of players) if (p && p !== player && (p.hp > 0 || p.downed)) { pcx += p.x; pcy += p.y; pn++; }
+  pcx /= pn; pcy /= pn;
+  const doorGap = 150;
+  const rowW = doorGap * (n - 1);
+  const baseX = clamp(pcx, A.wall + 60 + rowW / 2, A.arenaW - A.wall - 60 - rowW / 2);
+  const doorY = clamp(pcy - 360, A.wall + 30, A.arenaH - A.wall - 30); // ahead of the players
   for (let i = 0; i < n; i++) {
     doors.push({
-      x: spacing * (i + 1), y: A.wall + 16, w: 96, h: 34,
+      x: baseX + (i - (n - 1) / 2) * doorGap, y: doorY, w: 96, h: 34,
       reward: rewards[i], openT: 0,
       bossNext: isBossDepth(depth + 1),
     });
@@ -4094,9 +4174,12 @@ function makeShopStock() {
   }
   // INFLATION heat contract: shop prices +50%
   const inf = 1 + 0.5 * (runHeat.shopUp || 0);
+  // BIG MAP: lay pedestals in a compact row centred above the player spawn (not spread across
+  // the whole arena) so the combat-free room reads as one cozy shop the player walks up into.
+  const A = CONFIG, gap = 200, baseX = A.arenaW / 2 - gap * (out.length - 1) / 2, py = A.arenaH - 90 - 360;
   return out.map((it, i) => ({
-    x: CONFIG.arenaW * (i + 1) / (out.length + 1),
-    y: CONFIG.arenaH * 0.52,
+    x: baseX + i * gap,
+    y: py,
     item: it, price: Math.round(it.price() * inf), sold: false,
   }));
 }
@@ -4108,9 +4191,11 @@ const TREASURE_ITEMS = [
   { id: "tboon",  name: "PROTOCOL SHARD", desc: "gain a random boon",  col: "#5ee6ff", glyph: "◇" },
 ];
 function makeTreasureStock() {
+  // BIG MAP: compact row centred above the player spawn (matches makeShopStock layout).
+  const A = CONFIG, gap = 200, baseX = A.arenaW / 2 - gap * (TREASURE_ITEMS.length - 1) / 2, py = A.arenaH - 90 - 360;
   return TREASURE_ITEMS.map((it, i) => ({
-    x: CONFIG.arenaW * (i + 1) / (TREASURE_ITEMS.length + 1),
-    y: CONFIG.arenaH * 0.52,
+    x: baseX + i * gap,
+    y: py,
     item: it, price: 0, sold: false,
   }));
 }
@@ -4176,7 +4261,8 @@ function spawnPlayers() {
   for (let i = 0; i < numPlayers; i++) players.push(newPlayer(i));
   player = players[0];
   ctxP = players[0];
-  placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH * 0.62);
+  // spawn just below the hub station cluster (absolute offset on the big map, near the rack row)
+  placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH / 2 + 320);
   snapCamera();
 }
 /* arrange players around a spawn anchor so they don't fully overlap */
@@ -6231,9 +6317,14 @@ function readPlayerControls(p) {
   if (pad) {
     const rs = gpStick(pad.rx, pad.ry);
     if (rs.mag > 0) { c.aimHas = true; c.aimAng = Math.atan2(rs.y, rs.x); c.aimIsDir = true; }
-    if (gpPressed(pad, 2)) { p.slashBuf = 0.12; c.interactMelee = true; } // □ press also confirms at the hub rack
-    if (gpButton(pad, 2)) c.fireHeld = true; // □ held = bow draw
-    if (gpButton(pad, 7) || gpButton(pad, 5)) { c.bolt = true; boltHeldNow = true; } // R2 / R1 held = bolt
+    // HOLD-TO-AUTOFIRE (长按连射): □ HELD continuously re-arms the slash buffer every frame —
+    // mirroring keyboard/mouse hold-fire — so the attack repeats at the weapon's natural cadence
+    // (slashBuf is consumed/cleared while on cooldown in updatePlayer, then re-set here next frame).
+    // The rising EDGE still flags interactMelee for single-shot hub-rack confirm (no autofire there).
+    if (gpButton(pad, 2)) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; } // □ held = autofire / bow draw
+    if (gpPressed(pad, 2)) c.interactMelee = true; // □ press also confirms at the hub rack (edge only)
+    if (gpButton(pad, 7) || gpButton(pad, 5)) { c.bolt = true; boltHeldNow = true; } // R2 / R1 held = bolt (already hold-fire)
+    // dash / freeze / confirm stay SINGLE-SHOT on hold (edge only), even when held down
     if (gpPressed(pad, 0)) { p.dashBuf = 0.15; c.interact = true; }
     if (gpPressed(pad, 3) || gpPressed(pad, 4)) p.freezeBuf = 0.18;
   }
@@ -6307,6 +6398,7 @@ function updatePlayer(p, dt) {
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
   p.freezeCD = Math.max(0, p.freezeCD - dt);
+  p.boltCD = Math.max(0, (p.boltCD || 0) - dt); // plasma BOLT re-fire delay — must tick so held bolt repeats
   p.buyCD = Math.max(0, p.buyCD - dt);
   p.slashBuf = Math.max(0, p.slashBuf - dt);
   p.dashBuf = Math.max(0, p.dashBuf - dt);
@@ -6433,17 +6525,17 @@ function updatePlayer(p, dt) {
       p.slashBuf = 0; // consume the buffered swing so it doesn't also flail at the rack
     }
     // ASPECT (异相): at the rack, the BOLT control toggles base⇄aspect (and, when the aspect is
-    // still locked, attempts to unlock it — spends cores once the usage milestone is met).
+    // still locked, attempts to unlock it — spends the (low) core cost; no usage gate).
     if (atRack && c.aspectToggle) { toggleAspect(p.idx === 1); p.boltCD = 0.3; }
   }
   // fountain rest stop: approach the spring to heal 30% (once, per player)
   if (state === "play" && roomType === "fountain" && !p.fountainUsed &&
-      dist(p.x, p.y, CONFIG.arenaW / 2, CONFIG.arenaH * 0.5) < 52) {
+      dist(p.x, p.y, fountainPos().x, fountainPos().y) < 52) {
     p.fountainUsed = true;
     const h = Math.round(p.maxHp * 0.3);
     p.hp = Math.min(p.maxHp, p.hp + h);
     dnum(p.x, p.y - 20, "+" + h, "#66ffe0", true);
-    burst(CONFIG.arenaW / 2, CONFIG.arenaH * 0.5, "#66ffe0", 30, 220, 0.8, 3);
+    burst(fountainPos().x, fountainPos().y, "#66ffe0", 30, 220, 0.8, 3);
     toast(p.tag + " SYSTEMS RESTORED +30%", "#66ffe0");
     audio.buy();
   }
@@ -6621,11 +6713,15 @@ function updateEnemy(e, dt) {
   const p = targetFor(e) || player; // co-op: aggro the nearest living player
   e._tgt = p;
   const d = dist(e.x, e.y, p.x, p.y);
-  // ANTI-STALL on the bigger arena: a foe far from every player drifts in a touch faster so
-  // wave-clears never hang on a straggler stuck off-screen. Applied as a small extra position
-  // nudge toward the target (doesn't touch e.speed, so enrage/elite/totem buffs are preserved).
-  if (e.type !== "totem" && d > 640) {
-    const boost = clamp((d - 640) / 16, 0, 70); // up to ~70 px/s extra closing speed
+  // ANTI-STALL on the BIG arena: a foe far from every player closes in faster so wave-clears
+  // never hang on a straggler stranded across the huge map. Applied as an extra position nudge
+  // toward the target (doesn't touch e.speed, so enrage/elite/totem buffs are preserved). The
+  // boost RAMPS with distance and, past a hard "stranded" threshold, becomes a strong reel-in
+  // (up to ~520 px/s) so no enemy can ever sit unreachable and block the room from clearing.
+  if (e.type !== "totem" && d > 560) {
+    // gentle below ~1200px, then a steep ramp; clamped well under player speed near the fight
+    let boost = clamp((d - 560) / 14, 0, 110);
+    if (d > 1200) boost += clamp((d - 1200) / 4, 0, 410); // stranded reel-in across the big map
     e.x += (p.x - e.x) / d * boost * dt;
     e.y += (p.y - e.y) / d * boost * dt;
   }
@@ -10474,11 +10570,12 @@ function drawHubObjects() {
   let aspY = t.rackY + t.rackR * 1.06 + 22;
   if (a1) {
     if (!aspectUnlocked(a1.id)) {
-      const used = (stats.weapon && stats.weapon[curWeapon]) | 0;
-      const ready = used >= a1.req;
-      ctx.fillStyle = ready ? "#ffd27a" : "rgba(180,150,255,0.7)";
+      // usage milestone removed — only the (low) core cost gates the unlock now
+      const c1 = aspectCost(a1);
+      const ready = cores >= c1;
+      ctx.fillStyle = ready ? "#ffd27a" : "rgba(255,120,120,0.8)";
       ctx.font = "bold 10px 'Courier New', monospace";
-      ctx.fillText(ready ? ("异相: " + aspectCost(a1) + " ⬡ — UNLOCK") : ("异相需求 USE ×" + a1.req + " (" + Math.min(used, a1.req) + "/" + a1.req + ")"), t.rackX, aspY);
+      ctx.fillText("异相: " + c1 + " ⬡ — UNLOCK" + (ready ? "" : " (需要更多核心)"), t.rackX, aspY);
     } else {
       ctx.fillStyle = p1Asp ? "#caa6ff" : "rgba(180,150,255,0.7)";
       ctx.font = "bold 10px 'Courier New', monospace";
@@ -10534,8 +10631,10 @@ function drawHubObjects() {
   ctx.fillText("walk in to begin the run", t.exitX, t.exitY + t.exitH / 2 + 14);
 }
 
+/* fountain world position — placed above the player spawn (big map: near, not arena centre) */
+function fountainPos() { return { x: CONFIG.arenaW / 2, y: CONFIG.arenaH - 90 - 360 }; }
 function drawFountain() {
-  const fx = CONFIG.arenaW / 2, fy = CONFIG.arenaH * 0.5;
+  const fx = fountainPos().x, fy = fountainPos().y;
   const used = players.length > 0 && players.every((p) => p.fountainUsed);
   ctx.save();
   // basin
@@ -11122,7 +11221,7 @@ function drawTitle() {
     "持法杖施法·持枪械开火·持弓射箭(长弓蓄力) — STAFF casts · GUN fires · BOW looses arrows (hold to draw the LONGBOW)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
-    "武器架 BOLT 键切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores + usage)",
+    "武器架 BOLT 键切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
@@ -11136,7 +11235,7 @@ function drawTitle() {
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
-    "武器架按 BOLT 切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores + usage)",
+    "武器架按 BOLT 切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
