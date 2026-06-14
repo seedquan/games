@@ -1418,6 +1418,223 @@ for (const b of BOONS) {
   b.descCN = (cn && cn.desc) || b.desc;
 }
 
+/* ---------------- §F1c BOON SYSTEM 2.0 — THEMES / 流派 (build lines) ----------------
+   Every boon is tagged with one or more THEME (流派). Themed offer-weighting biases the
+   choose-1-of-3 toward themes the player has already invested in (snowball a build) while
+   keeping ~1 slot open to off-theme discovery. Per-player theme weight = sum of owned boons'
+   theme tags weighted by their boonPow (rarity). Enchant boons map to their element's theme.
+   Themes also gate the DUO boons (跨流派强力祝福) below. */
+const THEMES = {
+  burn:   { key: "burn",   zh: "火",   en: "BURN",      col: "#ff8844", glyph: "❋" },
+  frost:  { key: "frost",  zh: "冰",   en: "FROST",     col: "#aaeeff", glyph: "❄" },
+  shock:  { key: "shock",  zh: "雷",   en: "SHOCK",     col: "#ffee55", glyph: "↯" },
+  poison: { key: "poison", zh: "毒",   en: "POISON",    col: "#7fff5a", glyph: "☣" },
+  crit:   { key: "crit",   zh: "暴击", en: "CRIT",      col: "#ffd24a", glyph: "◎" },
+  dash:   { key: "dash",   zh: "冲刺", en: "DASH",      col: "#88ff88", glyph: "»" },
+  barrage:{ key: "barrage",zh: "弹幕", en: "BARRAGE",   col: "#ff99aa", glyph: "Ψ" },
+  steal:  { key: "steal",  zh: "吸血", en: "LIFESTEAL", col: "#ff6688", glyph: "♥" },
+  defense:{ key: "defense",zh: "守护", en: "DEFENSE",   col: "#cc99ff", glyph: "✚" },
+};
+const themeById = (k) => THEMES[k];
+/* boon id -> theme key(s). Anything not listed gets no theme (still offerable; just unthemed). */
+const BOON_THEMES = {
+  // universal
+  arc: ["crit"], chain: ["shock"], pierce: ["barrage"], split: ["barrage"], trail: ["dash", "burn"],
+  reset: ["dash"], crit: ["crit"], steal: ["steal"], slow: ["defense"], thorn: ["defense"],
+  blade: ["crit"], over: ["barrage"], swift: ["dash"], wind: ["defense"], shatter: ["frost"],
+  cryo: ["frost"], ignite: ["burn"], volt: ["shock"], sdash: ["dash", "shock"],
+  // enchant line -> its element theme
+  en_fire: ["burn"], en_ice: ["frost"], en_shock: ["shock"], en_poison: ["poison"],
+  en_steal: ["steal"], en_exec: ["crit"],
+  // lance
+  skewer: ["crit"], phalanx: ["crit"], gungnir: ["barrage"], vault: ["dash", "burn"],
+  // maul
+  ashock: ["defense"], jugg: ["defense"], seismic: ["defense"], magma: ["burn"],
+  // twin fang
+  frenzy: ["crit"], exsang: ["crit", "poison"], venom: ["poison"], phantstk: ["dash"],
+  // arc caster
+  conduct: ["shock"], overld: ["shock"], supercond: ["shock", "frost"], arcfield: ["shock"],
+  // graviton
+  horizon: ["defense"], collapse: ["crit"], singpull: ["defense"], darkstar: ["shock", "crit"],
+  // glaive
+  ricochet: ["barrage"], velret: ["crit", "dash"], tempest2: ["barrage"], twinblade: ["barrage"],
+  // whip
+  hookshot: ["crit"], flechette: ["barrage"], electrowhip: ["shock"], constrict: ["defense"],
+  // prism
+  refract: ["barrage"], ocharge: ["crit"], prismburn: ["burn"], lightspeed: ["dash"],
+  // ember
+  conflag: ["burn"], meteor: ["burn"], firewall: ["burn"], cinderbrst: ["burn"],
+  // frost wand
+  permaf: ["frost"], icelance: ["frost", "crit"], frostnova: ["frost"], blizzard: ["frost"],
+  // storm
+  tempest: ["shock"], overvolt: ["shock"], thunderclap: ["shock"], ballight: ["shock"],
+  // auto-rifle
+  overheat: ["barrage"], ricoR: ["barrage"], apr: ["barrage", "crit"], tracer: ["crit"],
+  // scatter
+  pblank: ["crit"], dbarrel: ["barrage"], slugs: ["barrage"], dragonsbreath: ["burn"],
+  // railgun
+  ocharge2: ["crit"], recoild: ["dash"], siege: ["barrage"], chargeshot: ["crit"],
+  // quick bow
+  rapidnock: ["barrage"], splitarrow: ["barrage"], heartseek: ["crit"], barrage: ["barrage"],
+  // longbow
+  penetrator: ["crit", "barrage"], galeforce: ["defense"], huntmark: ["crit"], quickdraw: ["barrage"],
+  // stormbow
+  arrowrain: ["barrage"], staticarr: ["shock"], thicket: ["barrage"], ricoarr: ["barrage"],
+  // blade
+  riposte: ["crit", "dash"], cleave: ["crit"], tempo: ["crit"], execorder: ["crit"],
+};
+/* primary theme for a boon (first tag) — used for the small card tag + panel grouping. */
+function boonThemes(b) {
+  if (!b) return [];
+  if (b.themes) return b.themes;            // DUO boons carry their own themes array
+  return BOON_THEMES[b.id] || [];
+}
+function boonPrimaryTheme(b) { const t = boonThemes(b); return t.length ? t[0] : null; }
+/* invested weight in a theme for player p = sum of owned boons' boonPow whose tags include it.
+   DUO boons count double toward both of their themes (they are deep build payoffs). */
+function themeWeight(p, key) {
+  if (!p || !p.boons) return 0;
+  let w = 0;
+  for (const id in p.boons) {
+    if (!p.boons[id]) continue;
+    const b = boonById(id);
+    if (!b) continue;
+    const ts = boonThemes(b);
+    if (ts.indexOf(key) < 0) continue;
+    const pow = (p.boonPow && p.boonPow[id]) || p.boons[id];
+    w += b.duo ? pow * 2 : pow;
+  }
+  return w;
+}
+/* the player's most-invested theme weights as a quick lookup (rebuilt per offer, not per frame). */
+function themeWeights(p) {
+  const out = {};
+  for (const k in THEMES) out[k] = themeWeight(p, k);
+  return out;
+}
+
+/* ---------------- §F1d DUO BOONS — 跨流派强力祝福 (cross-theme payoffs) ----------------
+   Powerful build payoffs that require investment in TWO prerequisite themes (each prereq theme
+   must reach DUO_PREREQ weight) before they can be OFFERED. They appear rarely (epic/legendary
+   feel), are per-player, and are BONUS pool entries (never required to fill the 3 slots). Each
+   ties to existing combos/mechanics; effects are read via boonLv/boonPow in the hot paths. */
+const DUO_PREREQ = 2.0;   // min themeWeight in EACH prereq theme to unlock a duo offer
+const DUO_BOONS = [
+  { id: "duo_thermalcore", name: "THERMAL CORE", nameCN: "热核",
+    desc: "FIRE+FROST: shatter & thermal detonations hit far harder and chain",
+    descCN: "火+冰：碎裂与热爆威力大增并扩散", col: "#ffd27a", glyph: "✸", max: 2,
+    duo: true, prereq: ["burn", "frost"], themes: ["burn", "frost"] },
+  { id: "duo_neurotoxin", name: "NEUROTOXIN", nameCN: "神经毒素",
+    desc: "SHOCK+POISON: shock chains spread poison and neuro-stun foes",
+    descCN: "雷+毒：感电连锁扩散毒素并神经眩晕", col: "#bfff66", glyph: "☣", max: 2,
+    duo: true, prereq: ["shock", "poison"], themes: ["shock", "poison"] },
+  { id: "duo_vampcrit", name: "SANGUINE EDGE", nameCN: "血之刃",
+    desc: "CRIT+LIFESTEAL: critical hits heal you far more",
+    descCN: "暴击+吸血：暴击大幅回复生命", col: "#ff6688", glyph: "♥", max: 2,
+    duo: true, prereq: ["crit", "steal"], themes: ["crit", "steal"] },
+  { id: "duo_elemtrail", name: "ELEMENTAL WAKE", nameCN: "元素尾迹",
+    desc: "DASH+element: dash trail applies all your weapon enchants",
+    descCN: "冲刺+元素：冲刺尾迹施加你所有武器附魔", col: "#aaffcc", glyph: "≈", max: 2,
+    duo: true, prereqAny: [["dash", "burn"], ["dash", "frost"], ["dash", "shock"], ["dash", "poison"]],
+    prereq: ["dash"], themes: ["dash"] },
+  { id: "duo_arcstorm", name: "ARC STORM", nameCN: "电弧风暴",
+    desc: "BARRAGE+SHOCK: projectile hits chain lightning to nearby foes",
+    descCN: "弹幕+雷：射弹命中向附近敌人连锁闪电", col: "#ffee99", glyph: "ϟ", max: 2,
+    duo: true, prereq: ["barrage", "shock"], themes: ["barrage", "shock"] },
+  { id: "duo_glacialedge", name: "GLACIAL EDGE", nameCN: "冰封之刃",
+    desc: "FROST+CRIT: crits vs frozen foes shatter for huge bonus damage",
+    descCN: "冰+暴击：对冰冻敌人暴击触发巨额碎裂", col: "#bfeaff", glyph: "❄", max: 2,
+    duo: true, prereq: ["frost", "crit"], themes: ["frost", "crit"] },
+  { id: "duo_infernobarr", name: "INFERNO BARRAGE", nameCN: "炼狱弹幕",
+    desc: "BARRAGE+FIRE: projectiles ignite, and burning foes spread fire",
+    descCN: "弹幕+火：射弹点燃，燃烧敌人扩散火焰", col: "#ffaa55", glyph: "🔥", max: 2,
+    duo: true, prereq: ["barrage", "burn"], themes: ["barrage", "burn"] },
+  { id: "duo_aegis", name: "AEGIS REACTOR", nameCN: "神盾反应堆",
+    desc: "DEFENSE+LIFESTEAL: contact damage heals you and thorns hit harder",
+    descCN: "守护+吸血：反伤回复生命且荆棘伤害提升", col: "#cc99ff", glyph: "✚", max: 2,
+    duo: true, prereq: ["defense", "steal"], themes: ["defense", "steal"] },
+  { id: "duo_blink", name: "PHASE STRIKE", nameCN: "相位突袭",
+    desc: "DASH+CRIT: the first hit after a dash always crits and refunds dash",
+    descCN: "冲刺+暴击：冲刺后首次命中必定暴击并返还冲刺", col: "#aaf6ff", glyph: "⤬", max: 2,
+    duo: true, prereq: ["dash", "crit"], themes: ["dash", "crit"] },
+  { id: "duo_plague", name: "PLAGUEBLOOM", nameCN: "疫病绽放",
+    desc: "POISON+FIRE: combust blasts are bigger and re-seed heavy poison",
+    descCN: "毒+火：爆燃更猛并重新施加大量毒素", col: "#9fff5a", glyph: "✸", max: 2,
+    duo: true, prereq: ["poison", "burn"], themes: ["poison", "burn"] },
+];
+for (const d of DUO_BOONS) { BOONS.push(d); }  // duos live in the master pool (gated by eligibility)
+const isDuo = (b) => !!(b && b.duo);
+
+/* ---------------- §F1e POWER SURGE — 力量回路 (vertical upgrade reward) ----------------
+   A choose-1-of-3 option that, instead of granting a NEW boon, LEVELS UP an existing owned
+   boon: it bumps that boon's best rarity tier (common→rare→epic→legendary) and adds boonPow,
+   scaling its numeric effect (all effects read boonPow). It never creates a boon the player
+   doesn't already own; it can only appear when the player owns at least one upgradeable boon.
+   Implemented as a synthetic card with id "_surge" (not a real BOON; excluded from pools). */
+const SURGE_BOON = {
+  id: "_surge", name: "POWER SURGE", nameCN: "力量回路", glyph: "⇪",
+  desc: "Level up one of your existing boons — raise its rarity & effect",
+  descCN: "强化一项已拥有的祝福 — 提升其品质与效果", col: "#ffcc44", max: 99, surge: true,
+};
+/* can player p use a power surge? (owns >=1 real boon that isn't already at legendary best AND
+   could still gain power). We allow leveling any owned real boon (not the surge itself, not over
+   legendary best — but boonPow can always grow, so any owned boon qualifies). */
+function surgeCandidates(p) {
+  if (!p || !p.boons) return [];
+  const out = [];
+  for (const id in p.boons) {
+    if (!p.boons[id]) continue;
+    const b = boonById(id);
+    if (!b || b.surge) continue;
+    out.push(b);
+  }
+  return out;
+}
+/* score an owned boon for "best upgrade value" (auto-pick target): prefer boons not yet at
+   legendary best, weighting higher current investment so a surge deepens the main build. */
+function surgeScore(p, b) {
+  const best = (p.boonBest && p.boonBest[b.id]) || 0;
+  const pow = (p.boonPow && p.boonPow[b.id]) || 0;
+  return (3 - best) * 10 + pow;     // headroom first, then existing power
+}
+/* apply a power surge to one owned boon `id`: bump best rarity one tier (clamped at legendary)
+   and add that tier's rarity multiplier to boonPow so the numeric effect actually scales. Also
+   restacks enchant potency for enchant boons. Respects all downstream clamps (they read boonPow,
+   and crit/lifesteal/exec etc. are clamped at the use site). Never targets an unowned boon. */
+function applySurge(id, who) {
+  const p = who || ctxP || player;
+  if (!p || !p.boons || !p.boons[id]) return false;   // guard: must already own it
+  const b = boonById(id);
+  if (!b || b.surge) return false;
+  const cur = (p.boonBest && p.boonBest[id]) || 0;
+  const next = Math.min(3, cur + 1);                   // bump rarity tier (clamped at legendary)
+  p.boonBest[id] = next;
+  // add the GAINED rarity power so the effect scales up (use next tier's mul as the increment)
+  const inc = RARITIES[next].mul;
+  p.boonPow[id] = (p.boonPow[id] || 0) + inc;
+  // enchant boons feed their element potency from boonPow — mirror the increment
+  if (b.enchant) { p.enchants = p.enchants || {}; p.enchants[b.enchant] = (p.enchants[b.enchant] || 0) + inc; }
+  const R = RARITIES[next];
+  toast((numPlayers > 1 ? p.tag + " " : "") + "力量回路 · POWER SURGE → " + (b.nameCN || b.name) + " " + R.zh, "#ffcc44");
+  audio.boon();
+  burst(p.x, p.y, "#ffcc44", 28, 240, 0.75, 3.4);
+  ffx.ring(p.x, p.y, 80, "#ffcc44", 0.7, 5);
+  ffx.spawnLight(p.x, p.y, 130, "#ffcc44", 0.7);
+  ffx.pulse(p.x, p.y, 6);
+  return true;
+}
+/* does player p meet a duo's two-theme prereq? (prereqAny = any listed pair). */
+function duoUnlocked(d, p) {
+  if (!p || !p.boons) return false;
+  const wt = (k) => themeWeight(p, k);
+  if (d.prereqAny) {
+    for (const pair of d.prereqAny) { if (wt(pair[0]) >= DUO_PREREQ && wt(pair[1]) >= DUO_PREREQ) return true; }
+    return false;
+  }
+  for (const k of d.prereq) { if (wt(k) < DUO_PREREQ) return false; }
+  return true;
+}
+
 /* ---------------- §F1b BOON ELIGIBILITY PREDICATES ----------------
    A boon is OFFER-eligible for player `p` only if it can actually do something for their current
    build/weapon — never offer a "dead" pick. Weapon-exclusive boons are gated to the wielded weapon
@@ -1439,6 +1656,7 @@ function boonEligible(b, p) {
   if (lv >= b.max) return false;                          // already maxed → dead
   const wep = (p && p.weapon) || curWeapon;
   if (b.weapon && b.weapon !== wep) return false;         // weapon-exclusive: wielded weapon only
+  if (b.duo && !duoUnlocked(b, p)) return false;          // DUO: gated behind two invested themes
   const req = boonReq[b.id];
   if (req && !req(p)) return false;                       // class/prerequisite gate
   return true;
@@ -1446,7 +1664,7 @@ function boonEligible(b, p) {
 /* always-eligible UNIVERSAL boons (no weapon flag, no class req) — the fallback pool that keeps the
    offer screen full when stricter filtering would leave fewer than the 3 needed choices. */
 function universalFallbackPool(p) {
-  return BOONS.filter((b) => !b.weapon && !boonReq[b.id] && (p ? (p.boons[b.id] || 0) : boonLv(b.id)) < b.max);
+  return BOONS.filter((b) => !b.weapon && !b.duo && !boonReq[b.id] && (p ? (p.boons[b.id] || 0) : boonLv(b.id)) < b.max);
 }
 
 /* boon rarity: weights improve slightly with depth and LUCK CIRCUITS levels */
@@ -1497,6 +1715,9 @@ let rerollsLeft = 0;
 let boonChoices = [];
 /* co-op boon selection: queue of player indices still to pick, the per-pick context */
 let boonQueue = [], boonPickIdx = 0, boonAfter = null, boonMax = 3;
+let surgePicking = false, surgeChoices = []; // POWER SURGE sub-selection: owned boons to level up
+let showBuild = false;                       // BUILD 概览 overview panel (toggled with B / while paused)
+let pauseItemCount = 3;                       // number of selectable pause-menu items (set in drawPause)
 let uiRects = [], menuHighlight = 0;
 let p2Weapon = store.get("p2weapon") || "lance";
 if (!WEAPONS.some((w) => w.id === p2Weapon)) p2Weapon = "lance";
@@ -1598,16 +1819,25 @@ window.addEventListener("keydown", (e) => {
     if (state === "heat") { closeHeat(); return; }
     if (state === "stats") { closeStats(); return; }
     if (state === "boon") return; // must choose
-    if (state === "play" || state === "hub") { paused = !paused; if (paused) menuHighlight = 0; audio.uiSnd(); }
+    if (state === "play" || state === "hub") { paused = !paused; if (paused) menuHighlight = 0; else showBuild = false; audio.uiSnd(); }
+    return;
+  }
+  // B toggles the BUILD 概览 overview panel (pauses while open; closes back to play)
+  if (k === "b" && (state === "play" || state === "hub")) {
+    if (paused && showBuild) { paused = false; showBuild = false; }
+    else { paused = true; showBuild = true; menuHighlight = 0; }
+    audio.uiSnd();
     return;
   }
   if (paused) {
     if (k === "f") { ffx.cycleLevel(); return; }
+    if (showBuild) { showBuild = false; if (k === " " || k === "Enter") paused = false; return; }
     if (k === " " || k === "Enter") paused = false;
     return;
   }
   if (state === "boon") {
     const n = parseInt(k, 10);
+    if (surgePicking) { if (n >= 1 && n <= surgeChoices.length) pickSurge(n - 1); return; }
     if (n >= 1 && n <= boonChoices.length) pickBoon(n - 1);
     if (k === "r" && rerollsLeft > 0) rerollBoons();
     return;
@@ -1667,11 +1897,13 @@ canvas.addEventListener("mousedown", (e) => {
   if (state === "title") { if (titleClick(e.clientX, e.clientY)) return; anyStart(); return; }
   if (state === "summary") { anyStart(); return; }
   if (paused) {
+    if (showBuild) { showBuild = false; return; } // tap anywhere closes the build overview
     for (const r of uiRects) {
       if (e.clientX >= r.x && e.clientX <= r.x + r.w && e.clientY >= r.y && e.clientY <= r.y + r.h) {
         if (r.act === "fxtoggle") { ffx.cycleLevel(); return; }
         if (r.act === "fstoggle") { toggleFullscreen(); updateFsBtn(); return; }
         if (r.act === "fsauto") { setAutoFullscreen(!FS.auto); audio.uiSnd(); return; }
+        if (r.act === "buildtoggle") { showBuild = true; audio.uiSnd(); return; }
         if (r.act === "pcount") { setPlayerCount(r.n); if (state === "hub") spawnPlayers(); audio.uiSnd(); return; }
       }
     }
@@ -1716,12 +1948,14 @@ canvas.addEventListener("touchstart", (e) => {
     if (state === "title") { if (titleClick(x, y)) continue; anyStart(); continue; }
     if (state === "summary") { anyStart(); continue; }
     if (paused) {
+      if (showBuild) { showBuild = false; continue; } // tap anywhere closes the build overview
       let hit = false;
       for (const r of uiRects) {
         if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
           if (r.act === "fxtoggle") { ffx.cycleLevel(); hit = true; break; }
           if (r.act === "fstoggle") { toggleFullscreen(); updateFsBtn(); hit = true; break; }
           if (r.act === "fsauto") { setAutoFullscreen(!FS.auto); audio.uiSnd(); hit = true; break; }
+          if (r.act === "buildtoggle") { showBuild = true; audio.uiSnd(); hit = true; break; }
           if (r.act === "pcount") { setPlayerCount(r.n); if (state === "hub") spawnPlayers(); audio.uiSnd(); hit = true; break; }
         }
       }
@@ -2197,19 +2431,64 @@ function applyBoon(id, rar, who) {
 /* Eligible boon pool for the selecting player: weapon-exclusives gated to the wielded weapon, plus
    per-boon class/prerequisite predicates so a "dead" (zero-effect) boon is never offered. */
 function boonPool(who) {
-  return BOONS.filter((b) => boonEligible(b, who));
+  // master eligible pool EXCLUDING duos (duos are a separate bonus pool, added with low odds)
+  return BOONS.filter((b) => !b.duo && boonEligible(b, who));
+}
+/* THEMED OFFER WEIGHTING: a boon's offer weight is its base weight (1) multiplied by a bias for
+   how invested the player already is in the boon's theme(s) — so owned build lines snowball — but
+   the multiplier is soft-capped so off-theme picks still surface, and one slot is reserved for an
+   UNBIASED (discovery) draw so a new theme can always appear. Per-player (reads `who`). */
+function themedOfferWeight(b, wt) {
+  const ts = boonThemes(b);
+  if (!ts.length) return 1;                 // unthemed boons keep base weight
+  let best = 0;
+  for (const k of ts) { const w = wt[k] || 0; if (w > best) best = w; }
+  // bias grows with invested weight but saturates (soft cap ~+200%) so it biases, never locks out
+  return 1 + Math.min(2.0, best * 0.5);
+}
+/* weighted draw from `pool` (array of boon objects); biased=true applies themedOfferWeight,
+   biased=false is a flat/discovery draw. Removes and returns the chosen boon (or null). */
+function drawWeighted(pool, wt, biased) {
+  if (!pool.length) return null;
+  if (!biased) return pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+  let total = 0;
+  for (const b of pool) total += themedOfferWeight(b, wt);
+  let r = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    r -= themedOfferWeight(pool[i], wt);
+    if (r <= 0) return pool.splice(i, 1)[0];
+  }
+  return pool.splice(pool.length - 1, 1)[0];
 }
 function rollBoons(who, max) {
   const lim = max || 3;
+  const wt = themeWeights(who);
   const pool = boonPool(who).slice();
   const out = [];
-  while (out.length < lim && pool.length) {
-    const i = Math.floor(Math.random() * pool.length);
-    out.push({ b: pool.splice(i, 1)[0], rar: rollRarity() });
+  // slot 0 .. lim-2 = themed-biased draws; final slot = unbiased DISCOVERY draw (keeps a theme open)
+  for (let s = 0; s < lim && pool.length; s++) {
+    const discovery = (s === lim - 1);      // last slot is the off-theme discovery slot
+    const b = drawWeighted(pool, wt, !discovery);
+    if (b) out.push({ b, rar: rollRarity() });
+  }
+  // DUO BONUS POOL: unlocked duos can REPLACE one normal card at a low chance (rare/epic feel).
+  // They are bonus entries — only swapped IN if available, never required to fill the screen.
+  const duos = BOONS.filter((b) => b.duo && boonEligible(b, who) && !out.some((c) => c.b.id === b.id));
+  if (duos.length && out.length && Math.random() < 0.45) {
+    const d = duos[Math.floor(Math.random() * duos.length)];
+    const slot = Math.floor(Math.random() * out.length);
+    out[slot] = { b: d, rar: Math.max(2, rollRarity()) };   // duos always feel epic+
+  }
+  // POWER SURGE (力量回路): the vertical-upgrade reward can replace one normal card sometimes,
+  // but only if the player owns at least one upgradeable boon. Never replaces a duo card.
+  if (surgeCandidates(who).length && out.length && Math.random() < 0.28) {
+    let slot = -1;
+    for (let i = 0; i < out.length; i++) { if (!out[i].b.duo) { slot = i; break; } }
+    if (slot >= 0 && !out.some((c) => c.b.surge)) out[slot] = { b: SURGE_BOON, rar: 0 };
   }
   // FALLBACK: if strict filtering left fewer than needed, top up from always-eligible universal boons
-  // (and finally from ANY remaining unmaxed boon) so the offer screen is always full and never errors.
-  // Each id appears at most once per offer; rarity weighting still applies to every card.
+  // (and finally from ANY remaining unmaxed non-duo boon) so the offer screen is always full and
+  // never errors. Each id appears at most once per offer; rarity weighting still applies to every card.
   if (out.length < lim) {
     const have = new Set(out.map((c) => c.b.id));
     const fill = universalFallbackPool(who).filter((b) => !have.has(b.id));
@@ -2221,7 +2500,7 @@ function rollBoons(who, max) {
   }
   if (out.length < lim) {
     const have = new Set(out.map((c) => c.b.id));
-    const fill = BOONS.filter((b) => !have.has(b.id) && (!b.weapon || b.weapon === ((who && who.weapon) || curWeapon)) &&
+    const fill = BOONS.filter((b) => !b.duo && !have.has(b.id) && (!b.weapon || b.weapon === ((who && who.weapon) || curWeapon)) &&
       (who ? (who.boons[b.id] || 0) : boonLv(b.id)) < b.max);
     while (out.length < lim && fill.length) {
       const i = Math.floor(Math.random() * fill.length);
@@ -2245,29 +2524,57 @@ function advanceBoonPick(max) {
   boonPickIdx = boonQueue[0];
   const who = players[boonPickIdx] || players[0];
   boonChoices = rollBoons(who, max);
+  surgeChoices = []; surgePicking = false;
   menuHighlight = 0;
   if (boonChoices.length === 0) { boonQueue.shift(); advanceBoonPick(max); return; }
   state = "boon";
 }
 function finishBoonSelection() {
-  boonChoices = [];
+  boonChoices = []; surgeChoices = []; surgePicking = false;
   const fn = boonAfter; boonAfter = null;
   if (fn) fn();
 }
 function pickBoon(i) {
   if (i < 0 || i >= boonChoices.length) return;
   const who = players[boonPickIdx] || players[0];
-  applyBoon(boonChoices[i].b.id, boonChoices[i].rar, who);
-  boonChoices = [];
+  const choice = boonChoices[i];
+  // POWER SURGE (力量回路): open a sub-selection of the player's owned boons to level up.
+  if (choice.b.surge) {
+    const cands = surgeCandidates(who);
+    if (cands.length === 0) { /* nothing to upgrade (defensive) — treat as a no-op pick */
+      advancePickQueue(); return;
+    }
+    if (cands.length === 1) { applySurge(cands[0].id, who); advancePickQueue(); return; }
+    // sort by best-upgrade value so the most useful target is highlighted first
+    cands.sort((a, b) => surgeScore(who, b) - surgeScore(who, a));
+    surgeChoices = cands;
+    surgePicking = true;
+    menuHighlight = 0;
+    return;   // stay on the boon screen; drawBoonScreen renders the surge sub-grid
+  }
+  applyBoon(choice.b.id, choice.rar, who);
+  advancePickQueue();
+}
+/* finish the current player's pick and advance the co-op pick queue (shared by boon & surge). */
+function advancePickQueue() {
+  boonChoices = []; surgeChoices = []; surgePicking = false;
   if (boonQueue.length) boonQueue.shift();
   if (boonQueue.length) { advanceBoonPick(boonMax); return; }
   finishBoonSelection();
 }
+/* the player picked which owned boon to level via POWER SURGE. */
+function pickSurge(i) {
+  if (i < 0 || i >= surgeChoices.length) return;
+  const who = players[boonPickIdx] || players[0];
+  applySurge(surgeChoices[i].id, who);
+  advancePickQueue();
+}
 function rerollBoons() {
-  if (rerollsLeft <= 0) return;
+  if (rerollsLeft <= 0 || surgePicking) return;   // can't reroll mid-surge sub-selection
   rerollsLeft--;
   const who = players[boonPickIdx] || players[0];
   boonChoices = rollBoons(who, boonMax);
+  surgeChoices = []; surgePicking = false;
   menuHighlight = 0;
   audio.uiSnd();
 }
@@ -2494,18 +2801,44 @@ function nearestEnemy(x, y, maxD) {
 
 function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (e.hp <= 0) return;
+  const sp = ctxP || player;
+  // DUO PHASE STRIKE (DASH+CRIT): the first hit shortly after a dash always crits & refunds dash
+  let blinkHit = false;
+  if (!isCrit && sp && boonLv("duo_blink") && (sp.dashedT || 0) > 0 && (sp.blinkUsed === undefined || !sp.blinkUsed)) {
+    isCrit = true; blinkHit = true; sp.blinkUsed = true;
+    sp.dashCharges = Math.min(sp.dashMax, sp.dashCharges + 1);
+  }
   let mul = isCrit ? 2.5 : 1;
+  // DUO SANGUINE EDGE (CRIT+LIFESTEAL): crits crit harder into the heal below
   // JUGGERNAUT: stripped armor plates expose the weak core — bonus damage when exposed
   if (e.kind === "juggernaut" && e.plates !== undefined) mul *= 1 + 0.18 * (4 - e.plates);
   if (e.frozenT > 0) { // shatter: frozen targets take bonus damage
-    const sp = ctxP || player;
-    mul *= 1.3 + 0.4 * boonPow("shatter") + (sp ? sp.frozenBonus : 0);
+    let sh = 1.3 + 0.4 * boonPow("shatter") + (sp ? sp.frozenBonus : 0);
+    if (boonLv("duo_thermalcore")) sh += 0.5 + 0.35 * boonPow("duo_thermalcore"); // THERMAL CORE deepens shatter
+    mul *= sh;
+    // DUO GLACIAL EDGE (FROST+CRIT): a CRIT on a frozen foe detonates a huge shatter bonus
+    if (isCrit && boonLv("duo_glacialedge")) {
+      mul *= 1.6 + 0.5 * boonPow("duo_glacialedge");
+      dnum(e.x, e.y - e.r - 16, "GLACIAL", "#bfeaff", true);
+      ffx.ring(e.x, e.y, 70, "#bfeaff", 0.4, 5);
+    }
     burst(e.x, e.y, "#cfeeff", 10, 230, 0.45, 3);
     audio.shatter();
   }
   const final = Math.round(dmg * mul);
   e.hp -= final;
   e.flash = 0.12;
+  // DUO SANGUINE EDGE (CRIT+LIFESTEAL): critical hits heal you (respecting the per-sec steal cap)
+  if (isCrit && sp && boonLv("duo_vampcrit")) {
+    const heal = Math.max(1, Math.round(2 + 2 * boonPow("duo_vampcrit")));
+    const capPerSec = 10 + 8 * boonPow("duo_vampcrit");
+    if ((sp.stealBudget || 0) < capPerSec) {
+      const give = Math.min(heal, capPerSec - (sp.stealBudget || 0));
+      sp.hp = Math.min(sp.maxHp, sp.hp + give);
+      sp.stealBudget = (sp.stealBudget || 0) + give;
+    }
+  }
+  if (blinkHit) { burst(e.x, e.y, "#aaf6ff", 14, 260, 0.4, 3); dnum(e.x, e.y - e.r - 16, "PHASE", "#aaf6ff", true); }
   if (e.type === "phantom" && e.state === "cloak") { e.state = "recover"; e.t = 1.0; } // tagging a phantom rips its cloak
   const kbScale = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.3 : 1);
   e.kbx += kx * kbScale; e.kby += ky * kbScale;
@@ -2533,6 +2866,17 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
     // 元素附魔: stacked elemental enchants all fire on the melee hit (survivors only; combos/poison
     // self-resolve kills via the guarded killEnemy). Reads the acting player's per-player enchant set.
     if (e.hp > 0) applyWeaponEnchants(e, ctxP || player);
+  } else if (e.hp > 0) {
+    // PROJECTILE (弹幕) duo payoffs — fire on weapon projectile hits (bolt/bullet/arrow/spell)
+    const sp2 = ctxP || player;
+    if (sp2) {
+      if (boonLv("duo_arcstorm")) { // ARC STORM (BARRAGE+SHOCK): hit chains lightning
+        applyShock(e, (4 + depth * 0.4) * boonPow("duo_arcstorm") * dmgMul(), 1);
+      }
+      if (e.hp > 0 && boonLv("duo_infernobarr")) { // INFERNO BARRAGE (BARRAGE+FIRE): ignite on hit
+        applyBurn(e, (3.5 + depth * 0.4) * boonPow("duo_infernobarr") * dmgMul());
+      }
+    }
   }
   if (e.hp <= 0) killEnemy(e);
 }
@@ -2561,7 +2905,10 @@ function applyBurn(e, dps) {
 function applyShock(e, dmg, chains) {
   if (!e || e.hp <= 0) return;
   if (e.frozenT > 0) { shatterCombo(e); return; } // FREEZE + SHOCK combo
-  e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? CONFIG.shockStun * 0.4 : CONFIG.shockStun);
+  // DUO NEUROTOXIN (SHOCK+POISON): a longer neuro-stun on poisoned foes
+  const neuro = boonLv("duo_neurotoxin") ? (1 + 0.4 * boonPow("duo_neurotoxin")) : 1;
+  const baseStun = e.type === "boss" ? CONFIG.shockStun * 0.4 : CONFIG.shockStun;
+  e.shockT = Math.max(e.shockT || 0, baseStun * ((e.poisonStacks || 0) > 0 ? neuro : 1));
   sparkLine(e.x - e.r, e.y - e.r, e.x + e.r, e.y + e.r, "#ffee55", 5);
   audio.shockZap();
   statusDamage(e, dmg, "#ffee55");
@@ -2573,7 +2920,9 @@ function applyShock(e, dmg, chains) {
       if (dd < 170) cands.push([dd, o]);
     }
     cands.sort((a, b) => a[0] - b[0]);
-    const srcPoison = (e.poisonStacks || 0) > 0 ? e.poisonDps : 0; // POISON + SHOCK conducts poison to chained foes
+    // POISON + SHOCK conducts poison to chained foes; NEUROTOXIN spreads it even from unpoisoned source
+    let srcPoison = (e.poisonStacks || 0) > 0 ? e.poisonDps : 0;
+    if (srcPoison <= 0 && boonLv("duo_neurotoxin")) srcPoison = (3 + depth * 0.3) * boonPow("duo_neurotoxin") * dmgMul();
     for (let i = 0; i < Math.min(2, cands.length); i++) {
       const o = cands[i][1];
       beams.push({ x1: e.x, y1: e.y, x2: o.x, y2: o.y, t: 0.18, col: "#ffee55" });
@@ -2605,16 +2954,25 @@ function combustCombo(e) {
   const stacks = e.poisonStacks || 0;
   if (stacks <= 0) return;
   e.poisonStacks = 0; e.poisonT = 0; e.poisonDps = 0;
-  const dmg = (10 + depth * 1.6 + stacks * (6 + depth * 0.8)) * dmgMul();
+  const pb = boonLv("duo_plague") ? (1 + 0.5 * boonPow("duo_plague")) : 1; // PLAGUEBLOOM amplifies combust
+  const dmg = (10 + depth * 1.6 + stacks * (6 + depth * 0.8)) * dmgMul() * pb;
   burst(e.x, e.y, "#9fff5a", 14, 240, 0.45, 3);
   burst(e.x, e.y, "#ffaa44", 12, 260, 0.5, 3);
-  dnum(e.x, e.y - e.r - 14, "COMBUST", "#bfff66", true);
+  dnum(e.x, e.y - e.r - 14, pb > 1 ? "PLAGUEBLOOM" : "COMBUST", "#bfff66", true);
   audio.comboSnap();
   shake(3, 0.12);
-  ffx.ring(e.x, e.y, 60, "#bfff66", 0.35, 4);
+  ffx.ring(e.x, e.y, 60 * (pb > 1 ? 1.4 : 1), "#bfff66", 0.35, 4);
   ffx.spawnLight(e.x, e.y, 80, "#bfff66", 0.6);
   statusDamage(e, dmg, "#bfff66");
   if (e.hp > 0) applyBurn(e, (5 + depth * 0.5) * dmgMul());
+  // PLAGUEBLOOM: re-seed heavy poison on the foe + nearby foes (a spreading plague)
+  if (pb > 1) {
+    if (e.hp > 0) applyPoison(e, (4 + depth * 0.4) * dmgMul() * pb, 2);
+    for (const o of enemies) {
+      if (o === e || o.hp <= 0) continue;
+      if (dist(e.x, e.y, o.x, o.y) < 90 + o.r) applyPoison(o, (3 + depth * 0.3) * dmgMul() * pb, 1);
+    }
+  }
 }
 
 /* freeze gate: bosses can't be re-frozen during their thaw-resistance window, so even
@@ -2625,20 +2983,29 @@ function canFreeze(e) { return e.type !== "boss" || (e.freezeImmT || 0) <= 0; }
 /* FREEZE + SHOCK = SHATTER: burst damage, consumes both statuses */
 function shatterCombo(e) {
   e.frozenT = 0; e.shockT = 0;
+  const tc = boonLv("duo_thermalcore") ? (1 + 0.45 * boonPow("duo_thermalcore")) : 1; // THERMAL CORE amplifies
   burst(e.x, e.y, "#cfeeff", 22, 300, 0.6, 3.5);
   dnum(e.x, e.y - e.r - 14, "SHATTER", "#cfeeff", true);
   audio.shatter();
   shake(4, 0.15);
-  ffx.ring(e.x, e.y, 60, "#cfeeff", 0.4, 5);
+  ffx.ring(e.x, e.y, 60 * (tc > 1 ? 1.25 : 1), "#cfeeff", 0.4, 5);
   ffx.pulse(e.x, e.y, 7);
   ffx.spawnLight(e.x, e.y, 90, "#cfeeff", 0.7);
-  statusDamage(e, (30 + depth * 2.5) * dmgMul(), "#cfeeff");
+  statusDamage(e, (30 + depth * 2.5) * dmgMul() * tc, "#cfeeff");
+  // THERMAL CORE: the shatter chains a chilling-burst splash to nearby foes
+  if (tc > 1) {
+    for (const o of enemies) {
+      if (o === e || o.hp <= 0) continue;
+      if (dist(e.x, e.y, o.x, o.y) < 80 + o.r) statusDamage(o, (12 + depth) * dmgMul() * tc, "#cfeeff");
+    }
+  }
 }
 
 /* BURN + FREEZE = THERMAL SNAP: small AoE, consumes both statuses */
 function thermalSnap(e) {
   e.burnT = 0; e.burnStacks = 0; e.burnDps = 0; e.frozenT = 0;
-  const R = 90, dmg = (16 + depth * 1.8) * dmgMul();
+  const tc = boonLv("duo_thermalcore") ? (1 + 0.4 * boonPow("duo_thermalcore")) : 1; // THERMAL CORE amplifies
+  const R = 90 * (tc > 1 ? 1.3 : 1), dmg = (16 + depth * 1.8) * dmgMul() * tc;
   burst(e.x, e.y, "#ffaa66", 18, 260, 0.5, 3);
   burst(e.x, e.y, "#ffffff", 8, 180, 0.3, 2);
   dnum(e.x, e.y - e.r - 14, "THERMAL SNAP", "#ffaa66", true);
@@ -2782,10 +3149,21 @@ function damagePlayer(d, ang, attacker, victim) {
   if (!p || p.hp <= 0 || p.downed) return;
   if (p.ifr > 0 || p.hurtT > 0) return;
   const prevCtx = ctxP; ctxP = p;
+  // DUO AEGIS REACTOR (DEFENSE+LIFESTEAL): thorns hit harder, and taking a hit heals a little
+  const aegis = boonLv("duo_aegis") ? boonPow("duo_aegis") : 0;
   if (boonLv("thorn") && attacker && attacker.hp > 0) {
-    hitEnemy(attacker, Math.round(9 * boonPow("thorn")), Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
+    const thornDmg = Math.round(9 * boonPow("thorn") * (aegis > 0 ? 1.5 + 0.5 * aegis : 1));
+    hitEnemy(attacker, thornDmg, Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
   }
   ctxP = prevCtx;
+  if (aegis > 0) { // AEGIS heals a small flat amount on contact (capped per the steal budget)
+    const heal = Math.max(1, Math.round(3 + 2 * aegis));
+    const capPerSec = 12 + 8 * aegis;
+    if ((p.stealBudget || 0) < capPerSec) {
+      const give = Math.min(heal, capPerSec - (p.stealBudget || 0));
+      p.hp = Math.min(p.maxHp, p.hp + give); p.stealBudget = (p.stealBudget || 0) + give;
+    }
+  }
   p.hp -= d;
   p.hurtT = CONFIG.hurtIfr;
   p.vx += Math.cos(ang) * 220;
@@ -5239,6 +5617,7 @@ function tryDash(p) {
   p.dashDX = dx / m; p.dashDY = dy / m;
   p.dashT = CONFIG.dashDur;
   p.dashedT = 0.45;                 // BLADE RIPOSTE: arm the post-dash empowered slash
+  p.blinkUsed = false;             // DUO PHASE STRIKE: re-arm the guaranteed first-hit crit
   p.ifr = Math.max(p.ifr, CONFIG.dashIfr);
   p.dashCharges--;
   if (p.dashCD <= 0) p.dashCD = CONFIG.dashCD;
@@ -5413,6 +5792,15 @@ function updatePlayer(p, dt) {
           }
         }
       }
+      // DUO ELEMENTAL WAKE (DASH+element): the dash trail applies ALL your weapon enchants to foes
+      if (boonLv("duo_elemtrail") && hasAnyEnchant(p)) {
+        for (const e2 of enemies) {
+          if (e2.hp > 0 && (e2.ewCD || 0) <= 0 && dist(p.x, p.y, e2.x, e2.y) < 64 + e2.r) {
+            e2.ewCD = 0.5;
+            applyWeaponEnchants(e2, p);
+          }
+        }
+      }
     }
   } else {
     const mv = moveInputFor(p);
@@ -5570,6 +5958,7 @@ function updateEnemy(e, dt) {
   e.spawnT = Math.max(0, e.spawnT - dt);
   if (e.spawnT > 0) return;
   if ((e.sdCD || 0) > 0) e.sdCD -= dt;
+  if ((e.ewCD || 0) > 0) e.ewCD -= dt;   // DUO ELEMENTAL WAKE trail tick cooldown
   if ((e.hazCD || 0) > 0) e.hazCD -= dt;
   if ((e.markT || 0) > 0) e.markT -= dt; // TRACER FIRE damage-amp mark
   if ((e.empoweredT || 0) > 0) e.empoweredT -= dt; // TOTEM aura buff window
@@ -10198,12 +10587,110 @@ function drawVictory() {
   }
 }
 
+/* draw a centred row of small bilingual THEME chips (流派) for a boon card / panel.
+   Each chip: a colored dot + "中 EN" label. Returns nothing; reads ctx, restores alpha. */
+function drawThemeChips(themes, cx, cy, u) {
+  if (!themes || !themes.length) return;
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // measure total width to center the chip row
+  ctx.font = "bold " + 9 * u + "px 'Courier New', monospace";
+  const gapC = 8 * u;
+  const labels = themes.map((k) => { const T = THEMES[k]; return T ? (T.zh + " " + T.en) : k; });
+  const widths = labels.map((l) => ctx.measureText(l).width + 12 * u);
+  let totalW = 0; for (const w of widths) totalW += w; totalW += gapC * (themes.length - 1);
+  let cxx = cx - totalW / 2;
+  for (let i = 0; i < themes.length; i++) {
+    const T = THEMES[themes[i]];
+    const col = T ? T.col : "#9ab";
+    // dot
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(cxx + 4 * u, cy, 3 * u, 0, TAU); ctx.fill();
+    // label
+    ctx.fillStyle = col;
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(labels[i], cxx + 4 * u + 6 * u + (widths[i] - 12 * u) / 2, cy);
+    ctx.globalAlpha = 1;
+    cxx += widths[i] + gapC;
+  }
+  ctx.restore();
+}
+
+/* POWER SURGE (力量回路) sub-selection: pick which OWNED boon to level up. Compact scrollable
+   grid; each cell shows the boon glyph, bilingual name, its theme, and current → next rarity. */
+function drawSurgeScreen(who, u) {
+  const hcol = "#ffcc44";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  glow(hcol, 16);
+  ctx.fillStyle = hcol;
+  ctx.font = "bold " + 24 * u + "px 'Courier New', monospace";
+  ctx.fillText((numPlayers > 1 && who ? who.tag + " — " : "") + "力量回路 · POWER SURGE", cw / 2, ch * 0.12);
+  noglow();
+  ctx.fillStyle = "rgba(220,230,255,0.8)";
+  ctx.font = 13 * u + "px 'Courier New', monospace";
+  ctx.fillText("选择强化一项祝福 — choose a boon to LEVEL UP (raise its rarity & effect)", cw / 2, ch * 0.12 + 26 * u);
+  const list = surgeChoices;
+  const cols = Math.min(4, Math.max(2, Math.ceil(Math.sqrt(list.length))));
+  const cwid = Math.min(210 * u, (cw - 60) / cols - 12);
+  const chei = 70 * u;
+  const rows = Math.ceil(list.length / cols);
+  const totalW = cols * cwid + (cols - 1) * 12;
+  const startX = (cw - totalW) / 2;
+  const startY = ch * 0.24;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    const col = i % cols, row = (i / cols) | 0;
+    const x = startX + col * (cwid + 12);
+    const yy = startY + row * (chei + 12);
+    const cur = (who.boonBest && who.boonBest[b.id]) || 0;
+    const next = Math.min(3, cur + 1);
+    const Rc = RARITIES[cur], Rn = RARITIES[next];
+    const hover = (mouse.x >= x && mouse.x <= x + cwid && mouse.y >= yy && mouse.y <= yy + chei) || (anyGamepad() && menuHighlight === i);
+    ctx.save();
+    glow(Rn.col, hover ? 20 : 10);
+    ctx.fillStyle = "rgba(10,12,34,0.95)";
+    rrect(x, yy, cwid, chei, 8); ctx.fill();
+    ctx.strokeStyle = Rn.col; ctx.lineWidth = hover ? 3 : 2;
+    rrect(x, yy, cwid, chei, 8); ctx.stroke();
+    noglow();
+    ctx.textAlign = "left";
+    ctx.fillStyle = b.col;
+    ctx.font = "bold " + 20 * u + "px 'Courier New', monospace";
+    ctx.fillText(b.glyph, x + 12 * u, yy + chei * 0.42);
+    ctx.fillStyle = b.col;
+    ctx.font = "bold " + 12 * u + "px 'Courier New', monospace";
+    ctx.fillText((b.nameCN || b.name), x + 34 * u, yy + 18 * u);
+    ctx.fillStyle = "rgba(220,230,255,0.7)";
+    ctx.font = 9.5 * u + "px 'Courier New', monospace";
+    ctx.fillText(b.name + "  x" + (who.boons[b.id] || 1), x + 34 * u, yy + 33 * u);
+    // current → next rarity
+    ctx.fillStyle = Rc.col;
+    ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+    ctx.fillText(Rc.zh, x + 12 * u, yy + chei - 12 * u);
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    ctx.fillText("→", x + 12 * u + ctx.measureText(Rc.zh).width + 6 * u, yy + chei - 12 * u);
+    ctx.fillStyle = Rn.col;
+    ctx.fillText(Rn.zh + (next === cur ? " (+power)" : ""), x + 12 * u + ctx.measureText(Rc.zh).width + 22 * u, yy + chei - 12 * u);
+    ctx.textAlign = "right";
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.font = 10 * u + "px 'Courier New', monospace";
+    ctx.fillText(touchUI ? "tap" : "[" + (i + 1) + "]", x + cwid - 10 * u, yy + 14 * u);
+    ctx.restore();
+    uiRects.push({ x, y: yy, w: cwid, h: chei, act: "surge", i });
+  }
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.font = 11 * u + "px 'Courier New', monospace";
+  ctx.fillText(touchUI ? "tap a boon to level it" : "[1-9] select · click to level a boon", cw / 2, startY + rows * (chei + 12) + 14 * u);
+}
+
 function drawBoonScreen() {
   dimScreen(0.66);
   uiRects = [];
   const u = us();
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   const who = players[boonPickIdx] || players[0];
+  if (surgePicking) { drawSurgeScreen(who, u); return; }   // POWER SURGE sub-selection grid
   const hcol = numPlayers > 1 && who ? who.col : "#5ee6ff";
   glow(hcol, 16);
   ctx.fillStyle = hcol;
@@ -10222,25 +10709,38 @@ function drawBoonScreen() {
     const R = RARITIES[choice.rar || 0];
     const lv = boonLv(b.id);
     const hover = (mouse.x >= x && mouse.x <= x + cwid && mouse.y >= y && mouse.y <= y + chei) || (anyGamepad() && menuHighlight === i);
+    // DUO / SURGE cards get a distinct gold frame so they read as special payoffs
+    const special = b.duo || b.surge;
+    const frameCol = special ? "#ffcc44" : R.col;
     ctx.save();
-    glow(R.col, hover ? 26 : (choice.rar > 0 ? 16 : 12));
+    glow(frameCol, hover ? 28 : (special ? 22 : (choice.rar > 0 ? 16 : 12)));
     ctx.fillStyle = "rgba(10,12,34,0.95)";
     rrect(x, y, cwid, chei, 10); ctx.fill();
-    ctx.strokeStyle = R.col;
-    ctx.lineWidth = hover ? 3 : (choice.rar > 0 ? 2.5 : 2);
+    ctx.strokeStyle = frameCol;
+    ctx.lineWidth = hover ? 3 : (special ? 3 : (choice.rar > 0 ? 2.5 : 2));
     rrect(x, y, cwid, chei, 10); ctx.stroke();
-    if (choice.rar > 0) { // inner rarity rim
-      ctx.strokeStyle = R.col;
-      ctx.globalAlpha = 0.35;
+    if (choice.rar > 0 || special) { // inner rarity / duo rim
+      ctx.strokeStyle = frameCol;
+      ctx.globalAlpha = special ? 0.5 : 0.35;
       ctx.lineWidth = 1;
       rrect(x + 4, y + 4, cwid - 8, chei - 8, 7); ctx.stroke();
       ctx.globalAlpha = 1;
     }
     noglow();
+    // DUO / SURGE badge (top corner)
+    if (b.duo) {
+      ctx.fillStyle = "#ffcc44";
+      ctx.font = "bold " + 9 * u + "px 'Courier New', monospace";
+      ctx.fillText("◆ DUO 跨流派 ◆", x + cwid / 2, y + 24 * u);
+    } else if (b.surge) {
+      ctx.fillStyle = "#ffcc44";
+      ctx.font = "bold " + 9 * u + "px 'Courier New', monospace";
+      ctx.fillText("⇪ 力量回路 SURGE ⇪", x + cwid / 2, y + 24 * u);
+    }
     // rarity tag
     ctx.fillStyle = R.col;
     ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
-    ctx.fillText(R.name + " · " + R.zh + (R.mul > 1 ? "  x" + R.mul : ""), x + cwid / 2, y + 13 * u);
+    if (!b.surge) ctx.fillText(R.name + " · " + R.zh + (R.mul > 1 ? "  x" + R.mul : ""), x + cwid / 2, y + 13 * u);
     ctx.fillStyle = b.col;
     ctx.font = "bold " + 30 * u + "px 'Courier New', monospace";
     ctx.fillText(b.glyph, x + cwid / 2, y + 42 * u);
@@ -10251,7 +10751,13 @@ function drawBoonScreen() {
     ctx.fillStyle = "rgba(220,230,255,0.78)";
     ctx.font = "bold " + 10.5 * u + "px 'Courier New', monospace";
     ctx.fillText(b.name, x + cwid / 2, y + 86 * u);
-    let ly = y + 104 * u;
+    // THEME tag(s): small colored bilingual chips under the name (流派 build-line label)
+    let ly = y + 98 * u;
+    const tks = boonThemes(b);
+    if (tks.length) {
+      drawThemeChips(tks, x + cwid / 2, ly, u);
+      ly += 16 * u;
+    } else { ly = y + 104 * u; }
     if (lv > 0) {
       ctx.fillStyle = "rgba(255,255,255,0.6)";
       ctx.font = 10 * u + "px 'Courier New', monospace";
@@ -10482,16 +10988,199 @@ function drawStatsScreen() {
   uiRects.push({ x: cw / 2 - 140, y: cy - 18, w: 280, h: 36, act: "statsclose" });
 }
 
+/* BUILD 概览 — bilingual per-player build summary on the pause overlay.
+   Shows each player's weapon (name+class), active enchants (element icons + potency), and owned
+   boons GROUPED BY THEME (rarity-colored, with stack/level), plus key derived stats. Reads through
+   ctxP so the damage/crit helpers compute for the right player; restores ctxP after. */
+function weaponClassLabel(W) {
+  if (!W) return "";
+  if (W.isCaster) return "CASTER 法器";
+  if (W.isGun) return "FIREARM 火器";
+  if (W.isBow) return "BOW 弓";
+  return "MELEE 冷兵器";
+}
+function drawBuildPanel(u) {
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  glow("#ffcc44", 16);
+  ctx.fillStyle = "#ffcc44";
+  ctx.font = "bold " + 26 * u + "px 'Courier New', monospace";
+  ctx.fillText("BUILD 概览 — BUILD OVERVIEW", cw / 2, ch * 0.07);
+  noglow();
+  ctx.fillStyle = "rgba(190,210,255,0.6)";
+  ctx.font = 11 * u + "px 'Courier New', monospace";
+  ctx.fillText(touchUI ? "tap anywhere to close" : "B / Esc / click to close · resume", cw / 2, ch * 0.07 + 24 * u);
+  const list = players.filter((p) => p);
+  const cols = list.length;
+  const savedCtxP = ctxP;
+  const panW = Math.min(440 * u, (cw - 50) / cols - 16);
+  const totalW = cols * panW + (cols - 1) * 16;
+  let px = (cw - totalW) / 2;
+  const panY = ch * 0.13;
+  const panH = ch * 0.82;
+  for (const p of list) {
+    ctxP = p;
+    drawBuildColumn(p, px, panY, panW, panH, u);
+    px += panW + 16;
+  }
+  ctxP = savedCtxP;
+}
+function drawBuildColumn(p, x, y, w, h, u) {
+  const W = weaponDefP(p);
+  // panel frame in the player's colour
+  ctx.save();
+  ctx.fillStyle = "rgba(8,10,28,0.92)";
+  rrect(x, y, w, h, 10); ctx.fill();
+  ctx.strokeStyle = p.col; ctx.lineWidth = 2;
+  rrect(x, y, w, h, 10); ctx.stroke();
+  const cx = x + w / 2;
+  let yy = y + 22 * u;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // header: player tag + weapon name/class
+  glow(p.col, 8);
+  ctx.fillStyle = p.col;
+  ctx.font = "bold " + 16 * u + "px 'Courier New', monospace";
+  ctx.fillText((numPlayers > 1 ? p.tag + " — " : "") + (W.zh || "") + " " + W.name, cx, yy);
+  noglow();
+  yy += 17 * u;
+  ctx.fillStyle = "rgba(200,215,255,0.7)";
+  ctx.font = 11 * u + "px 'Courier New', monospace";
+  ctx.fillText(weaponClassLabel(W), cx, yy);
+  yy += 20 * u;
+  // active enchants row (element icons + potency)
+  const en = p.enchants || {};
+  const active = ENCHANTS.filter((E) => (en[E.id] || 0) > 0);
+  ctx.textAlign = "left";
+  ctx.fillStyle = "rgba(255,204,68,0.85)";
+  ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+  ctx.fillText("附魔 ENCHANTS", x + 14 * u, yy);
+  yy += 15 * u;
+  if (active.length === 0) {
+    ctx.fillStyle = "rgba(180,200,240,0.55)";
+    ctx.font = 11 * u + "px 'Courier New', monospace";
+    ctx.fillText("— none 无 —", x + 18 * u, yy);
+    yy += 16 * u;
+  } else {
+    let ex = x + 18 * u;
+    for (const E of active) {
+      ctx.fillStyle = E.col;
+      ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+      const label = E.glyph + E.zh + " ×" + (en[E.id]).toFixed(1);
+      ctx.fillText(label, ex, yy);
+      ex += ctx.measureText(label).width + 12 * u;
+      if (ex > x + w - 60 * u) { ex = x + 18 * u; yy += 16 * u; }
+    }
+    yy += 18 * u;
+  }
+  // derived key stats (reads ctxP === p, set by caller)
+  const critPct = Math.round(Math.min(0.85, (W.critBase || 0) + boonPow("crit") * 0.15) * 100);
+  const dmgPct = Math.round((dmgMul() - 1) * 100);
+  const heavyPct = Math.round(boonPow("blade") * 35);
+  const stealN = (boonPow("steal") || 0) + (en.steal || 0);
+  const stats = [
+    ["伤害 DMG", "x" + (dmgMul() * W.dmgMul).toFixed(2)],
+    ["全局加成 GLOBAL", "+" + dmgPct + "%"],
+    ["近战/法术 MELEE", "+" + heavyPct + "%"],
+    ["暴击 CRIT", critPct + "%"],
+    ["冲刺 DASH", p.dashMax + "×"],
+    ["吸血 LIFESTEAL", stealN > 0 ? "+" + stealN.toFixed(1) : "—"],
+  ];
+  ctx.fillStyle = "rgba(255,204,68,0.85)";
+  ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+  ctx.fillText("属性 STATS", x + 14 * u, yy);
+  yy += 15 * u;
+  const colW = (w - 28 * u) / 2;
+  for (let i = 0; i < stats.length; i++) {
+    const sx = x + 18 * u + (i % 2) * colW;
+    const sy = yy + ((i / 2) | 0) * 15 * u;
+    ctx.fillStyle = "rgba(170,200,255,0.7)"; ctx.textAlign = "left";
+    ctx.font = 10 * u + "px 'Courier New', monospace";
+    ctx.fillText(stats[i][0], sx, sy);
+    ctx.fillStyle = "#ffe28a"; ctx.textAlign = "right";
+    ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+    ctx.fillText(stats[i][1], sx + colW - 8 * u, sy);
+  }
+  yy += Math.ceil(stats.length / 2) * 15 * u + 14 * u;
+  // owned boons GROUPED BY THEME (rarity-colored, with stack count)
+  ctx.textAlign = "left";
+  ctx.fillStyle = "rgba(255,204,68,0.85)";
+  ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+  ctx.fillText("祝福 BOONS · 流派 by theme", x + 14 * u, yy);
+  yy += 16 * u;
+  // bucket owned boons by primary theme; an "其他 OTHER" bucket for unthemed; duos shown first
+  const owned = [];
+  for (const id in p.boons) { if (p.boons[id]) { const b = boonById(id); if (b) owned.push(b); } }
+  const buckets = {};
+  const order = [];
+  const pushB = (key, b) => { if (!buckets[key]) { buckets[key] = []; order.push(key); } buckets[key].push(b); };
+  for (const b of owned) {
+    const tk = boonPrimaryTheme(b);
+    pushB(tk || "_other", b);
+  }
+  // stable theme order (THEMES order, then other)
+  const themeOrder = Object.keys(THEMES).concat(["_other"]);
+  order.sort((a, b) => themeOrder.indexOf(a) - themeOrder.indexOf(b));
+  const lineH = 13.5 * u;
+  const maxY = y + h - 16 * u;
+  ctx.font = 10 * u + "px 'Courier New', monospace";
+  for (const key of order) {
+    if (yy > maxY) break;
+    const T = THEMES[key];
+    // theme header with dot + invested weight
+    if (T) {
+      ctx.fillStyle = T.col;
+      ctx.beginPath(); ctx.arc(x + 18 * u, yy - 1 * u, 3.5 * u, 0, TAU); ctx.fill();
+      ctx.font = "bold " + 10.5 * u + "px 'Courier New', monospace";
+      ctx.fillText(T.zh + " " + T.en + "  (" + themeWeight(p, key).toFixed(1) + ")", x + 26 * u, yy);
+    } else {
+      ctx.fillStyle = "rgba(180,200,240,0.7)";
+      ctx.font = "bold " + 10.5 * u + "px 'Courier New', monospace";
+      ctx.fillText("其他 OTHER", x + 18 * u, yy);
+    }
+    yy += lineH;
+    for (const b of buckets[key]) {
+      if (yy > maxY) break;
+      const best = (p.boonBest && p.boonBest[b.id]) || 0;
+      const rc = RARITIES[best].col;
+      ctx.fillStyle = b.col;
+      ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+      ctx.fillText(b.glyph, x + 28 * u, yy);
+      ctx.fillStyle = rc;
+      ctx.font = 10 * u + "px 'Courier New', monospace";
+      const stk = p.boons[b.id] > 1 ? " ×" + p.boons[b.id] : "";
+      const dtag = b.duo ? "◆" : "";
+      let nm = (b.nameCN || b.name) + stk + dtag;
+      // truncate to fit
+      const maxW = w - 56 * u;
+      while (ctx.measureText(nm).width > maxW && nm.length > 2) nm = nm.slice(0, -2);
+      ctx.fillText(nm, x + 42 * u, yy);
+      yy += lineH;
+    }
+    yy += 3 * u;
+  }
+  if (yy > maxY) {
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.textAlign = "center";
+    ctx.font = 9 * u + "px 'Courier New', monospace";
+    ctx.fillText("… more 更多", x + w / 2, maxY + 8 * u);
+  }
+  ctx.restore();
+}
+
 function drawPause() {
   dimScreen(0.55);
   uiRects = [];
   const u = us();
+  if (showBuild) { drawBuildPanel(u); return; }   // BUILD 概览 overview replaces the pause menu
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   glow("#5ee6ff", 18);
   ctx.fillStyle = "#5ee6ff";
   ctx.font = "bold " + 34 * u + "px 'Courier New', monospace";
   ctx.fillText("PAUSED", cw / 2, ch * 0.42);
   noglow();
+  // hint for the BUILD overview key
+  ctx.fillStyle = "rgba(255,204,68,0.7)";
+  ctx.font = 12 * u + "px 'Courier New', monospace";
+  ctx.fillText(touchUI ? "" : "B — BUILD 概览 (build overview)", cw / 2, ch * 0.37);
   ctx.fillStyle = "rgba(190,210,255,0.7)";
   ctx.font = 14 * u + "px 'Courier New', monospace";
   ctx.fillText(touchUI ? "点按继续 — tap to resume" : "P/Esc/点击 继续 · M 静音 — P / Esc / click to resume · M mute", cw / 2, ch * 0.52);
@@ -10512,6 +11201,9 @@ function drawPause() {
   items.push({ act: "fstoggle", label: (isFullscreen() ? "退出全屏 — Exit Fullscreen" : "全屏 — Fullscreen") + " ⛶", col: "#5ee6ff" });
   // 2: auto-fullscreen-on-start preference
   items.push({ act: "fsauto", label: "启动时自动全屏 — Auto-Fullscreen: " + (FS.auto ? "ON 开" : "OFF 关"), col: FS.auto ? "#66ffaa" : "#ff7755" });
+  // 3: BUILD overview panel (only meaningful mid-run, but harmless in hub)
+  if (state === "play" || state === "hub") items.push({ act: "buildtoggle", label: "BUILD 概览 — Build Overview", col: "#ffcc44" });
+  pauseItemCount = items.length;
   const gp = anyGamepad();
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
@@ -10550,6 +11242,7 @@ function uiClick(x, y) {
   for (const r of uiRects) {
     if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
       if (r.act === "boon") { pickBoon(r.i); return; }
+      if (r.act === "surge") { pickSurge(r.i); return; }
       if (r.act === "reroll") { rerollBoons(); return; }
       if (r.act === "meta") { buyMeta(META_UPGRADES[r.i]); return; }
       if (r.act === "close") { closeShop(); return; }
@@ -10786,9 +11479,14 @@ function pollGamepadUI(dt) {
     }
   }
   if (paused) {
-    // navigate the 3 pause settings items (EFFECTS / FULLSCREEN / AUTO-FS); × confirms,
-    // ○ resumes. Highlight is clamped to the item count.
-    const PAUSE_ITEMS = 3;
+    // BUILD overview is just a read-only panel: any nav/confirm/cancel closes it back to the menu.
+    if (showBuild) {
+      if (gpConfirm() || gpCancel()) { showBuild = false; audio.uiSnd(); }
+      return;
+    }
+    // navigate the pause settings items (EFFECTS / FULLSCREEN / AUTO-FS / BUILD); × confirms,
+    // ○ resumes. Highlight is clamped to the live item count.
+    const PAUSE_ITEMS = Math.max(1, pauseItemCount);
     const stepNav = gpMenuStep(dt);
     if (stepNav.vert && GP.navCD <= 0) {
       menuHighlight = (menuHighlight + stepNav.vert + PAUSE_ITEMS) % PAUSE_ITEMS;
@@ -10798,7 +11496,8 @@ function pollGamepadUI(dt) {
       const i = ((menuHighlight % PAUSE_ITEMS) + PAUSE_ITEMS) % PAUSE_ITEMS;
       if (i === 0) ffx.cycleLevel();
       else if (i === 1) { toggleFullscreen(); updateFsBtn(); }
-      else { setAutoFullscreen(!FS.auto); audio.uiSnd(); }
+      else if (i === 2) { setAutoFullscreen(!FS.auto); audio.uiSnd(); }
+      else { showBuild = true; audio.uiSnd(); }
       return;
     }
     if (gpCancel()) { paused = false; audio.uiSnd(); }
@@ -10818,13 +11517,13 @@ function pollGamepadUI(dt) {
   }
 }
 function menuItemCount() {
-  if (state === "boon") return boonChoices.length;
+  if (state === "boon") return surgePicking ? surgeChoices.length : boonChoices.length;
   if (state === "shop") return META_UPGRADES.length;
   if (state === "heat") return HEAT_MODS.length;
   return 0;
 }
 function menuConfirm() {
-  if (state === "boon") { pickBoon(menuHighlight); menuHighlight = 0; }
+  if (state === "boon") { if (surgePicking) pickSurge(menuHighlight); else pickBoon(menuHighlight); menuHighlight = 0; }
   else if (state === "shop") buyMeta(META_UPGRADES[menuHighlight]);
   else if (state === "heat") toggleHeat(menuHighlight);
   else if (state === "stats") closeStats();
