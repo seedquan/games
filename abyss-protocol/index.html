@@ -99,34 +99,35 @@
    ============================================================ */
 
 /* ---------------- §B CONFIG ---------------- */
-/* BIG WORLD MAP: the arena is now ~5x the visible combat window in EACH axis, so the
-   scrolling follow camera (see computeView/updateCamera) only ever shows ~1/5 of the
-   map per side (≈1/25 of the area). Sizing is derived from the visible-world span at the
-   normal combat zoom (camZoom): visible_world ≈ screen / camZoom, and arena ≈ that × ~5.
+/* WORLD MAP (~2:1): the arena is ~2x the visible combat window in EACH axis, so the
+   scrolling follow camera (see computeView/updateCamera) shows roughly HALF the map per
+   side (≈1/4 of the area). Sizing is derived from the visible-world span at the normal
+   combat zoom (camZoom): visible_world ≈ screen / camZoom, and arena ≈ that × ~2.
    Worked from a 1920x1080 reference at camZoom 1.55:
      visible world ≈ 1920/1.55 × 1080/1.55 ≈ 1238 × 697 px
-     × MAP_WINDOW_RATIO (5) ≈ 6190 × 3484 → rounded to a clean 16:9 6400 × 3600,
+     × MAP_WINDOW_RATIO (2) ≈ 2477 × 1394 → rounded to a clean ~16:9 2500 × 1408,
    then clamped to MAP_MAX for perf/memory. On smaller windows the map:window ratio is
-   even larger (more map per screen), which is fine ("slightly larger is OK"). */
-const MAP_WINDOW_RATIO = 5;            // target full-map : visible-window span ratio per axis
+   a little larger (more map per screen), which is fine ("slightly larger is OK").
+   (Was ~5:1 / 6400×3600; pulled in to ~2:1 so the room feels tighter & more readable.) */
+const MAP_WINDOW_RATIO = 2;            // target full-map : visible-window span ratio per axis
 const MAP_REF_W = 1920, MAP_REF_H = 1080; // reference window the sizing is derived from
 const MAP_BASE_ZOOM = 1.55;            // = camZoom (kept in sync below)
 const MAP_MAX_W = 7200, MAP_MAX_H = 4200; // sane upper clamp for perf/memory
-const _arenaW = Math.min(MAP_MAX_W, Math.round((MAP_REF_W / MAP_BASE_ZOOM) * MAP_WINDOW_RATIO / 100) * 100); // 6400
-const _arenaH = Math.min(MAP_MAX_H, Math.round((MAP_REF_H / MAP_BASE_ZOOM) * MAP_WINDOW_RATIO / 100) * 100); // 3500 -> bumped to 3600 for clean 16:9
+const _arenaW = Math.min(MAP_MAX_W, Math.round((MAP_REF_W / MAP_BASE_ZOOM) * MAP_WINDOW_RATIO / 100) * 100); // 2500
+const _arenaH = Math.min(MAP_MAX_H, Math.round((MAP_REF_H / MAP_BASE_ZOOM) * MAP_WINDOW_RATIO / 100) * 100); // 1400 -> bumped to 1408 for clean 16:9
 const CONFIG = Object.freeze({
-  // logical arena size — now ~5x the visible window per axis (see MAP_* derivation above).
+  // logical arena size — now ~2x the visible window per axis (see MAP_* derivation above).
   // A scrolling follow camera (computeView/updateCamera) shows only a sliding window.
-  arenaW: _arenaW, arenaH: Math.max(_arenaH, Math.round(_arenaW * 9 / 16)), // ~16:9, 6400x3600
+  arenaW: _arenaW, arenaH: Math.max(_arenaH, Math.round(_arenaW * 9 / 16)), // ~16:9, 2500x1408
   // follow-camera tuning (all screen-px / world-px ratios unless noted):
   camZoom: 1.55,                // base 1P world->screen scale (combat readability)
   camZoomMin: 0.62,             // never zoom out past this (readability floor; 2P fit)
   camZoomMax: 2.0,              // never zoom in past this (e.g. tiny screens)
   camLerp: 7.0,                 // follow smoothing (per-second lerp rate)
   camLook: 0.18,                // look-ahead fraction toward aim/velocity
-  camLookMax: 220,              // max look-ahead offset (world px) — wider on the big map
-  coopMargin: 260,             // world-px padding kept around both players in 2P fit
-  coopMaxSep: 1400,             // soft tether: max 2P separation the camera will allow (big map)
+  camLookMax: 160,              // max look-ahead offset (world px) — sized for the ~2:1 map
+  coopMargin: 240,             // world-px padding kept around both players in 2P fit
+  coopMaxSep: 900,              // soft tether: max 2P separation the camera will allow (~2:1 map)
   wall: 14,                     // wall inset
   playerR: 13,
   playerSpeed: 252,
@@ -2766,25 +2767,32 @@ function rerollBoons() {
    fight rather than trivial. Damage is left near-1P (two targets already split aggro), with a
    tiny bump, so 2P is harder than 1P without being unfairly spiky. */
 function playerCountSafe() { const n = (players && players.length) || numPlayers || 1; return clamp(n, 1, 2); }
-function coopHpMul() { return 1 + 0.6 * (playerCountSafe() - 1); }     // +60% enemy HP at 2P
-function coopDmgMul() { return 1 + 0.08 * (playerCountSafe() - 1); }   // +8% enemy dmg at 2P
-function hpMul() { return (1 + (depth - 1) * 0.17 + Math.max(0, depth - 12) * 0.06) * (1 + 0.2 * (runHeat.ehp || 0)) * coopHpMul(); }
-function eDmgMul() { return (1 + (depth - 1) * 0.07 + Math.max(0, depth - 12) * 0.03) * (1 + 0.15 * (runHeat.edmg || 0)) * coopDmgMul(); }
+function coopHpMul() { return 1 + 0.7 * (playerCountSafe() - 1); }     // +70% enemy HP at 2P (was +60%)
+function coopDmgMul() { return 1 + 0.14 * (playerCountSafe() - 1); }   // +14% enemy dmg at 2P (was +8%)
+// BUFF #2 (regular enemies are too weak vs strong builds): steeper depth ramp on both HP and
+// damage, plus a small flat baseline bump, so normals/elites stay a real threat into the
+// late game. Kept FAIR — depth-1 is only mildly hotter; the curve ramps with depth.
+//   HP:  per-depth +0.17 -> +0.24, deep(>12) +0.06 -> +0.10, base *1.0 -> *1.10
+//   DMG: per-depth +0.07 -> +0.11, deep(>12) +0.03 -> +0.05, base *1.0 -> *1.08
+function hpMul() { return 1.10 * (1 + (depth - 1) * 0.24 + Math.max(0, depth - 12) * 0.10) * (1 + 0.2 * (runHeat.ehp || 0)) * coopHpMul(); }
+function eDmgMul() { return 1.08 * (1 + (depth - 1) * 0.11 + Math.max(0, depth - 12) * 0.05) * (1 + 0.15 * (runHeat.edmg || 0)) * coopDmgMul(); }
 
+// BUFF #2: base HP per type raised ~25-40% so every enemy survives a beat longer and the
+// fight reads as a threat (chunkier health pools that depth scaling then compounds).
 const ENEMY_DEFS = {
-  chaser:  { r: 14, hp: 30, speed: 116, col: "#ff5577", cost: 1.5 },
-  shooter: { r: 13, hp: 26, speed: 88,  col: "#cc66ff", cost: 2.0 },
-  tank:    { r: 24, hp: 95, speed: 44,  col: "#ffaa33", cost: 3.5 },
-  swarmer: { r: 8,  hp: 10, speed: 178, col: "#66ff88", cost: 0.55 },
-  bomber:  { r: 12, hp: 22, speed: 150, col: "#ff8844", cost: 1.8 },  // scuttles in, beeping fuse, AoE blast hurts everyone
-  shield:  { r: 17, hp: 60, speed: 70,  col: "#88aaff", cost: 2.8 },  // frontal energy shield blocks bolts & slashes
-  medic:   { r: 11, hp: 18, speed: 95,  col: "#66ffcc", cost: 2.2 },  // hovers behind, beam-heals most damaged ally
-  phantom: { r: 13, hp: 26, speed: 130, col: "#bb99ff", cost: 2.4 },  // cloaked stalker, decloaks before dash-strike
+  chaser:  { r: 14, hp: 40,  speed: 122, col: "#ff5577", cost: 1.5 }, // hp 30->40, spd 116->122
+  shooter: { r: 13, hp: 34,  speed: 92,  col: "#cc66ff", cost: 2.0 }, // hp 26->34
+  tank:    { r: 24, hp: 130, speed: 46,  col: "#ffaa33", cost: 3.5 }, // hp 95->130
+  swarmer: { r: 8,  hp: 13,  speed: 184, col: "#66ff88", cost: 0.55 },// hp 10->13
+  bomber:  { r: 12, hp: 30,  speed: 156, col: "#ff8844", cost: 1.8 }, // hp 22->30; scuttles in, beeping fuse, AoE blast hurts everyone
+  shield:  { r: 17, hp: 82,  speed: 72,  col: "#88aaff", cost: 2.8 }, // hp 60->82; frontal energy shield blocks bolts & slashes
+  medic:   { r: 11, hp: 24,  speed: 98,  col: "#66ffcc", cost: 2.2 }, // hp 18->24; hovers behind, beam-heals most damaged ally
+  phantom: { r: 13, hp: 35,  speed: 134, col: "#bb99ff", cost: 2.4 }, // hp 26->35; cloaked stalker, decloaks before dash-strike
   // ---- NEW enemy types (distinct silhouettes, behaviors & telegraphs; depth-gated) ----
-  blinker: { r: 12, hp: 24, speed: 60,  col: "#5fffe0", cost: 2.3 },  // teleporting blink-striker: vanishes, reappears beside you, slashes
-  bulwark: { r: 18, hp: 70, speed: 84,  col: "#7aa0ff", cost: 3.0 },  // shielded charger: braces a frontal shield, then telegraphed barge
-  lobber:  { r: 14, hp: 30, speed: 70,  col: "#aaff55", cost: 2.4 },  // bombardier: lobs arcing globs that leave a caustic hazard pool
-  totem:   { r: 15, hp: 40, speed: 0,   col: "#ffcf66", cost: 2.6 },  // rooted buffer/totem: empowers (hastens) nearby enemies in an aura
+  blinker: { r: 12, hp: 32,  speed: 62,  col: "#5fffe0", cost: 2.3 }, // hp 24->32; teleporting blink-striker
+  bulwark: { r: 18, hp: 95,  speed: 86,  col: "#7aa0ff", cost: 3.0 }, // hp 70->95; shielded charger
+  lobber:  { r: 14, hp: 40,  speed: 72,  col: "#aaff55", cost: 2.4 }, // hp 30->40; caustic-pool bombardier
+  totem:   { r: 15, hp: 54,  speed: 0,   col: "#ffcf66", cost: 2.6 }, // hp 40->54; rooted buffer/totem
 };
 
 function spawnEnemy(type, x, y) {
@@ -2812,8 +2820,8 @@ function spawnEnemy(type, x, y) {
     eliteSpawned = true;
     e.elite = true;
     e.r = Math.round(e.r * 1.25);
-    e.hp *= 2.6; e.maxHp *= 2.6;
-    e.speed *= 1.08;
+    e.hp *= 3.1; e.maxHp *= 3.1;   // BUFF: elite HP x2.6 -> x3.1 (tougher mini-bosses)
+    e.speed *= 1.12;               // BUFF: elite speed x1.08 -> x1.12
   }
   enemies.push(e);
   burst(x, y, d.col, e.elite ? 18 : 10, 160, 0.4, 2.5);
@@ -2822,24 +2830,28 @@ function spawnEnemy(type, x, y) {
 }
 
 /* boss roster: rotated/randomized each boss room; depth 18+ spawns hard variants.
-   BUFF: base HP raised ~50-55% across the board and base speed nudged up so late-game
-   weapons/boons can't melt them — fights now last longer and threaten strong builds.
+   BUFF #3 (BOSS太弱了 — bosses were a pushover vs maxed builds): base HP raised a further
+   ~60-65% on top of the prior buff so fights are a genuine, lengthy endurance check, and
+   base speed nudged up again so they stay on the player. Damage rides the global eDmgMul
+   buff (every boss bolt/contact bakes it in) plus the per-attack contact bumps below.
    Bilingual name (中文 — English) used by the entrance banner. */
 const BOSS_KINDS = [
-  { kind: "warden",    name: "THE WARDEN 监守者",  col: "#ff3366", r: 44, hp: 640, speed: 66 },
-  { kind: "summoner",  name: "VOIDCALLER 虚空使",  col: "#bb66ff", r: 36, hp: 560, speed: 78 },
-  { kind: "artillery", name: "LANCE-7 炮枪七型",   col: "#ff8833", r: 38, hp: 580, speed: 60 },
-  { kind: "splitter",  name: "MITOSIS PRIME 分裂源", col: "#66ff88", r: 52, hp: 720, speed: 55 },
-  { kind: "overseer",  name: "OVERSEER 监视者",   col: "#33ddee", r: 40, hp: 660, speed: 64 },
-  { kind: "juggernaut",name: "JUGGERNAUT 重锤者", col: "#ffaa44", r: 50, hp: 840, speed: 57 },
-  { kind: "hexweaver", name: "HEXWEAVER 咒织者",  col: "#cc66ff", r: 38, hp: 630, speed: 70 },
+  { kind: "warden",    name: "THE WARDEN 监守者",  col: "#ff3366", r: 44, hp: 1040, speed: 70 }, // hp 640->1040
+  { kind: "summoner",  name: "VOIDCALLER 虚空使",  col: "#bb66ff", r: 36, hp: 920,  speed: 82 }, // hp 560->920
+  { kind: "artillery", name: "LANCE-7 炮枪七型",   col: "#ff8833", r: 38, hp: 950,  speed: 64 }, // hp 580->950
+  { kind: "splitter",  name: "MITOSIS PRIME 分裂源", col: "#66ff88", r: 52, hp: 1180, speed: 58 }, // hp 720->1180
+  { kind: "overseer",  name: "OVERSEER 监视者",   col: "#33ddee", r: 40, hp: 1080, speed: 68 }, // hp 660->1080
+  { kind: "juggernaut",name: "JUGGERNAUT 重锤者", col: "#ffaa44", r: 50, hp: 1380, speed: 60 }, // hp 840->1380
+  { kind: "hexweaver", name: "HEXWEAVER 咒织者",  col: "#cc66ff", r: 38, hp: 1030, speed: 74 }, // hp 630->1030
 ];
 
 /* the FINAL boss — a unique, larger, multi-phase threat distinct from the 7. It appears at
    the run-clear milestone (FINAL_DEPTH) on a normal boss room and, on death, triggers the
    VICTORY / 通关 screen. After clearing, players may CONTINUE into a harder endless loop. */
 const FINAL_DEPTH = 24;   // a natural boss depth (24 % bossEvery === 0)
-const FINAL_BOSS = { kind: "abyss", name: "ABYSS CORE 深渊之核", col: "#ff4fd0", r: 60, hp: 1500, speed: 56, final: true };
+// BUFF #3: the climactic final boss gets a big HP jump (1500 -> 2600) so beating it is a
+// real multi-phase endurance test even for a fully-maxed late-game loadout.
+const FINAL_BOSS = { kind: "abyss", name: "ABYSS CORE 深渊之核", col: "#ff4fd0", r: 60, hp: 2600, speed: 60, final: true };
 let runCleared = false;   // set true once the final boss has been beaten this run
 
 function spawnBoss(forceKind) {
@@ -2853,21 +2865,21 @@ function spawnBoss(forceKind) {
     def = pick(pool.length ? pool : BOSS_KINDS);
   }
   lastBossKind = def.kind;
-  // BUFF: steeper per-tier HP growth (+0.9/tier vs +0.75) and a stronger hard-variant
-  // multiplier (1.4x vs 1.25x) at depth 18+, so deep bosses are a real check.
-  // FINAL boss: a flatter, tuned scale on its big base HP (+co-op), kept beatable by a
+  // BUFF #3: steeper per-tier HP growth (+1.05/tier, was +0.9) and a stronger hard-variant
+  // multiplier (1.6x, was 1.4x) at depth 18+, so deep bosses are a serious check.
+  // FINAL boss: a slightly steeper scale on its big base HP (+co-op), kept beatable by a
   // full late-game loadout but a genuine multi-phase endurance check.
   const hp = def.final
-    ? Math.round(def.hp * (1 + (tier - 1) * 0.28) * coopHpMul())
-    : Math.round(def.hp * (1 + (tier - 1) * 0.9) * (hard ? 1.4 : 1));
-  // BIG MAP: spawn the boss a fixed distance AHEAD of the players' centroid (toward the top
-  // wall) rather than at the far-top of the huge arena — close enough to engage quickly while
-  // still telegraphing the entrance, and clamped on-map.
+    ? Math.round(def.hp * (1 + (tier - 1) * 0.34) * coopHpMul())
+    : Math.round(def.hp * (1 + (tier - 1) * 1.05) * (hard ? 1.6 : 1));
+  // spawn the boss a fixed distance AHEAD of the players' centroid (toward the top wall)
+  // — close enough to engage quickly while still telegraphing the entrance, clamped on-map.
+  // Offset sized for the ~2:1 map (was 620 on the old huge map).
   let bpx = player.x, bpy = player.y, bpn = 1;
   for (const p of players) if (p && p !== player && (p.hp > 0 || p.downed)) { bpx += p.x; bpy += p.y; bpn++; }
   bpx /= bpn; bpy /= bpn;
   const bossX = clamp(bpx, 200, CONFIG.arenaW - 200);
-  const bossY = clamp(bpy - 620, 130, CONFIG.arenaH - 200);
+  const bossY = clamp(bpy - 420, 130, CONFIG.arenaH - 200);
   boss = {
     type: "boss", kind: def.kind, name: def.name, final: !!def.final,
     x: bossX, y: bossY, vx: 0, vy: 0, r: def.r,
@@ -6633,7 +6645,7 @@ function enemyContact(e, dmg, dt) {
   for (const p of players) {
     if (p.downed || p.hp <= 0) continue;
     if (dist(e.x, e.y, p.x, p.y) < e.r + p.r) {
-      damagePlayer(dmg * eDmgMul() * (e.elite ? 1.35 : 1), angTo(e.x, e.y, p.x, p.y), e, p);
+      damagePlayer(dmg * eDmgMul() * (e.elite ? 1.5 : 1), angTo(e.x, e.y, p.x, p.y), e, p);
       e.contactCD = 0.5;
       break;
     }
@@ -6713,15 +6725,16 @@ function updateEnemy(e, dt) {
   const p = targetFor(e) || player; // co-op: aggro the nearest living player
   e._tgt = p;
   const d = dist(e.x, e.y, p.x, p.y);
-  // ANTI-STALL on the BIG arena: a foe far from every player closes in faster so wave-clears
-  // never hang on a straggler stranded across the huge map. Applied as an extra position nudge
+  // ANTI-STALL on the ~2:1 arena: a foe far from every player closes in faster so wave-clears
+  // never hang on a straggler stranded across the map. Applied as an extra position nudge
   // toward the target (doesn't touch e.speed, so enrage/elite/totem buffs are preserved). The
   // boost RAMPS with distance and, past a hard "stranded" threshold, becomes a strong reel-in
   // (up to ~520 px/s) so no enemy can ever sit unreachable and block the room from clearing.
-  if (e.type !== "totem" && d > 560) {
-    // gentle below ~1200px, then a steep ramp; clamped well under player speed near the fight
-    let boost = clamp((d - 560) / 14, 0, 110);
-    if (d > 1200) boost += clamp((d - 1200) / 4, 0, 410); // stranded reel-in across the big map
+  // Thresholds scaled down for the smaller (~2500x1408) map: gentle past ~320px, reel past ~700.
+  if (e.type !== "totem" && d > 320) {
+    // gentle below ~700px, then a steep ramp; clamped well under player speed near the fight
+    let boost = clamp((d - 320) / 8, 0, 110);
+    if (d > 700) boost += clamp((d - 700) / 2.4, 0, 410); // stranded reel-in across the map
     e.x += (p.x - e.x) / d * boost * dt;
     e.y += (p.y - e.y) / d * boost * dt;
   }
@@ -6763,10 +6776,11 @@ function updateEnemy(e, dt) {
       e.t -= dt;
       if (e.t <= 0) {
         const a = angTo(e.x, e.y, p.x, p.y);
-        fireEbolt(e.x, e.y, a, 270 + depth * 5, 10, "#cc66ff");
-        if (depth >= 8) { fireEbolt(e.x, e.y, a + 0.25, 270, 10, "#cc66ff"); fireEbolt(e.x, e.y, a - 0.25, 270, 10, "#cc66ff"); }
+        // BUFF: faster bolts (300 base, +7/depth) and the spread triple opens earlier (d>=6).
+        fireEbolt(e.x, e.y, a, 300 + depth * 7, 11, "#cc66ff");
+        if (depth >= 6) { fireEbolt(e.x, e.y, a + 0.22, 300, 11, "#cc66ff"); fireEbolt(e.x, e.y, a - 0.22, 300, 11, "#cc66ff"); }
         audio.bolt();
-        e.state = "seek"; e.cd = rand(1.4, 2.2);
+        e.state = "seek"; e.cd = rand(1.15, 1.9); // BUFF: fires more often (was 1.4-2.2)
       }
     }
     enemyContact(e, 6, dt);
@@ -7076,9 +7090,9 @@ function updateBoss(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const phase3 = e.hp < e.maxHp * 0.25;   // BUFF: a third desperate phase
-  // BUFF: faster pattern cycling overall; phase3 adds another speed-up so the fight
-  // crescendos. Still fair — telegraph windows below keep strikes dodgeable.
-  const cdm = (e.hard ? 0.7 : 1) * (e.enraged ? 0.62 : 1) * (phase3 ? 0.82 : 1);
+  // BUFF #3: faster pattern cycling overall; phase2/phase3 add speed-ups so the fight
+  // crescendos hard. Still fair — telegraph windows below keep strikes dodgeable.
+  const cdm = (e.hard ? 0.62 : 1) * (e.enraged ? 0.55 : 1) * (phase3 ? 0.74 : phase2 ? 0.88 : 1);
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     const v = seekVec(e, p.x, p.y);
@@ -7086,29 +7100,29 @@ function updateBoss(e, dt, d) {
     e.vx = lerp(e.vx, v.x * e.speed * want, 3 * dt);
     e.vy = lerp(e.vy, v.y * e.speed * want, 3 * dt);
     if (e.cd <= 0) {
-      // BUFF: phase3 unlocks a 4th attack — a fast double cross-spiral barrage.
-      e.atk = (e.atk + 1) % (phase3 ? 4 : 3);
+      // BUFF: phase2 already unlocks the 4th attack (was phase3) — a fast double cross-spiral.
+      e.atk = (e.atk + 1) % (phase2 ? 4 : 3);
       e.sub = 0;
-      if (e.atk === 0) { e.state = "radial"; e.t = 0.62; }       // tighter telegraph (was 0.8)
-      else if (e.atk === 1) { e.state = "aim"; e.t = 0.55; }      // (was 0.7)
-      else if (e.atk === 2) { e.state = "summon"; e.t = 0.7; audio.roar(); }
-      else { e.state = "spiral"; e.t = 0.5; }                     // phase3 spiral barrage
+      if (e.atk === 0) { e.state = "radial"; e.t = 0.54; }       // tighter telegraph (was 0.62)
+      else if (e.atk === 1) { e.state = "aim"; e.t = 0.48; }      // (was 0.55)
+      else if (e.atk === 2) { e.state = "summon"; e.t = 0.62; audio.roar(); }
+      else { e.state = "spiral"; e.t = 0.44; }                    // spiral barrage
     }
   } else if (e.state === "radial") {
     e.vx *= 0.92; e.vy *= 0.92;
     e.t -= dt;
     if (e.t <= 0) {
-      const volleys = (phase3 ? 5 : phase2 ? 4 : 3) + (e.hard ? 1 : 0);
-      const n = 18 + e.tier * 2 + (e.hard ? 4 : 0);   // denser ring (was 16)
+      const volleys = (phase3 ? 6 : phase2 ? 5 : 3) + (e.hard ? 1 : 0); // denser (was 5/4/3)
+      const n = 22 + e.tier * 2 + (e.hard ? 4 : 0);   // denser ring (was 18)
       const baseA = e.rot + e.sub * 0.13;
       for (let i = 0; i < n; i++) {
-        fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 180 + e.tier * 12, 10, "#ff3366", 7);
+        fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 195 + e.tier * 12, 10, "#ff3366", 7); // faster (was 180)
       }
       audio.bolt();
       shake(4, 0.15);
       e.sub++;
-      if (e.sub >= volleys) { e.state = "move"; e.cd = (phase2 ? 1.25 : 1.9) * cdm; }
-      else e.t = 0.36;   // faster between volleys (was 0.42)
+      if (e.sub >= volleys) { e.state = "move"; e.cd = (phase2 ? 1.05 : 1.6) * cdm; }
+      else e.t = 0.30;   // faster between volleys (was 0.36)
     }
   } else if (e.state === "spiral") {
     // BUFF (phase3): a steady twin counter-rotating spiral — long but readable; circle to dodge.
@@ -7116,13 +7130,13 @@ function updateBoss(e, dt, d) {
     e.t -= dt;
     e.sub += dt;
     if ((e.subTick = (e.subTick || 0) - dt) <= 0) {
-      e.subTick = 0.11;
+      e.subTick = 0.09;   // denser spiral (was 0.11)
       const a = e.rot * 2.4;
-      fireEbolt(e.x, e.y, a, 230, 9, "#ff6688", 6);
-      fireEbolt(e.x, e.y, a + Math.PI, 230, 9, "#ff6688", 6);
+      fireEbolt(e.x, e.y, a, 245, 9, "#ff6688", 6);
+      fireEbolt(e.x, e.y, a + Math.PI, 245, 9, "#ff6688", 6);
       audio.bolt();
     }
-    if (e.sub >= 1.5) { e.state = "move"; e.cd = 1.4 * cdm; }
+    if (e.sub >= 1.8) { e.state = "move"; e.cd = 1.2 * cdm; }   // longer barrage, snappier recover
   } else if (e.state === "aim") {
     e.vx *= 0.9; e.vy *= 0.9;
     if (e.t > 0.14) { const v = seekVec(e, p.x, p.y); e.dirX = v.x; e.dirY = v.y; } // locks later
@@ -7134,7 +7148,7 @@ function updateBoss(e, dt, d) {
     }
   } else if (e.state === "dash") {
     e.t -= dt;
-    enemyContact(e, 22, dt);   // BUFF: dash contact 18 -> 22
+    enemyContact(e, 26, dt);   // BUFF: dash contact 22 -> 26
     addPart({ x: e.x + rand(-20, 20), y: e.y + rand(-20, 20), vx: 0, vy: 0, t: 0.3, tm: 0.3, col: "#ff3366", r: rand(2, 5), drag: 1 });
     const A = CONFIG;
     if (e.x < 70 || e.x > A.arenaW - 70 || e.y < 70 || e.y > A.arenaH - 70 || e.t <= 0) {
@@ -7159,10 +7173,10 @@ function updateBoss(e, dt, d) {
       if (e.hard) {
         for (let i = 0; i < 14; i++) fireEbolt(e.x, e.y, (i / 14) * TAU + e.rot, 175, 9, "#ff3366", 6);
       }
-      e.state = "move"; e.cd = (phase2 ? 1.7 : 2.7) * cdm;
+      e.state = "move"; e.cd = (phase2 ? 1.4 : 2.2) * cdm;
     }
   }
-  enemyContact(e, 16, dt);   // BUFF: contact 14 -> 16
+  enemyContact(e, 20, dt);   // BUFF: contact 16 -> 20
 }
 
 /* --- VOIDCALLER: teleports, spawns adds, radial bursts --- */
@@ -7170,7 +7184,7 @@ function updateBossSummoner(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const phase3 = e.hp < e.maxHp * 0.25;
-  const cdm = (e.hard ? 0.7 : 1) * (phase2 ? 0.8 : 1) * (phase3 ? 0.82 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.74 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * 2.2;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -7230,18 +7244,18 @@ function updateBossSummoner(e, dt, d) {
     e.vx *= 0.9; e.vy *= 0.9;
     e.t -= dt;
     if (e.t <= 0) {
-      const volleys = (phase3 ? 4 : phase2 ? 3 : 2);
-      const n = 14 + e.tier * 2;
+      const volleys = (phase3 ? 5 : phase2 ? 4 : 3);   // BUFF: +1 volley each (was 4/3/2)
+      const n = 18 + e.tier * 2;                       // denser ring (was 14)
       const baseA = e.rot * 3 + e.sub * 0.21;
-      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 180 + e.tier * 10, 10, e.col, 6);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 195 + e.tier * 10, 10, e.col, 6);
       audio.bolt();
       shake(3, 0.12);
       e.sub++;
-      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.5, 2.0) * cdm; }
-      else e.t = 0.34;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.25, 1.7) * cdm; }
+      else e.t = 0.30;
     }
   }
-  enemyContact(e, 14, dt);
+  enemyContact(e, 18, dt);   // BUFF: contact 14 -> 18
 }
 
 /* --- LANCE-7: long-range lance shots with laser-sight + mortar AoE circles --- */
@@ -7249,7 +7263,7 @@ function updateBossArtillery(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const phase3 = e.hp < e.maxHp * 0.25;
-  const cdm = (e.hard ? 0.7 : 1) * (phase2 ? 0.8 : 1) * (phase3 ? 0.82 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.74 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -7261,8 +7275,8 @@ function updateBossArtillery(e, dt, d) {
     if (e.cd <= 0) {
       e.atk = (e.atk + 1) % 2;
       e.sub = 0;
-      if (e.atk === 0) { e.state = "aim"; e.t = 0.95; }
-      else { e.state = "mortar"; e.t = 0.6; }
+      if (e.atk === 0) { e.state = "aim"; e.t = 0.82; }   // BUFF: tighter sight lock (was 0.95)
+      else { e.state = "mortar"; e.t = 0.55; }
     }
   } else if (e.state === "aim") {
     e.vx *= 0.85; e.vy *= 0.85;
@@ -7292,7 +7306,7 @@ function updateBossArtillery(e, dt, d) {
         mortars.push({
           x: clamp(p.x + ox, 50, CONFIG.arenaW - 50),
           y: clamp(p.y + oy, 50, CONFIG.arenaH - 50),
-          r: 70, t: tt, tm: tt, dmg: 18, col: e.col,
+          r: 74, t: tt, tm: tt, dmg: 24, col: e.col,   // BUFF: mortar r 70->74, dmg 18->24
         });
       }
       audio.bolt();
@@ -7300,24 +7314,24 @@ function updateBossArtillery(e, dt, d) {
         const a = angTo(e.x, e.y, p.x, p.y);
         fireEbolt(e.x, e.y, a, 720, 13, "#ffd0a0", 7);
       }
-      e.state = "move"; e.cd = rand(1.6, 2.2) * cdm;
+      e.state = "move"; e.cd = rand(1.35, 1.9) * cdm;
     }
   }
-  enemyContact(e, 12, dt);
+  enemyContact(e, 16, dt);   // BUFF: contact 12 -> 16
 }
 
 /* --- MITOSIS PRIME: big brute; splits at 50% HP, fragments split once more --- */
 function updateBossSplitter(e, dt, d) {
   if (e.gen < 2 && e.hp <= e.maxHp * 0.5) { splitBoss(e); return; }
   const p = e._tgt || targetFor(e) || player;
-  const cdm = (e.hard ? 0.7 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (e.hard ? 0.62 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * 0.8;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     const v = seekVec(e, p.x, p.y);
     e.vx = lerp(e.vx, v.x * e.speed, 4 * dt);
     e.vy = lerp(e.vy, v.y * e.speed, 4 * dt);
-    enemyContact(e, 12, dt);
+    enemyContact(e, 15, dt);   // BUFF: contact 12 -> 15
     if (e.cd <= 0) {
       if (d < 150) { e.state = "slam"; e.t = 0.9; }
       else if (d < 460) { e.state = "wind"; e.t = 0.55; }
@@ -7334,8 +7348,8 @@ function updateBossSplitter(e, dt, d) {
     }
   } else if (e.state === "lunge") {
     e.t -= dt;
-    enemyContact(e, 20, dt);   // BUFF: 17 -> 20
-    if (e.t <= 0) { e.state = "move"; e.cd = rand(0.9, 1.4) * cdm; e.vx *= 0.25; e.vy *= 0.25; }
+    enemyContact(e, 24, dt);   // BUFF: 20 -> 24
+    if (e.t <= 0) { e.state = "move"; e.cd = rand(0.8, 1.2) * cdm; e.vx *= 0.25; e.vy *= 0.25; }
   } else if (e.state === "slam") {
     e.vx *= 0.85; e.vy *= 0.85;
     e.t -= dt;
@@ -7344,11 +7358,11 @@ function updateBossSplitter(e, dt, d) {
       burst(e.x, e.y, e.col, 34, 360, 0.6, 4);
       shake(8, 0.35);
       audio.enemyDie(true);
-      damagePlayersInRadius(e.x, e.y, R, 24 * eDmgMul(), e);   // BUFF: 20 -> 24, hits all co-op players in range
-      // BUFF: every slam now coughs a shockwave ring (was hard-only); denser on hard.
-      const n = 12 + (e.hard ? 4 : 0);
-      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 210, 9, e.col, 6);
-      e.state = "move"; e.cd = rand(1.3, 1.9) * cdm;
+      damagePlayersInRadius(e.x, e.y, R, 30 * eDmgMul(), e);   // BUFF: 24 -> 30, hits all co-op players in range
+      // every slam coughs a shockwave ring; denser on hard.
+      const n = 16 + (e.hard ? 4 : 0);   // BUFF: 12 -> 16
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 220, 9, e.col, 6);
+      e.state = "move"; e.cd = rand(1.1, 1.6) * cdm;
     }
   }
 }
@@ -7360,7 +7374,7 @@ function updateBossOverseer(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const phase3 = e.hp < e.maxHp * 0.25;
-  const cdm = (e.hard ? 0.7 : 1) * (phase2 ? 0.78 : 1) * (phase3 ? 0.82 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.72 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * (e.state === "bloom" ? 4 : 1.4);
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -7381,8 +7395,8 @@ function updateBossOverseer(e, dt, d) {
     e.vx *= 0.9; e.vy *= 0.9;
     e.t -= dt;
     if (e.t <= 0) {
-      const len = 640 + e.tier * 20;
-      const dmg = 12;
+      const len = 660 + e.tier * 20;
+      const dmg = 16;   // BUFF: sweep dmg 12 -> 16
       const base = angTo(e.x, e.y, p.x, p.y);
       const rate = (phase2 ? 1.6 : 1.2) * (e.hard ? 1.25 : 1) * (Math.random() < 0.5 ? 1 : -1);
       addSweep(e.x, e.y, base - rate * 0.5, rate, len, dmg, "#33ddee");
@@ -7391,7 +7405,7 @@ function updateBossOverseer(e, dt, d) {
       if (phase3) addSweep(e.x, e.y, base + Math.PI / 2 - rate * 0.5, -rate, len, dmg, "#5fe8ff");
       audio.bolt();
       shake(3, 0.12);
-      e.state = "move"; e.cd = (phase2 ? 1.3 : 2.0) * cdm;
+      e.state = "move"; e.cd = (phase2 ? 1.1 : 1.7) * cdm;
     }
   } else if (e.state === "summon") {
     e.vx *= 0.9; e.vy *= 0.9;
@@ -7404,24 +7418,24 @@ function updateBossOverseer(e, dt, d) {
         const y = clamp(e.y + Math.sin(a) * 120, 50, CONFIG.arenaH - 50);
         spawnQ.push({ type: "shooter", x, y, t: 0.8 }); // turret-drones
       }
-      e.state = "move"; e.cd = rand(2.4, 3.0) * cdm;
+      e.state = "move"; e.cd = rand(2.0, 2.6) * cdm;
     }
   } else if (e.state === "bloom") {
     e.vx *= 0.92; e.vy *= 0.92;
     e.t -= dt;
     if (e.t <= 0) {
-      const volleys = (phase3 ? 4 : phase2 ? 3 : 2) + (e.hard ? 1 : 0);
-      const n = 20 + e.tier * 2;
+      const volleys = (phase3 ? 5 : phase2 ? 4 : 3) + (e.hard ? 1 : 0);   // BUFF: +1 each
+      const n = 24 + e.tier * 2;   // denser bloom (was 20)
       const baseA = e.rot + e.sub * 0.16;
-      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 185 + e.tier * 10, 10, "#7fe8ff", 6);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 195 + e.tier * 10, 10, "#7fe8ff", 6);
       audio.bolt();
       shake(3, 0.12);
       e.sub++;
-      if (e.sub >= volleys) { e.state = "move"; e.cd = (phase2 ? 1.4 : 2.1) * cdm; }
-      else e.t = 0.34;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = (phase2 ? 1.2 : 1.8) * cdm; }
+      else e.t = 0.30;
     }
   }
-  enemyContact(e, 12, dt);
+  enemyContact(e, 16, dt);   // BUFF: contact 12 -> 16
 }
 
 /* --- JUGGERNAUT: heavy armored brute — telegraphed charge-dashes (leave a shockwave),
@@ -7441,19 +7455,19 @@ function updateBossJuggernaut(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const phase3 = e.hp < e.maxHp * 0.25;
-  const cdm = (e.hard ? 0.7 : 1) * (phase3 ? 0.82 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.86 : 1) * (phase3 ? 0.76 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * 0.6;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     const v = seekVec(e, p.x, p.y);
     e.vx = lerp(e.vx, v.x * e.speed, 3 * dt);
     e.vy = lerp(e.vy, v.y * e.speed, 3 * dt);
-    enemyContact(e, 15, dt);
+    enemyContact(e, 18, dt);   // BUFF: contact 15 -> 18
     if (e.cd <= 0) {
       e.atk = (e.atk + 1) % 3;
       e.sub = 0;
-      if (e.atk === 0) { e.state = "wind"; e.t = 0.6; }       // charge-dash wind-up (telegraph line)
-      else if (e.atk === 1) { e.state = "slam"; e.t = 0.85; } // ground-pound
+      if (e.atk === 0) { e.state = "wind"; e.t = 0.54; }      // charge-dash wind-up (telegraph line)
+      else if (e.atk === 1) { e.state = "slam"; e.t = 0.78; } // ground-pound
       else { e.state = "hurl"; e.t = 0.65; }                  // debris toss
     }
   } else if (e.state === "wind") {
@@ -7468,7 +7482,7 @@ function updateBossJuggernaut(e, dt, d) {
     }
   } else if (e.state === "charge") {
     e.t -= dt;
-    enemyContact(e, 22, dt);   // BUFF: 18 -> 22
+    enemyContact(e, 28, dt);   // BUFF: 22 -> 28
     addPart({ x: e.x + rand(-22, 22), y: e.y + rand(-22, 22), vx: 0, vy: 0, t: 0.32, tm: 0.32, col: "#ffaa44", r: rand(3, 6), drag: 1 });
     const A = CONFIG;
     if (e.x < 80 || e.x > A.arenaW - 80 || e.y < 80 || e.y > A.arenaH - 80 || e.t <= 0) {
@@ -7476,25 +7490,25 @@ function updateBossJuggernaut(e, dt, d) {
       burst(e.x, e.y, e.col, 28, 320, 0.5, 4);
       shake(8, 0.35);
       audio.enemyDie(true);
-      const n = 14 + (phase2 ? 4 : 0) + (e.hard ? 4 : 0);
-      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 220, 9, "#ffcc88", 7);
-      e.state = "move"; e.cd = rand(1.0, 1.6) * cdm; e.vx *= 0.15; e.vy *= 0.15;
+      const n = 18 + (phase2 ? 4 : 0) + (e.hard ? 4 : 0);   // BUFF: 14 -> 18
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 230, 9, "#ffcc88", 7);
+      e.state = "move"; e.cd = rand(0.85, 1.35) * cdm; e.vx *= 0.15; e.vy *= 0.15;
     }
   } else if (e.state === "slam") {
     e.vx *= 0.85; e.vy *= 0.85;
     e.t -= dt;
     if (e.t <= 0) {
-      const R = 125 + e.r;
+      const R = 130 + e.r;
       burst(e.x, e.y, e.col, 34, 360, 0.6, 4);
       ffx.ring(e.x, e.y, R, "#ffcc88", 0.5, 6);
       shake(9, 0.4);
       audio.enemyDie(true);
-      damagePlayersInRadius(e.x, e.y, R, 24 * eDmgMul(), e);   // BUFF: 20 -> 24
+      damagePlayersInRadius(e.x, e.y, R, 32 * eDmgMul(), e);   // BUFF: 24 -> 32
       // expanding ring of debris bolts after the pound
-      const n = 18 + e.tier * 2 + (phase2 ? 4 : 0);
+      const n = 22 + e.tier * 2 + (phase2 ? 4 : 0);   // BUFF: 18 -> 22
       for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU, 210 + (phase2 ? 40 : 0), 10, "#ffcc88", 7);
       if (phase3) for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + Math.PI / n, 150, 8, "#ffe0b0", 6); // phase3: second ring
-      e.state = "move"; e.cd = rand(1.5, 2.0) * cdm;
+      e.state = "move"; e.cd = rand(1.25, 1.7) * cdm;
     }
   } else if (e.state === "hurl") {
     e.vx *= 0.9; e.vy *= 0.9;
@@ -7502,13 +7516,13 @@ function updateBossJuggernaut(e, dt, d) {
     if (e.t <= 0) {
       // hurl an arc of heavy debris toward the target
       const a0 = angTo(e.x, e.y, p.x, p.y);
-      const k = 6 + (phase2 ? 2 : 0) + (e.hard ? 1 : 0) + (phase3 ? 2 : 0);
+      const k = 7 + (phase2 ? 2 : 0) + (e.hard ? 1 : 0) + (phase3 ? 2 : 0);   // BUFF: base 6 -> 7
       for (let i = 0; i < k; i++) {
-        fireEbolt(e.x, e.y, a0 + (i - (k - 1) / 2) * 0.2, 320 + e.tier * 12, 13, "#ffbb66", 8);
+        fireEbolt(e.x, e.y, a0 + (i - (k - 1) / 2) * 0.2, 340 + e.tier * 12, 13, "#ffbb66", 8);
       }
       audio.bolt();
       shake(4, 0.15);
-      e.state = "move"; e.cd = rand(1.3, 1.9) * cdm;
+      e.state = "move"; e.cd = rand(1.1, 1.6) * cdm;
     }
   }
 }
@@ -7520,7 +7534,7 @@ function updateBossHexweaver(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.5;
   const phase3 = e.hp < e.maxHp * 0.25;
-  const cdm = (e.hard ? 0.7 : 1) * (phase2 ? 0.8 : 1) * (phase3 ? 0.82 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.74 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * 1.8;
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -7552,7 +7566,7 @@ function updateBossHexweaver(e, dt, d) {
           mortars.push({
             x: clamp(tp.x + ox, 50, CONFIG.arenaW - 50),
             y: clamp(tp.y + oy, 50, CONFIG.arenaH - 50),
-            r: 62, t: tt, tm: tt, dmg: 15, col: e.col,
+            r: 66, t: tt, tm: tt, dmg: 20, col: e.col,   // BUFF: rune r 62->66, dmg 15->20
           });
         }
       }
@@ -7564,27 +7578,27 @@ function updateBossHexweaver(e, dt, d) {
           mortars.push({
             x: clamp(e.x + Math.cos(a) * 150, 50, CONFIG.arenaW - 50),
             y: clamp(e.y + Math.sin(a) * 150, 50, CONFIG.arenaH - 50),
-            r: 58, t: tt, tm: tt, dmg: 14, col: e.col,
+            r: 60, t: tt, tm: tt, dmg: 18, col: e.col,   // BUFF: r 58->60, dmg 14->18
           });
         }
       }
       audio.bolt();
-      e.state = "move"; e.cd = rand(1.8, 2.4) * cdm;
+      e.state = "move"; e.cd = rand(1.5, 2.0) * cdm;
     }
   } else if (e.state === "hex") {
     e.vx *= 0.92; e.vy *= 0.92;
     e.t -= dt;
     if (e.t <= 0) {
-      const volleys = (phase3 ? 3 : phase2 ? 2 : 1) + (e.hard ? 1 : 0);
-      const n = 4 + (phase2 ? 1 : 0) + (phase3 ? 1 : 0);
+      const volleys = (phase3 ? 4 : phase2 ? 3 : 2) + (e.hard ? 1 : 0);   // BUFF: +1 each
+      const n = 5 + (phase2 ? 1 : 0) + (phase3 ? 1 : 0);                  // BUFF: base 4 -> 5
       const a0 = angTo(e.x, e.y, p.x, p.y);
       for (let i = 0; i < n; i++) {
-        fireHexOrb(e.x, e.y, a0 + (i - (n - 1) / 2) * 0.36, 165 + e.tier * 8, 13, "#dd88ff", 8, 1.5);
+        fireHexOrb(e.x, e.y, a0 + (i - (n - 1) / 2) * 0.34, 175 + e.tier * 8, 13, "#dd88ff", 8, 1.6);
       }
       audio.bolt();
       e.sub++;
-      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.3, 1.9) * cdm; }
-      else e.t = 0.34;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.1, 1.6) * cdm; }
+      else e.t = 0.30;
     }
   } else if (e.state === "ward") {
     e.vx *= 0.9; e.vy *= 0.9;
@@ -7612,10 +7626,10 @@ function updateBossHexweaver(e, dt, d) {
         spawnQ.push({ type: Math.random() < 0.5 ? "swarmer" : "chaser", x, y, t: 0.8 });
       }
       audio.bossRoar("hexweaver");
-      e.state = "move"; e.cd = rand(2.2, 3.0) * cdm;
+      e.state = "move"; e.cd = rand(1.9, 2.6) * cdm;
     }
   }
-  enemyContact(e, 12, dt);
+  enemyContact(e, 16, dt);   // BUFF: contact 12 -> 16
 }
 
 /* --- ABYSS CORE (FINAL BOSS): a unique multi-phase threat that fuses several patterns —
@@ -7626,7 +7640,8 @@ function updateBossFinal(e, dt, d) {
   const p = e._tgt || targetFor(e) || player;
   const phase2 = e.hp < e.maxHp * 0.66;
   const phase3 = e.hp < e.maxHp * 0.33;
-  const cdm = (phase3 ? 0.72 : phase2 ? 0.86 : 1) * (e.enraged ? 0.7 : 1);
+  // BUFF #3: more aggressive phase-driven cadence so the climax escalates relentlessly.
+  const cdm = (phase3 ? 0.62 : phase2 ? 0.78 : 1) * (e.enraged ? 0.62 : 1);
   e.rot += dt * (e.state === "nova" ? 4 : 1.0);
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -7650,40 +7665,40 @@ function updateBossFinal(e, dt, d) {
     e.vx *= 0.92; e.vy *= 0.92;
     e.t -= dt;
     if (e.t <= 0) {
-      const volleys = (phase3 ? 5 : phase2 ? 4 : 3);
-      const n = 22 + (phase2 ? 4 : 0) + (phase3 ? 4 : 0);
+      const volleys = (phase3 ? 6 : phase2 ? 5 : 4);   // BUFF: +1 each (was 5/4/3)
+      const n = 26 + (phase2 ? 4 : 0) + (phase3 ? 4 : 0);   // denser bloom (was 22)
       const baseA = e.rot + e.sub * 0.12;
-      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 175, 11, e.col, 6);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 185, 11, e.col, 6);
       audio.bolt(); shake(4, 0.14);
       e.sub++;
-      if (e.sub >= volleys) { e.state = "move"; e.cd = 1.6 * cdm; }
-      else e.t = 0.32;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = 1.35 * cdm; }
+      else e.t = 0.28;
     }
   } else if (e.state === "beam") {
     // rotating laser sweeps (reuse OVERSEER sweep system); dual/triple by phase
     e.vx *= 0.9; e.vy *= 0.9;
     e.t -= dt;
     if (e.t <= 0) {
-      const len = 720, dmg = 14;
+      const len = 760, dmg = 18;   // BUFF: sweep len 720->760, dmg 14->18
       const base = angTo(e.x, e.y, p.x, p.y);
-      const rate = 1.3 * (Math.random() < 0.5 ? 1 : -1);
+      const rate = 1.4 * (Math.random() < 0.5 ? 1 : -1);
       addSweep(e.x, e.y, base - rate * 0.5, rate, len, dmg, "#ff4fd0");
       addSweep(e.x, e.y, base + Math.PI - rate * 0.5, rate, len, dmg, "#ff4fd0");
       if (phase2) addSweep(e.x, e.y, base + Math.PI / 2 - rate * 0.5, -rate, len, dmg, "#ff8fe0");
       if (phase3) addSweep(e.x, e.y, base - Math.PI / 2 - rate * 0.5, -rate, len, dmg, "#ff8fe0");
       audio.bolt(); shake(4, 0.14);
-      e.state = "move"; e.cd = 1.8 * cdm;
+      e.state = "move"; e.cd = 1.5 * cdm;
     }
   } else if (e.state === "orbs") {
     // a fan of slow homing void-orbs (reuse HEXWEAVER hex-orb system)
     e.vx *= 0.92; e.vy *= 0.92;
     e.t -= dt;
     if (e.t <= 0) {
-      const n = 4 + (phase2 ? 1 : 0) + (phase3 ? 2 : 0);
+      const n = 5 + (phase2 ? 1 : 0) + (phase3 ? 2 : 0);   // BUFF: base 4 -> 5
       const a0 = angTo(e.x, e.y, p.x, p.y);
-      for (let i = 0; i < n; i++) fireHexOrb(e.x, e.y, a0 + (i - (n - 1) / 2) * 0.32, 150, 12, "#ff4fd0", 8, 1.6);
+      for (let i = 0; i < n; i++) fireHexOrb(e.x, e.y, a0 + (i - (n - 1) / 2) * 0.30, 160, 12, "#ff4fd0", 8, 1.7);
       audio.bolt();
-      e.state = "move"; e.cd = 1.7 * cdm;
+      e.state = "move"; e.cd = 1.45 * cdm;
     }
   } else if (e.state === "purge") {
     // summon an add-swarm + a contained ring so the player can't just sit on the boss
@@ -7698,8 +7713,8 @@ function updateBossFinal(e, dt, d) {
         const t2 = Math.random();
         spawnQ.push({ type: t2 < 0.4 ? "swarmer" : t2 < 0.7 ? "chaser" : (depth >= 5 ? "blinker" : "shooter"), x, y, t: 0.8 });
       }
-      for (let i = 0; i < 12; i++) fireEbolt(e.x, e.y, (i / 12) * TAU + e.rot, 170, 9, "#ff8fe0", 6);
-      e.state = "move"; e.cd = 2.4 * cdm;
+      for (let i = 0; i < 16; i++) fireEbolt(e.x, e.y, (i / 16) * TAU + e.rot, 180, 9, "#ff8fe0", 6);
+      e.state = "move"; e.cd = 2.05 * cdm;
     }
   } else if (e.state === "rage") {
     // phase3 telegraphed dash-charge across the arena, leaving a bolt wake
@@ -7713,17 +7728,17 @@ function updateBossFinal(e, dt, d) {
     }
   } else if (e.state === "ragedash") {
     e.t -= dt;
-    enemyContact(e, 24, dt);
-    if (Math.random() < dt * 30) fireEbolt(e.x, e.y, rand(0, TAU), 150, 8, "#ff8fe0", 5);
+    enemyContact(e, 30, dt);   // BUFF: 24 -> 30
+    if (Math.random() < dt * 36) fireEbolt(e.x, e.y, rand(0, TAU), 160, 8, "#ff8fe0", 5);
     addPart({ x: e.x + rand(-24, 24), y: e.y + rand(-24, 24), vx: 0, vy: 0, t: 0.3, tm: 0.3, col: e.col, r: rand(3, 6), drag: 1 });
     const A = CONFIG;
     if (e.x < 80 || e.x > A.arenaW - 80 || e.y < 80 || e.y > A.arenaH - 80 || e.t <= 0) {
       burst(e.x, e.y, e.col, 26, 320, 0.5, 4); shake(8, 0.35);
-      for (let i = 0; i < 16; i++) fireEbolt(e.x, e.y, (i / 16) * TAU + e.rot, 200, 9, e.col, 6);
-      e.state = "move"; e.cd = 1.4 * cdm; e.vx *= 0.15; e.vy *= 0.15;
+      for (let i = 0; i < 20; i++) fireEbolt(e.x, e.y, (i / 20) * TAU + e.rot, 210, 9, e.col, 6);
+      e.state = "move"; e.cd = 1.15 * cdm; e.vx *= 0.15; e.vy *= 0.15;
     }
   }
-  enemyContact(e, 18, dt);
+  enemyContact(e, 22, dt);   // BUFF: contact 18 -> 22
 }
 
 /* ---------------- §R UPDATE: WORLD ---------------- */
