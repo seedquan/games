@@ -85,12 +85,14 @@
              LOOSES pooled physical ARROWS (the LONGBOW is chargeable — hold
              to draw, release to loose a piercing line shot) — all distinct
              from the casters, guns and the shared plasma BOLT ability.
-   元素附魔 / ENCHANTS: melee ("冷兵器") forms can carry MULTIPLE stacking
-             elemental enchants at once (fire/ice/electric/poison/lifesteal/
-             execute), each firing on hit. Gathered via the universal
-             ELEMENTAL ENCHANT boon line (stacks, rarity raises potency) or
-             the shop RUNE FORGE. Per-player in co-op. Stacked elements feed
-             the SHATTER / THERMAL combos plus a POISON COMBUST combo.
+   元素附魔 / ENCHANTS: ANY weapon (melee/staff/gun/bow) can carry MULTIPLE
+             stacking elemental enchants at once (fire/ice/electric/poison/
+             lifesteal/execute), each firing on a weapon hit (swing, spell,
+             bullet, arrow, beam). Gathered via the universal ELEMENTAL ENCHANT
+             boon line (stacks, rarity raises potency) or the shop RUNE FORGE.
+             Per-player in co-op. Stacked elements feed the SHATTER / THERMAL
+             combos plus a POISON COMBUST combo. (The shared plasma BOLT ability
+             is not a weapon, so it carries no enchants.)
    Pause menu: EFFECTS toggle (F while paused) cycles bloom/scanlines/shake
              intensity (full / reduced / off), persisted; plus FULLSCREEN and
              AUTO-FULLSCREEN items (gamepad d-pad navigates, × confirms).
@@ -998,14 +1000,15 @@ const BOONS = [
   { id: "ignite",name: "IGNITION EDGE", desc: "Slashes set foes burning (stacks x3)",col: "#ff8844", glyph: "❋", max: 2 },
   { id: "volt",  name: "VOLT ROUNDS",   desc: "Bolt crits shock and chain to 2 foes",col: "#ffee55", glyph: "↯", max: 2 },
   { id: "sdash", name: "STATIC DASH",   desc: "Dash trail shocks nearby enemies",    col: "#99eeff", glyph: "⌁", max: 2 },
-  /* ---- 元素附魔 ELEMENTAL ENCHANT line (universal, STACKABLE) — imbue your MELEE weapon with an
-     on-hit element. Pickable many times; each stacks & rarity raises potency. Melee-only (冷兵器). ---- */
-  { id: "en_fire",   name: "ENCHANT: FIRE",      desc: "冷兵器附魔·火 — melee hits set foes burning (stacks)",         col: "#ff8844", glyph: "❋", max: 6, enchant: "fire" },
-  { id: "en_ice",    name: "ENCHANT: ICE",       desc: "冷兵器附魔·冰 — melee hits chill & build freeze (stacks)",     col: "#aaeeff", glyph: "❄", max: 6, enchant: "ice" },
-  { id: "en_shock",  name: "ENCHANT: ELECTRIC",  desc: "冷兵器附魔·电 — melee hits shock & chain (stacks)",            col: "#ffee55", glyph: "↯", max: 6, enchant: "shock" },
-  { id: "en_poison", name: "ENCHANT: POISON",    desc: "冷兵器附魔·毒 — melee hits poison; ramps & lingers (stacks)",  col: "#7fff5a", glyph: "☣", max: 6, enchant: "poison" },
-  { id: "en_steal",  name: "ENCHANT: LIFESTEAL", desc: "冷兵器附魔·吸血 — melee hits heal you (capped, stacks)",       col: "#ff6688", glyph: "♥", max: 6, enchant: "steal" },
-  { id: "en_exec",   name: "ENCHANT: EXECUTE",   desc: "冷兵器附魔·处决 — melee finishes badly-wounded foes (stacks)", col: "#cffaff", glyph: "†", max: 6, enchant: "exec" },
+  /* ---- 元素附魔 ELEMENTAL ENCHANT line (universal, STACKABLE) — imbue YOUR WEAPON (any class) with
+     an on-hit element. Pickable many times; each stacks & rarity raises potency. Works on melee,
+     staff/wand, gun & bow hits alike. ---- */
+  { id: "en_fire",   name: "ENCHANT: FIRE",      desc: "武器附魔·火 — weapon hits set foes burning (stacks)",         col: "#ff8844", glyph: "❋", max: 6, enchant: "fire" },
+  { id: "en_ice",    name: "ENCHANT: ICE",       desc: "武器附魔·冰 — weapon hits chill & build freeze (stacks)",     col: "#aaeeff", glyph: "❄", max: 6, enchant: "ice" },
+  { id: "en_shock",  name: "ENCHANT: ELECTRIC",  desc: "武器附魔·电 — weapon hits shock & chain (stacks)",            col: "#ffee55", glyph: "↯", max: 6, enchant: "shock" },
+  { id: "en_poison", name: "ENCHANT: POISON",    desc: "武器附魔·毒 — weapon hits poison; ramps & lingers (stacks)",  col: "#7fff5a", glyph: "☣", max: 6, enchant: "poison" },
+  { id: "en_steal",  name: "ENCHANT: LIFESTEAL", desc: "武器附魔·吸血 — weapon hits heal you (capped, stacks)",       col: "#ff6688", glyph: "♥", max: 6, enchant: "steal" },
+  { id: "en_exec",   name: "ENCHANT: EXECUTE",   desc: "武器附魔·处决 — weapon finishes badly-wounded foes (stacks)", col: "#cffaff", glyph: "†", max: 6, enchant: "exec" },
   /* weapon-exclusive boons: only enter the pool while that weapon is wielded */
   { id: "skewer", name: "SKEWER",     desc: "Lance lunge pierces and drags foes with you", col: "#ffd27a", glyph: "➹", max: 2, weapon: "lance" },
   { id: "phalanx",name: "PHALANX",    desc: "Lance: +crit chance at max thrust range",     col: "#ffe6aa", glyph: "⌖", max: 2, weapon: "lance" },
@@ -1106,6 +1109,168 @@ const BOONS = [
   { id: "ricoarr",  name: "RICOCHET",     desc: "Stormbow arrows ricochet to a nearby foe once",                  col: "#d0ecff", glyph: "⤡", max: 2, weapon: "sbow" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
+
+/* ---------------- §F1 BILINGUAL BOON TEXT (中英双语) ----------------
+   Concise Chinese name + description for every boon, merged onto the BOON objects below as
+   nameCN / descCN. Rendered alongside the English in the boon-choice cards and the acquire toast,
+   in the game's "中文 — English" house style. Kept as a separate table so the BOON array above
+   stays the data-flag source of truth; the merge loop guarantees no boon is missing a translation. */
+const BOON_CN = {
+  // ---- universal ----
+  arc:     { name: "宽幅斩",   desc: "近战弧度加宽45%，攻击距离更远" },
+  chain:   { name: "电弧连锁", desc: "近战命中向附近敌人连锁闪电" },
+  pierce:  { name: "相位光弹", desc: "光弹额外贯穿2名敌人" },
+  split:   { name: "三重炮",   desc: "每次射击多发2颗光弹，呈散射" },
+  trail:   { name: "余焰",     desc: "冲刺留下灼烧等离子尾迹" },
+  reset:   { name: "击杀驱动", desc: "击杀立即重置冲刺充能" },
+  crit:    { name: "目标锁定", desc: "+15%暴击率（2.5倍伤害）" },
+  steal:   { name: "汲血之刃", desc: "近战命中回复1点生命" },
+  slow:    { name: "时缓力场", desc: "敌方光弹飞行速度降低25%" },
+  thorn:   { name: "反射装甲", desc: "接触你的敌人受到9点伤害" },
+  blade:   { name: "重刃",     desc: "+35%近战/法术伤害" },
+  over:    { name: "过载",     desc: "+35%光弹伤害，+40%能量回复" },
+  swift:   { name: "伺服增压", desc: "+12%移动速度" },
+  wind:    { name: "纳米修复", desc: "清空房间回复12点生命" },
+  shatter: { name: "深度冻结", desc: "冻结的敌人受到+40%伤害" },
+  cryo:    { name: "低温循环", desc: "冰冻新星冷却-25%" },
+  ignite:  { name: "燃焰之刃", desc: "命中点燃敌人（叠加3层）" },
+  volt:    { name: "电压弹",   desc: "光弹暴击造成感电并连锁2名敌人" },
+  sdash:   { name: "静电冲刺", desc: "冲刺尾迹电击附近敌人" },
+  // ---- elemental enchant line (universal, stackable, ALL weapons) ----
+  en_fire:   { name: "附魔·火",   desc: "武器附魔·火 — 命中点燃敌人（叠加）" },
+  en_ice:    { name: "附魔·冰",   desc: "武器附魔·冰 — 命中冰缓并积累冻结（叠加）" },
+  en_shock:  { name: "附魔·电",   desc: "武器附魔·电 — 命中感电并连锁（叠加）" },
+  en_poison: { name: "附魔·毒",   desc: "武器附魔·毒 — 命中中毒，递增且持久（叠加）" },
+  en_steal:  { name: "附魔·吸血", desc: "武器附魔·吸血 — 命中回复生命（有上限，叠加）" },
+  en_exec:   { name: "附魔·处决", desc: "武器附魔·处决 — 终结濒死的敌人（叠加）" },
+  // ---- LANCE ----
+  skewer:   { name: "穿刺",     desc: "长枪突刺贯穿并拖拽敌人随行" },
+  phalanx:  { name: "方阵",     desc: "长枪：满射程突刺时暴击率提升" },
+  gungnir:  { name: "永恒之枪", desc: "长枪突刺沿直线射出贯穿能量尖刺" },
+  vault:    { name: "撑跃",     desc: "长枪突进更远，留下灼烧尾迹并刷新冲刺" },
+  // ---- MAUL ----
+  ashock:   { name: "余震",     desc: "重锤砸击留下持续伤害的震荡环" },
+  jugg:     { name: "霸主",     desc: "重锤击退+50%，砸击短暂眩晕" },
+  seismic:  { name: "地震",     desc: "重锤砸击范围+35%并击倒（更久眩晕）" },
+  magma:    { name: "熔岩之核", desc: "重锤砸击点燃地面并使敌人燃烧" },
+  // ---- TWIN FANG ----
+  frenzy:   { name: "狂乱",     desc: "双牙：连续命中提升攻击速度" },
+  exsang:   { name: "放血",     desc: "双牙暴击造成叠加流血（持续伤害）" },
+  venom:    { name: "毒牙",     desc: "双牙每次命中施加叠加中毒" },
+  phantstk: { name: "幻影步",   desc: "双牙击杀短暂隐身（无敌帧）并返还冲刺" },
+  // ---- ARC CASTER ----
+  conduct:  { name: "导体",     desc: "电弧总是施加感电" },
+  overld:   { name: "超载",     desc: "电弧连锁额外跳跃2个目标" },
+  supercond:{ name: "超导",     desc: "电弧感电沿连锁传播冻结-碎裂连招" },
+  arcfield: { name: "电弧场",   desc: "电弧挥击留下持续感电力场" },
+  // ---- GRAVITON MACE ----
+  horizon:  { name: "事件视界", desc: "引力牵引范围+50%，减速被牵引者" },
+  collapse: { name: "坍缩",     desc: "引力内爆伤害随牵引敌人数提升" },
+  singpull: { name: "致密",     desc: "引力奇点持续更久并能牵引首领" },
+  darkstar: { name: "暗星",     desc: "引力内爆暴击并对范围内全体施加感电" },
+  // ---- GLAIVE ----
+  ricochet: { name: "弹射",     desc: "回旋刃在最多+2名附近敌人间弹跳" },
+  velret:   { name: "回归速度", desc: "回旋刃返程暴击；接住后获得+移速" },
+  tempest2: { name: "旋风",     desc: "回旋刃在满射程悬停旋转后再返回" },
+  twinblade:{ name: "双刃",     desc: "投掷第二把镜像弧线的回旋刃" },
+  // ---- CHAIN WHIP ----
+  hookshot: { name: "钩索",     desc: "被鞭拽的敌人受额外伤害并短暂眩晕" },
+  flechette:{ name: "飞镖",     desc: "鞭梢在最大射程释放冲击波" },
+  electrowhip:{name: "导电鞭",  desc: "鞭击感电并在被拽敌人间连锁闪电" },
+  constrict:{ name: "束缚",     desc: "被拽敌人被定身并受递增伤害" },
+  // ---- PRISM SABER ----
+  refract:  { name: "折射",     desc: "棱光束分裂成前向V字" },
+  ocharge:  { name: "超充能",   desc: "连续棱光命中蓄积更大光束" },
+  prismburn:{ name: "日耀",     desc: "棱光束点燃敌人并贯穿护盾" },
+  lightspeed:{name: "光速",     desc: "蓄力棱光束带你冲刺穿过敌人（无敌帧）" },
+  // ---- EMBER STAFF ----
+  conflag:  { name: "烈焰",     desc: "炽焰爆炸更大；燃烧在近敌间蔓延" },
+  meteor:   { name: "陨石",     desc: "偶尔强化的火球击中时眩晕" },
+  firewall: { name: "火墙",     desc: "炽焰地块燃烧更久更大并减速敌人" },
+  cinderbrst:{name: "余烬爆裂", desc: "燃烧致死的敌人爆炸并扩散火焰" },
+  // ---- FROST WAND ----
+  permaf:   { name: "永冻",     desc: "冰霜命中更快积累冻结且持续更久" },
+  icelance: { name: "冰矛",     desc: "冰霜射弹全贯穿并碎裂冻结敌人造成巨伤" },
+  frostnova:{ name: "冰霜新星", desc: "再次命中冻结敌人时释放冰冻新星" },
+  blizzard: { name: "暴风雪",   desc: "冰霜射弹分裂成3枚冰缓碎片" },
+  // ---- STORM STAFF ----
+  tempest:  { name: "风暴",     desc: "闪电额外连锁2名敌人且衰减更低" },
+  overvolt: { name: "超压",     desc: "再次命中感电敌人造成额外伤害；连锁可暴击" },
+  thunderclap:{name: "雷鸣",    desc: "闪电首个目标承受范围感电爆击" },
+  ballight: { name: "球状闪电", desc: "施法额外抛出缓慢电球电击附近敌人" },
+  // ---- AUTO-RIFLE ----
+  overheat: { name: "过热",     desc: "速射枪：持续射击提升射速与伤害" },
+  ricoR:    { name: "跳弹",     desc: "步枪子弹弹墙/弹向附近敌人一次" },
+  apr:      { name: "穿甲弹",   desc: "步枪子弹额外贯穿2名敌人且暴击更高" },
+  tracer:   { name: "曳光弹",   desc: "步枪命中叠加标记；被标记者受额外伤害" },
+  // ---- SCATTERGUN ----
+  pblank:   { name: "抵近射击", desc: "霰弹枪：近距额外伤害；抵近处决低血敌人" },
+  dbarrel:  { name: "双管",     desc: "霰弹枪在散射中多发一颗弹丸" },
+  slugs:    { name: "独头弹",   desc: "霰弹飞更远衰减更小并重击退" },
+  dragonsbreath:{name: "龙息弹", desc: "霰弹为燃烧弹 — 点燃敌人" },
+  // ---- RAILGUN ----
+  ocharge2: { name: "超充能",   desc: "轨道炮：满蓄力射击暴击并贯穿更远" },
+  recoild:  { name: "后坐冲刺", desc: "轨道炮开火向后冲刺一步并带短暂无敌帧" },
+  siege:    { name: "攻城模式", desc: "轨道炮射击在命中点引爆冲击" },
+  chargeshot:{name: "电容器",   desc: "按住开火蓄能轨道炮造成巨额额外伤害" },
+  // ---- QUICK BOW ----
+  rapidnock:{ name: "速搭箭",   desc: "速射弓：持续射击提升射速与箭伤" },
+  splitarrow:{name: "分裂箭",   desc: "速射弓箭矢命中时分裂成2枚碎箭" },
+  heartseek:{ name: "夺心",     desc: "连续命中同一敌人提升暴击率" },
+  barrage:  { name: "齐射",     desc: "速射弓：每第4箭射出3连扇" },
+  // ---- LONGBOW ----
+  penetrator:{name: "贯穿者",   desc: "长弓满蓄力箭贯穿所有敌人并暴击" },
+  galeforce:{ name: "疾风劲",   desc: "蓄力箭击退并释放风之冲击波" },
+  huntmark: { name: "猎人印记", desc: "长弓命中标记敌人；被标记者受额外伤害" },
+  quickdraw:{ name: "快射",     desc: "满蓄力释放返还该箭并强化下一箭" },
+  // ---- STORMBOW ----
+  arrowrain:{ name: "箭雨",     desc: "风暴弓射击向目标区域降下箭雨" },
+  staticarr:{ name: "静电箭",   desc: "风暴弓箭施加感电（连锁并碎裂冻结）" },
+  thicket:  { name: "密林",     desc: "风暴弓散射宽度与箭数提升" },
+  ricoarr:  { name: "跳弹箭",   desc: "风暴弓箭矢弹向附近敌人一次" },
+  // ---- BLADE ----
+  riposte:  { name: "还击",     desc: "刀锋：冲刺后的第一击暴击并眩晕" },
+  cleave:   { name: "劈砍",     desc: "刀锋挥砍更宽并使敌人流血（持续伤害）" },
+  tempo:    { name: "节奏之刃", desc: "刀锋：每次连斩递增伤害（停顿则重置）" },
+  execorder:{ name: "处决令",   desc: "刀锋对低血敌人造成额外伤害；击杀返还能量" },
+};
+/* merge the Chinese text onto each boon object (guarantees every boon has nameCN/descCN) */
+for (const b of BOONS) {
+  const cn = BOON_CN[b.id];
+  b.nameCN = (cn && cn.name) || b.name;   // fall back to English so the field is never empty
+  b.descCN = (cn && cn.desc) || b.desc;
+}
+
+/* ---------------- §F1b BOON ELIGIBILITY PREDICATES ----------------
+   A boon is OFFER-eligible for player `p` only if it can actually do something for their current
+   build/weapon — never offer a "dead" pick. Weapon-exclusive boons are gated to the wielded weapon
+   (handled in boonPool); the predicates below gate the few UNIVERSAL boons whose effect depends on
+   the weapon CLASS or on owning a prerequisite. Anything without an entry is always eligible.
+   The offer builder falls back to always-eligible universals if filtering would under-fill (<3). */
+const boonReq = {
+  // melee-only on-hit effects: useless on staff/gun/bow (their hits don't run the melee swing path)
+  arc:   (p) => isMeleeForm(weaponDefP(p)),               // WIDE ARC widens the melee swing
+  chain: (p) => isMeleeForm(weaponDefP(p)),               // ARC LIGHTNING chains only off melee hits
+  steal: (p) => isMeleeForm(weaponDefP(p)),               // SIPHON EDGE heals only on melee hits
+  // HEAVY EDGE scales melee AND spell-cast damage (spellDamage uses boonPow.blade); not guns/bows
+  blade: (p) => { const W = weaponDefP(p); return isMeleeForm(W) || W.isCaster; },
+};
+/* is boon `b` eligible to be OFFERED to player `p`? (rank cap + weapon-exclusive + req predicate) */
+function boonEligible(b, p) {
+  if (!b) return false;
+  const lv = p ? (p.boons[b.id] || 0) : boonLv(b.id);
+  if (lv >= b.max) return false;                          // already maxed → dead
+  const wep = (p && p.weapon) || curWeapon;
+  if (b.weapon && b.weapon !== wep) return false;         // weapon-exclusive: wielded weapon only
+  const req = boonReq[b.id];
+  if (req && !req(p)) return false;                       // class/prerequisite gate
+  return true;
+}
+/* always-eligible UNIVERSAL boons (no weapon flag, no class req) — the fallback pool that keeps the
+   offer screen full when stricter filtering would leave fewer than the 3 needed choices. */
+function universalFallbackPool(p) {
+  return BOONS.filter((b) => !b.weapon && !boonReq[b.id] && (p ? (p.boons[b.id] || 0) : boonLv(b.id)) < b.max);
+}
 
 /* boon rarity: weights improve slightly with depth and LUCK CIRCUITS levels */
 const RARITIES = [
@@ -1672,7 +1837,7 @@ function newPlayer(idx) {
     rapidN: 0, rapidT: 0,               // QUICK BOW RAPID NOCK sustained-fire ramp
     seekTgt: null, seekN: 0,            // QUICK BOW HEARTSEEKER consecutive-same-foe crit ramp
     qdrawBuff: 0,                       // LONGBOW QUICKDRAW next-shot damage buff
-    enchants: {},                       // 冷兵器附魔: per-player melee elemental enchant stacks {fire,ice,shock,poison,steal,exec}
+    enchants: {},                       // 元素附魔: per-player weapon elemental enchant stacks {fire,ice,shock,poison,steal,exec} (all classes)
     boltCD: 0,
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
@@ -1692,13 +1857,15 @@ function boonLv(id) { const p = ctxP || player; return (p && p.boons[id]) || 0; 
 /* rarity-scaled boon power: sum of rarity multipliers across picks of this boon */
 function boonPow(id) { const p = ctxP || player; return (p && p.boonPow && p.boonPow[id]) || 0; }
 
-/* ---------------- §F2 元素附魔 — STACKABLE MELEE ELEMENTAL ENCHANTS ----------------
-   A melee ("冷兵器") weapon can carry MULTIPLE elemental enchants at once; every one fires on a
-   melee hit so a build can stack fire + ice + electric + poison + lifesteal (+ execute). Each
+/* ---------------- §F2 元素附魔 — STACKABLE ELEMENTAL ENCHANTS (ALL WEAPONS) ----------------
+   ANY weapon class — melee (冷兵器), staff/wand caster, gun, or bow — can carry MULTIPLE elemental
+   enchants at once; every one fires on a damaging WEAPON hit (melee swing, spell projectile, bullet,
+   arrow, beam) so a build can stack fire + ice + electric + poison + lifesteal (+ execute). Each
    element's potency is the summed rarity power of its ELEMENTAL ENCHANT boon picks (so it flows
    through the existing boon UI + rarity system, and stacks). Enchants are per-player (co-op safe),
-   reset each run with the player's boons, and only apply on melee-form hits. Bounded by the
-   existing status duration/stack clamps, the per-second lifesteal cap, and boss resistances. */
+   reset each run with the player's boons. Bounded by the existing status duration/stack clamps,
+   the per-second lifesteal cap, and boss resistances. The shared plasma BOLT ability (not a weapon)
+   is intentionally excluded so enchants stay tied to the wielded weapon. */
 const ENCHANTS = [
   { id: "fire",   glyph: "❋", col: "#ff8844", name: "FIRE",      zh: "火" },
   { id: "ice",    glyph: "❄", col: "#aaeeff", name: "ICE",       zh: "冰" },
@@ -1710,16 +1877,23 @@ const ENCHANTS = [
 const enchantById = (id) => ENCHANTS.find((x) => x.id === id);
 /* a weapon form is "melee" (冷兵器) if it isn't a caster/gun/bow */
 function isMeleeForm(W) { return W && !W.isCaster && !W.isGun && !W.isBow; }
+/* does the acting player have ANY elemental enchant active? (used to gate enchant-scaling boons) */
+function hasAnyEnchant(p) {
+  p = p || ctxP || player;
+  if (!p || !p.enchants) return false;
+  for (const k in p.enchants) if (p.enchants[k] > 0) return true;
+  return false;
+}
 /* enchant potency for the acting player (summed rarity power across that enchant's picks) */
 function enchantPow(p, id) { return (p && p.enchants && p.enchants[id]) || 0; }
 
-/* apply all of the acting player's elemental enchants on a melee hit against `e`.
-   Called from the shared melee-hit path; respects status clamps, lifesteal cap & boss resistances.
-   The freeze/shock/burn from enchants flow into the existing SHATTER / THERMAL / COMBUST combos. */
-function applyMeleeEnchants(e, p) {
+/* apply all of the acting player's elemental enchants on a WEAPON hit against `e` (any class).
+   Called from every weapon hit path — melee swing, spell, bullet, arrow, beam; respects status
+   clamps, the per-second lifesteal cap & boss resistances. The freeze/shock/burn from enchants
+   flow into the existing SHATTER / THERMAL / COMBUST combos. Not gated to melee any more. */
+function applyWeaponEnchants(e, p) {
   p = p || ctxP || player;
   if (!p || !p.enchants || e.hp <= 0) return;
-  if (!isMeleeForm(weaponDefP(p))) return; // 冷兵器 only
   const en = p.enchants;
   // FIRE: ignite (burn DoT) — scales with potency
   const fire = en.fire || 0;
@@ -1769,6 +1943,9 @@ function applyMeleeEnchants(e, p) {
     }
   }
 }
+/* backward-compat alias: the melee-hit path used to call applyMeleeEnchants; enchants now apply to
+   all weapons via applyWeaponEnchants (no melee-form gate). */
+const applyMeleeEnchants = applyWeaponEnchants;
 /* META EFFECT SOFT-CAPS: levels stay purchasable forever (geometric cost), but the *effect*
    has diminishing returns past a knee so stacking can't break the game (no hard "MAX" on the
    purchase — only the benefit tapers). Damage past +150% and dash recharge past +100% each
@@ -1818,7 +1995,7 @@ function applyBoon(id, rar, who) {
   }
   const roman = ["II", "III", "IV", "V", "VI", "VII", "VIII"];
   const tier = p.boons[id] > 1 ? " " + (roman[p.boons[id] - 2] || ("x" + p.boons[id])) : "";
-  toast((numPlayers > 1 ? p.tag + " " : "") + (rar > 0 ? R.name + " " : "") + b.name + tier, rar > 0 ? R.col : b.col);
+  toast((numPlayers > 1 ? p.tag + " " : "") + (rar > 0 ? R.zh + " " : "") + (b.nameCN || b.name) + " · " + b.name + tier, rar > 0 ? R.col : b.col);
   if (id === "wind") { /* passive */ }
   audio.boon();
   burst(p.x, p.y, R.col, 26, 220, 0.7, 3);
@@ -1828,20 +2005,40 @@ function applyBoon(id, rar, who) {
   ffx.spawnLight(p.x, p.y, 120, R.col, 0.7);
   if (rar >= 3) ffx.pulse(p.x, p.y, 6); // legendary flash
 }
-/* weapon-exclusive boons appear only for the wielded weapon form (of the selecting player) */
+/* Eligible boon pool for the selecting player: weapon-exclusives gated to the wielded weapon, plus
+   per-boon class/prerequisite predicates so a "dead" (zero-effect) boon is never offered. */
 function boonPool(who) {
-  const wep = (who && who.weapon) || curWeapon;
-  const lv = (id) => (who ? (who.boons[id] || 0) : boonLv(id));
-  return BOONS.filter((b) => lv(b.id) < b.max && (!b.weapon || b.weapon === wep));
+  return BOONS.filter((b) => boonEligible(b, who));
 }
 function rollBoons(who, max) {
-  const avail = boonPool(who);
-  const out = [];
-  const pool = avail.slice();
   const lim = max || 3;
+  const pool = boonPool(who).slice();
+  const out = [];
   while (out.length < lim && pool.length) {
     const i = Math.floor(Math.random() * pool.length);
     out.push({ b: pool.splice(i, 1)[0], rar: rollRarity() });
+  }
+  // FALLBACK: if strict filtering left fewer than needed, top up from always-eligible universal boons
+  // (and finally from ANY remaining unmaxed boon) so the offer screen is always full and never errors.
+  // Each id appears at most once per offer; rarity weighting still applies to every card.
+  if (out.length < lim) {
+    const have = new Set(out.map((c) => c.b.id));
+    const fill = universalFallbackPool(who).filter((b) => !have.has(b.id));
+    while (out.length < lim && fill.length) {
+      const i = Math.floor(Math.random() * fill.length);
+      const b = fill.splice(i, 1)[0]; have.add(b.id);
+      out.push({ b, rar: rollRarity() });
+    }
+  }
+  if (out.length < lim) {
+    const have = new Set(out.map((c) => c.b.id));
+    const fill = BOONS.filter((b) => !have.has(b.id) && (!b.weapon || b.weapon === ((who && who.weapon) || curWeapon)) &&
+      (who ? (who.boons[b.id] || 0) : boonLv(b.id)) < b.max);
+    while (out.length < lim && fill.length) {
+      const i = Math.floor(Math.random() * fill.length);
+      const b = fill.splice(i, 1)[0]; have.add(b.id);
+      out.push({ b, rar: rollRarity() });
+    }
   }
   return out;
 }
@@ -2059,9 +2256,9 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
         sp.stealBudget = (sp.stealBudget || 0) + give;
       }
     }
-    // 冷兵器附魔: stacked elemental enchants all fire on the melee hit (survivors only; combos/poison
+    // 元素附魔: stacked elemental enchants all fire on the melee hit (survivors only; combos/poison
     // self-resolve kills via the guarded killEnemy). Reads the acting player's per-player enchant set.
-    if (e.hp > 0) applyMeleeEnchants(e, ctxP || player);
+    if (e.hp > 0) applyWeaponEnchants(e, ctxP || player);
   }
   if (e.hp <= 0) killEnemy(e);
 }
@@ -3003,7 +3200,7 @@ const SHOP_ITEMS = [
   { id: "fdmg",  name: "SHATTER EDGE",   desc: "frozen foes take +40% dmg",  col: "#aaeeff", glyph: "✸", price: () => 24 + Math.floor(depth * 1.6) },
   { id: "bolt",  name: "BOLT AMP",       desc: "+25% bolt damage this run",  col: "#ff66ee", glyph: "⚡", price: () => 28 + Math.floor(depth * 1.8) },
   { id: "melee", name: "EDGE AMP",       desc: "+25% melee damage this run", col: "#66ffff", glyph: "▲", price: () => 28 + Math.floor(depth * 1.8) },
-  { id: "enchant", name: "RUNE FORGE",   desc: "add a random melee enchant", col: "#7fff5a", glyph: "✦", price: () => 30 + Math.floor(depth * 2) },
+  { id: "enchant", name: "RUNE FORGE",   desc: "符文熔炉 · add a random elemental enchant", col: "#7fff5a", glyph: "✦", price: () => 30 + Math.floor(depth * 2) },
 ];
 
 function makeShopStock() {
@@ -3079,7 +3276,7 @@ function applyShopItem(it, who) {
   else if (it.id === "fdmg") p.frozenBonus += 0.4;
   else if (it.id === "bolt") p.boltMul += 0.25;
   else if (it.id === "melee") p.meleeMul += 0.25;
-  else if (it.id === "enchant") { // RUNE FORGE: imbue a random elemental enchant on the buyer's melee weapon
+  else if (it.id === "enchant") { // RUNE FORGE: imbue a random elemental enchant on the buyer's weapon (any class)
     p.enchants = p.enchants || {};
     const el = pick(ENCHANTS);
     p.enchants[el.id] = (p.enchants[el.id] || 0) + 1.5; // a solid (rare-tier) chunk of potency
@@ -3879,6 +4076,8 @@ function castStorm(p, W, a, base) {
     hitEnemy(cur, d, 0, 0, crit, false);
     if (cur.hp > 0) applyShock(cur, 4 * dmgMul(), 0); // STORM always shocks (interacts w/ freeze->shatter)
     if (cur.hp > 0 && boonLv("ignite")) applyBurn(cur, 4 * boonPow("ignite") * dmgMul());
+    // 元素附魔: elemental enchants fire on each storm-staff chain link too
+    if (cur.hp > 0) applyWeaponEnchants(cur, p);
     used.push(cur);
     from = { x: cur.x, y: cur.y };
     dmg *= falloff;
@@ -4024,6 +4223,8 @@ function frostHitEnemy(s, e) {
     burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
   }
   if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+  // 元素附魔: elemental enchants fire on frost-wand spell hits too
+  if (e.hp > 0) applyWeaponEnchants(e, ctxP || s.owner || player);
 }
 
 /* EMBER STAFF fireball detonation: AoE damage + applies BURN, leaves a burning patch (zone).
@@ -4048,6 +4249,8 @@ function emberBlast(s) {
     if (e.hp > 0) {
       applyBurn(e, (5 + depth * 0.4) * dmgMul()); // naturally applies BURN
       if (s.empowered) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.4 : 0.9); // METEOR stun (reuses shock-stun)
+      // 元素附魔: elemental enchants fire on ember-staff blast hits too
+      applyWeaponEnchants(e, ctxP || s.owner || player);
       hit.push(e);
     }
   }
@@ -4221,6 +4424,7 @@ function fireRail(p, W, a, base) {
     let crit = critRoll() || over;       // OVERCHARGE: full-charge shots always crit
     hitEnemy(e, dmg, Math.cos(a) * 160, Math.sin(a) * 160, crit, false);
     if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+    if (e.hp > 0) applyWeaponEnchants(e, p); // 元素附魔: enchants fire on railgun hits too
   }
   for (const bl of barrels) {
     if (bl.dead || bl.fuse >= 0) continue;
@@ -4240,6 +4444,7 @@ function fireRail(p, W, a, base) {
         const a2 = angTo(ex, ey, e.x, e.y);
         hitEnemy(e, dmg * 0.5, Math.cos(a2) * 160, Math.sin(a2) * 160, critRoll(), false);
         if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+        if (e.hp > 0) applyWeaponEnchants(e, p); // 元素附魔: SIEGE blast hits carry enchants too
       }
     }
     for (const bl of barrels) {
@@ -4289,6 +4494,8 @@ function bulletHitEnemy(b, e) {
   if (e.hp > 0 && b.ignite > 0) applyBurn(e, (3 + depth * 0.4) * b.ignite * dmgMul());
   // TRACER FIRE: (re)apply the damage-amp mark
   if (e.hp > 0 && b.tracer > 0) { e.markT = 3; e.markPow = b.tracer; }
+  // 元素附魔: elemental enchants now fire on gun hits too
+  if (e.hp > 0) applyWeaponEnchants(e, p);
 }
 
 /* pooled bullet update: motion, wall/pillar collision (with RICOCHET bounce), enemy hits with
@@ -4544,8 +4751,9 @@ function arrowHitEnemy(a, e) {
   if (a.shock > 0) applyShock(e, (4 + depth * 0.4) * a.shock * dmgMul(), 1);
   // HUNTER'S MARK: (re)apply the damage-amp mark (reuses the TRACER FIRE mark fields)
   if (a.mark > 0) { e.markT = 3; e.markPow = a.mark; }
-  // shared on-hit element boons + melee/cold enchants do NOT apply to bows (ranged, see applyOnHitElements)
-  if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE is universal (slashes); allow on arrows for parity with guns
+  if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE (universal)
+  // 元素附魔: elemental enchants now fire on bow hits too (fire/ice/electric/poison/lifesteal/execute)
+  if (e.hp > 0) applyWeaponEnchants(e, p);
 }
 
 /* arrow update: motion, wall/pillar collision, enemy hits (pierce + split + ricochet), barrels,
@@ -8600,7 +8808,7 @@ function drawPlayerBars(p, u, by, side) {
     if (right) { ctx.textAlign = "right"; ctx.fillText(W.glyph + " " + W.name, bx - 12, by + bh / 2 + 1); }
     else { ctx.textAlign = "left"; ctx.fillText(W.glyph + " " + W.name, bx + bw + 12, by + bh / 2 + 1); }
     noglow();
-    // 元素附魔: active melee enchant icons (with stack counts) just under the weapon readout
+    // 元素附魔: active weapon enchant icons (any class) with stack counts, under the weapon readout
     if (p.enchants) {
       const active = ENCHANTS.filter((x) => (p.enchants[x.id] || 0) > 0);
       if (active.length) {
@@ -8865,7 +9073,7 @@ function drawTitle() {
     "持法杖施法·持枪械开火·持弓射箭(长弓蓄力) — STAFF casts · GUN fires · BOW looses arrows (hold to draw the LONGBOW)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
-    "冷兵器可叠加元素附魔：火/冰/电/毒/吸血 — melee weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
+    "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -8878,7 +9086,7 @@ function drawTitle() {
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
-    "冷兵器可叠加元素附魔：火/冰/电/毒/吸血 — melee weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
+    "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -8985,8 +9193,8 @@ function drawBoonScreen() {
   ctx.fillText((numPlayers > 1 && who ? who.tag + " — " : "") + "SELECT PROTOCOL UPGRADE", cw / 2, ch * 0.16);
   noglow();
   const n = boonChoices.length;
-  const cwid = Math.min(230 * u, (cw - 60) / n - 14);
-  const chei = 200 * u;
+  const cwid = Math.min(238 * u, (cw - 60) / n - 14);
+  const chei = 224 * u;
   const total = n * cwid + (n - 1) * 18;
   let x = (cw - total) / 2;
   const y = ch * 0.5 - chei / 2;
@@ -9014,32 +9222,57 @@ function drawBoonScreen() {
     // rarity tag
     ctx.fillStyle = R.col;
     ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
-    ctx.fillText(R.name + " · " + R.zh + (R.mul > 1 ? "  x" + R.mul : ""), x + cwid / 2, y + 14 * u);
+    ctx.fillText(R.name + " · " + R.zh + (R.mul > 1 ? "  x" + R.mul : ""), x + cwid / 2, y + 13 * u);
     ctx.fillStyle = b.col;
-    ctx.font = "bold " + 34 * u + "px 'Courier New', monospace";
-    ctx.fillText(b.glyph, x + cwid / 2, y + 48 * u);
-    ctx.font = "bold " + 14 * u + "px 'Courier New', monospace";
+    ctx.font = "bold " + 30 * u + "px 'Courier New', monospace";
+    ctx.fillText(b.glyph, x + cwid / 2, y + 42 * u);
+    // bilingual name: Chinese prominent on top, English under it (中文 — English house style)
+    ctx.fillStyle = b.col;
+    ctx.font = "bold " + 15 * u + "px 'Courier New', monospace";
+    ctx.fillText(b.nameCN || b.name, x + cwid / 2, y + 70 * u);
+    ctx.fillStyle = "rgba(220,230,255,0.78)";
+    ctx.font = "bold " + 10.5 * u + "px 'Courier New', monospace";
     ctx.fillText(b.name, x + cwid / 2, y + 86 * u);
+    let ly = y + 104 * u;
     if (lv > 0) {
-      ctx.fillStyle = "rgba(255,255,255,0.65)";
-      ctx.font = 11 * u + "px 'Courier New', monospace";
-      ctx.fillText("(rank " + (lv + 1) + ")", x + cwid / 2, y + 102 * u);
+      ctx.fillStyle = "rgba(255,255,255,0.6)";
+      ctx.font = 10 * u + "px 'Courier New', monospace";
+      ctx.fillText("rank " + (lv + 1) + " 级", x + cwid / 2, ly); ly += 14 * u;
     }
-    // wrap desc
-    ctx.fillStyle = "rgba(190,210,255,0.85)";
-    ctx.font = 12 * u + "px 'Courier New', monospace";
-    const words = b.desc.split(" ");
-    let line = "", ly = y + 126 * u;
-    for (const w of words) {
-      const test = line ? line + " " + w : w;
-      if (ctx.measureText(test).width > cwid - 24 && line) {
-        ctx.fillText(line, x + cwid / 2, ly); ly += 16 * u; line = w;
-      } else line = test;
-    }
-    if (line) ctx.fillText(line, x + cwid / 2, ly);
+    // bilingual description: Chinese line(s) then English line(s), each word-wrapped to the card.
+    // CJK has no spaces, so the Chinese wrap is char-based; English wraps on spaces.
+    const wrapText = (str, font, col, maxW, charWrap) => {
+      ctx.fillStyle = col; ctx.font = font;
+      const lineH = 14 * u;
+      if (charWrap) {
+        let line = "";
+        for (const ch2 of str) {
+          const test = line + ch2;
+          if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x + cwid / 2, ly); ly += lineH; line = ch2; }
+          else line = test;
+        }
+        if (line) { ctx.fillText(line, x + cwid / 2, ly); ly += lineH; }
+      } else {
+        const words = str.split(" ");
+        let line = "";
+        for (const w of words) {
+          const test = line ? line + " " + w : w;
+          if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x + cwid / 2, ly); ly += lineH; line = w; }
+          else line = test;
+        }
+        if (line) { ctx.fillText(line, x + cwid / 2, ly); ly += lineH; }
+      }
+    };
+    // the CN desc may already embed an English half ("中文 — English"); show only the Chinese part here
+    let cnDesc = b.descCN || b.desc;
+    const dashIdx = cnDesc.indexOf(" — ");
+    if (dashIdx >= 0) cnDesc = cnDesc.slice(0, dashIdx);
+    wrapText(cnDesc, 11.5 * u + "px 'Courier New', monospace", "rgba(190,225,255,0.92)", cwid - 22, true);
+    ly += 2 * u;
+    wrapText(b.desc, 10.5 * u + "px 'Courier New', monospace", "rgba(180,200,240,0.72)", cwid - 22, false);
     ctx.fillStyle = "rgba(255,255,255,0.45)";
     ctx.font = 11 * u + "px 'Courier New', monospace";
-    ctx.fillText(touchUI ? "tap" : "[" + (i + 1) + "]", x + cwid / 2, y + chei - 18 * u);
+    ctx.fillText(touchUI ? "tap" : "[" + (i + 1) + "]", x + cwid / 2, y + chei - 14 * u);
     ctx.restore();
     uiRects.push({ x, y, w: cwid, h: chei, act: "boon", i });
     x += cwid + 18;
