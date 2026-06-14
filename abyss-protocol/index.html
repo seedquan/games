@@ -68,17 +68,27 @@
              progress; each player has own HP/energy/dash/weapon and picks
              their own boon.  HP=0 = DOWNED; a partner revives by standing
              close ~3s; both down = game over.  Style meter shared.
-   Hub ARMORY rack: 15 weapon forms (BLADE / LANCE / MAUL /
+   Hub ARMORY rack: 18 weapon forms (BLADE / LANCE / MAUL /
              TWIN FANG / ARC CASTER / GRAVITON MACE /
              GLAIVE / CHAIN WHIP / PRISM SABER /
              EMBER STAFF / FROST WAND / STORM STAFF /
-             AUTO-RIFLE / SCATTERGUN / RAILGUN).
+             AUTO-RIFLE / SCATTERGUN / RAILGUN /
+             QUICK BOW / LONGBOW / STORMBOW).
              EMBER/FROST/STORM are MAGIC WAND/STAFF casters: the slash
              key/button CASTS a ranged/area spell (own cast cadence)
              instead of a melee swing. AUTO-RIFLE/SCATTERGUN/RAILGUN are
              BALLISTIC FIREARMS: the slash key/button FIRES the gun in the
-             aim direction (own fire cadence, pooled bullets) — distinct
-             from the magic casters and the shared plasma BOLT ability.
+             aim direction (own fire cadence, pooled bullets). QUICK BOW/
+             LONGBOW/STORMBOW are ARCHERY bows: the slash key/button NOCKS &
+             LOOSES pooled physical ARROWS (the LONGBOW is chargeable — hold
+             to draw, release to loose a piercing line shot) — all distinct
+             from the casters, guns and the shared plasma BOLT ability.
+   元素附魔 / ENCHANTS: melee ("冷兵器") forms can carry MULTIPLE stacking
+             elemental enchants at once (fire/ice/electric/poison/lifesteal/
+             execute), each firing on hit. Gathered via the universal
+             ELEMENTAL ENCHANT boon line (stacks, rarity raises potency) or
+             the shop RUNE FORGE. Per-player in co-op. Stacked elements feed
+             the SHATTER / THERMAL combos plus a POISON COMBUST combo.
    Pause menu: EFFECTS toggle (F while paused) cycles bloom/scanlines/shake
              intensity (full / reduced / off), persisted; plus FULLSCREEN and
              AUTO-FULLSCREEN items (gamepad d-pad navigates, × confirms).
@@ -119,6 +129,8 @@ const CONFIG = Object.freeze({
   challengeTime: 45,            // challenge room gauntlet timer (s)
   burnDur: 4,                   // burn DoT duration (s), halved on bosses
   shockStun: 0.7,               // shock stun (s), reduced on bosses
+  poisonDur: 6,                 // poison DoT duration (s) — lingers longer than burn; reduced on bosses
+  poisonMaxStacks: 6,           // poison stack cap (ramps with stacks, then clamps)
 });
 
 /* ---------------- §C UTIL ---------------- */
@@ -505,6 +517,35 @@ class AudioEngine {
     this.noise(t, 0.14, 0.12, "highpass", 3200, 7000);
     this.tone("square", 700, 1900, t + 0.01, 0.07, 0.05, false);
   }
+  /* ----- BOW / archery SFX: a bowstring nock/draw, a sharp twang release, an arrow impact thunk ----- */
+  bowDraw(charge) { // nocking + drawing the string — a rising airy creak (LONGBOW charge tell)
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.1, 0.05, "bandpass", 500 + (charge || 0) * 900, 1400);
+    this.tone("triangle", 220 + (charge || 0) * 240, 320 + (charge || 0) * 300, t, 0.1, 0.03, false);
+  }
+  bowShot(kind) { // releasing the string — a taut twang then a fletching whoosh
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    if (kind === "long") { // LONGBOW: deeper, heavier release
+      this.tone("triangle", 520, 150, t, 0.14, 0.09, true);
+      this.noise(t, 0.16, 0.1, "bandpass", 2200, 700);
+      this.tone("sine", 180, 70, t, 0.12, 0.05, false);
+    } else if (kind === "storm") { // STORMBOW: a fan of strings — layered twangs + airy hiss
+      for (let i = 0; i < 3; i++) this.tone("triangle", 640 - i * 80, 220, t + i * 0.012, 0.08, 0.045, false);
+      this.noise(t, 0.14, 0.1, "highpass", 2600, 6000);
+    } else { // QUICK BOW: light, snappy twang
+      this.tone("triangle", 760, 280, t, 0.07, 0.06, true);
+      this.noise(t, 0.08, 0.07, "bandpass", 3000, 900);
+    }
+  }
+  arrowHit(crit) { // arrow strikes flesh — a dull thunk with a bright tip ping
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("triangle", crit ? 360 : 240, 70, t, 0.07, 0.1, false);
+    this.noise(t, 0.06, 0.09, "lowpass", 2400, 400);
+    if (crit) this.tone("sine", 1400, 700, t, 0.06, 0.04, true);
+  }
   styleUp(rank) {
     if (!this.ok()) return;
     const t = this.ctx.currentTime;
@@ -875,6 +916,16 @@ const WEAPONS = [
   { id: "scatter", name: "SCATTERGUN", zh: "霰弹枪", col: "#ffb86b", glyph: "⋔", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isGun: true, fireCD: 0.6 },
   // RAILGUN: chargeable single high-damage piercing shot that hits everything in a line; slow cadence, great vs lines/bosses.
   { id: "rail",   name: "RAILGUN", zh: "轨道炮", col: "#7fd0ff", glyph: "‡", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.06, isGun: true, fireCD: 0.95 },
+  /* ---- ARCHERY / BOW class: the slash button NOCKS & LOOSES an ARROW in the aim direction.
+     Arrows are pooled PHYSICAL projectiles (distinct from magic `spells`, ballistic `bullets`,
+     and plasma `pbolts`): a draw-and-release feel, precision/headshot flavor (high crit base),
+     and a per-bow fire cadence. They sit inside the existing per-weapon DPS band. ---- */
+  // QUICK BOW: fast, light, low per-hit arrows — sustained pressure that rewards rapid fire.
+  { id: "qbow",  name: "QUICK BOW", zh: "速射弓", col: "#bfe89a", glyph: "➴", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.08, isBow: true, fireCD: 0.18 },
+  // LONGBOW: hold to draw a single heavy arrow; a full draw PIERCES a line and hits hard. Slow.
+  { id: "lbow",  name: "LONGBOW", zh: "长弓", col: "#d8c27a", glyph: "➶", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.12, isBow: true, fireCD: 0.62 },
+  // STORMBOW: looses a spread of arrows at once for area coverage; falls off at range. Multishot.
+  { id: "sbow",  name: "STORMBOW", zh: "风暴弓", col: "#8fd2ff", glyph: "➵", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.06, isBow: true, fireCD: 0.5 },
 ];
 let curWeapon = store.get("weapon") || "blade";
 if (!WEAPONS.some((w) => w.id === curWeapon)) curWeapon = "blade";
@@ -945,6 +996,14 @@ const BOONS = [
   { id: "ignite",name: "IGNITION EDGE", desc: "Slashes set foes burning (stacks x3)",col: "#ff8844", glyph: "❋", max: 2 },
   { id: "volt",  name: "VOLT ROUNDS",   desc: "Bolt crits shock and chain to 2 foes",col: "#ffee55", glyph: "↯", max: 2 },
   { id: "sdash", name: "STATIC DASH",   desc: "Dash trail shocks nearby enemies",    col: "#99eeff", glyph: "⌁", max: 2 },
+  /* ---- 元素附魔 ELEMENTAL ENCHANT line (universal, STACKABLE) — imbue your MELEE weapon with an
+     on-hit element. Pickable many times; each stacks & rarity raises potency. Melee-only (冷兵器). ---- */
+  { id: "en_fire",   name: "ENCHANT: FIRE",      desc: "冷兵器附魔·火 — melee hits set foes burning (stacks)",         col: "#ff8844", glyph: "❋", max: 6, enchant: "fire" },
+  { id: "en_ice",    name: "ENCHANT: ICE",       desc: "冷兵器附魔·冰 — melee hits chill & build freeze (stacks)",     col: "#aaeeff", glyph: "❄", max: 6, enchant: "ice" },
+  { id: "en_shock",  name: "ENCHANT: ELECTRIC",  desc: "冷兵器附魔·电 — melee hits shock & chain (stacks)",            col: "#ffee55", glyph: "↯", max: 6, enchant: "shock" },
+  { id: "en_poison", name: "ENCHANT: POISON",    desc: "冷兵器附魔·毒 — melee hits poison; ramps & lingers (stacks)",  col: "#7fff5a", glyph: "☣", max: 6, enchant: "poison" },
+  { id: "en_steal",  name: "ENCHANT: LIFESTEAL", desc: "冷兵器附魔·吸血 — melee hits heal you (capped, stacks)",       col: "#ff6688", glyph: "♥", max: 6, enchant: "steal" },
+  { id: "en_exec",   name: "ENCHANT: EXECUTE",   desc: "冷兵器附魔·处决 — melee finishes badly-wounded foes (stacks)", col: "#cffaff", glyph: "†", max: 6, enchant: "exec" },
   /* weapon-exclusive boons: only enter the pool while that weapon is wielded */
   { id: "skewer", name: "SKEWER",     desc: "Lance lunge pierces and drags foes with you", col: "#ffd27a", glyph: "➹", max: 2, weapon: "lance" },
   { id: "phalanx",name: "PHALANX",    desc: "Lance: +crit chance at max thrust range",     col: "#ffe6aa", glyph: "⌖", max: 2, weapon: "lance" },
@@ -1027,6 +1086,22 @@ const BOONS = [
   /* ---- RAILGUN ---- */
   { id: "siege",    name: "SIEGE MODE",   desc: "Railgun shots detonate a blast at the impact point",             col: "#7fd0ff", glyph: "✸", max: 2, weapon: "rail" },
   { id: "chargeshot",name:"CAPACITOR",    desc: "Holding fire charges the rail for big bonus damage",             col: "#bfeaff", glyph: "⊞", max: 2, weapon: "rail" },
+  /* ---- BOW class exclusives (4 per bow; only offered while that bow is wielded) ---- */
+  /* QUICK BOW */
+  { id: "rapidnock",name: "RAPID NOCK",   desc: "Quick Bow: sustained fire ramps fire rate & arrow damage",       col: "#bfe89a", glyph: "⇶", max: 2, weapon: "qbow" },
+  { id: "splitarrow",name:"SPLIT ARROW",  desc: "Quick Bow arrows split into 2 shards on hit",                    col: "#d6f2b0", glyph: "≺", max: 2, weapon: "qbow" },
+  { id: "heartseek",name: "HEARTSEEKER",  desc: "Consecutive hits on the same foe ramp crit chance",              col: "#aee08a", glyph: "◎", max: 2, weapon: "qbow" },
+  { id: "barrage",  name: "BARRAGE",      desc: "Quick Bow: every 4th shot looses a 3-arrow fan",                 col: "#caf0a0", glyph: "Ψ", max: 2, weapon: "qbow" },
+  /* LONGBOW */
+  { id: "penetrator",name:"PENETRATOR",   desc: "Longbow full-draw arrows pierce ALL foes and crit",              col: "#d8c27a", glyph: "➳", max: 2, weapon: "lbow" },
+  { id: "galeforce",name: "GALEFORCE",    desc: "Charged arrows knock back + release a wind shockwave",           col: "#e8d89a", glyph: "✺", max: 2, weapon: "lbow" },
+  { id: "huntmark", name: "HUNTER'S MARK",desc: "Longbow hits MARK foes; marked foes take bonus damage",          col: "#f0e0a0", glyph: "⌖", max: 2, weapon: "lbow" },
+  { id: "quickdraw",name: "QUICKDRAW",    desc: "Releasing at full draw refunds the shot & buffs the next",       col: "#fff0c0", glyph: "⇧", max: 2, weapon: "lbow" },
+  /* STORMBOW */
+  { id: "arrowrain",name: "ARROW RAIN",   desc: "Stormbow shots also rain a volley onto the target zone",         col: "#8fd2ff", glyph: "☂", max: 2, weapon: "sbow" },
+  { id: "staticarr",name: "STATIC ARROWS",desc: "Stormbow arrows apply SHOCK (chains & shatters frozen foes)",    col: "#bfeaff", glyph: "↯", max: 2, weapon: "sbow" },
+  { id: "thicket",  name: "THICKET",      desc: "Stormbow spread width & arrow count up",                         col: "#aee0ff", glyph: "⋔", max: 2, weapon: "sbow" },
+  { id: "ricoarr",  name: "RICOCHET",     desc: "Stormbow arrows ricochet to a nearby foe once",                  col: "#d0ecff", glyph: "⤡", max: 2, weapon: "sbow" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -1090,6 +1165,8 @@ let singularities = [];                // graviton mace mini black holes
 let glaives = [], glaivePool = [];     // GLAIVE thrown blades (live) + free-list pool
 let spells = [], spellPool = [];       // STAFF/WAND spell projectiles (live) + free-list pool
 let bullets = [], bulletPool = [];     // GUN ballistic projectiles (live) + free-list pool
+let arrows = [], arrowPool = [];       // BOW physical arrows (live) + free-list pool
+let arrowRains = [];                    // STORMBOW ARROW RAIN telegraphed volleys
 let lights = [];                       // dynamic point lights (rebuilt each frame)
 let motes = [];                        // drifting ambient dust/ember particles
 let slowmoT = 0;                       // execution slow-mo pulse (decays in REAL time)
@@ -1118,6 +1195,7 @@ const joy = { id: -1, bx: 0, by: 0, dx: 0, dy: 0 };
 let lastDir = { x: 1, y: 0 };
 let slashBuf = 0;     // buffered slash request (s)
 let boltHeld = false; // touch bolt button
+let touchFireHeld = false; // a "tap" touch (right half) is held — drives BOW draw on touch
 let dashBuf = 0;
 let freezeBuf = 0;    // buffered freeze nova request (s)
 const nowMs = () => performance.now();
@@ -1313,6 +1391,7 @@ canvas.addEventListener("touchstart", (e) => {
     }
     // tap to slash, auto-aim
     touches[t.identifier] = { role: "tap" };
+    touchFireHeld = true; // held while the tap touch persists (BOW draw on touch)
     if (state === "hub" && player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) {
       openShop(); continue;
     }
@@ -1354,6 +1433,12 @@ function touchEnd(e) {
     if (info) {
       if (info.role === "joy") { joy.id = -1; joy.dx = 0; joy.dy = 0; }
       if (info.role === "bolt") boltHeld = false;
+      if (info.role === "tap") {
+        // any remaining "tap" touch keeps the bow draw held
+        let stillTap = false;
+        for (const id in touches) { if (id !== String(t.identifier) && touches[id].role === "tap") stillTap = true; }
+        touchFireHeld = stillTap;
+      }
       delete touches[t.identifier];
     }
   }
@@ -1580,6 +1665,12 @@ function newPlayer(idx) {
     castCD: 0, castN: 0,               // STAFF/WAND cast cadence + cast counter (METEOR cadence)
     gunCD: 0, gunN: 0,                  // GUN fire cadence + shots-fired counter
     heatN: 0, heatT: 0,                 // AUTO-RIFLE OVERHEAT sustained-fire ramp
+    bowCD: 0, bowN: 0,                  // BOW nock cadence + arrows-loosed counter
+    drawT: 0, drawing: false,           // LONGBOW draw-charge accumulator + held-draw flag
+    rapidN: 0, rapidT: 0,               // QUICK BOW RAPID NOCK sustained-fire ramp
+    seekTgt: null, seekN: 0,            // QUICK BOW HEARTSEEKER consecutive-same-foe crit ramp
+    qdrawBuff: 0,                       // LONGBOW QUICKDRAW next-shot damage buff
+    enchants: {},                       // 冷兵器附魔: per-player melee elemental enchant stacks {fire,ice,shock,poison,steal,exec}
     boltCD: 0,
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
@@ -1598,6 +1689,84 @@ function weaponDefP(p) { p = p || ctxP || player; const id = (p && p.weapon) || 
 function boonLv(id) { const p = ctxP || player; return (p && p.boons[id]) || 0; }
 /* rarity-scaled boon power: sum of rarity multipliers across picks of this boon */
 function boonPow(id) { const p = ctxP || player; return (p && p.boonPow && p.boonPow[id]) || 0; }
+
+/* ---------------- §F2 元素附魔 — STACKABLE MELEE ELEMENTAL ENCHANTS ----------------
+   A melee ("冷兵器") weapon can carry MULTIPLE elemental enchants at once; every one fires on a
+   melee hit so a build can stack fire + ice + electric + poison + lifesteal (+ execute). Each
+   element's potency is the summed rarity power of its ELEMENTAL ENCHANT boon picks (so it flows
+   through the existing boon UI + rarity system, and stacks). Enchants are per-player (co-op safe),
+   reset each run with the player's boons, and only apply on melee-form hits. Bounded by the
+   existing status duration/stack clamps, the per-second lifesteal cap, and boss resistances. */
+const ENCHANTS = [
+  { id: "fire",   glyph: "❋", col: "#ff8844", name: "FIRE",      zh: "火" },
+  { id: "ice",    glyph: "❄", col: "#aaeeff", name: "ICE",       zh: "冰" },
+  { id: "shock",  glyph: "↯", col: "#ffee55", name: "ELECTRIC",  zh: "电" },
+  { id: "poison", glyph: "☣", col: "#7fff5a", name: "POISON",    zh: "毒" },
+  { id: "steal",  glyph: "♥", col: "#ff6688", name: "LIFESTEAL", zh: "吸血" },
+  { id: "exec",   glyph: "†", col: "#cffaff", name: "EXECUTE",   zh: "处决" },
+];
+const enchantById = (id) => ENCHANTS.find((x) => x.id === id);
+/* a weapon form is "melee" (冷兵器) if it isn't a caster/gun/bow */
+function isMeleeForm(W) { return W && !W.isCaster && !W.isGun && !W.isBow; }
+/* enchant potency for the acting player (summed rarity power across that enchant's picks) */
+function enchantPow(p, id) { return (p && p.enchants && p.enchants[id]) || 0; }
+
+/* apply all of the acting player's elemental enchants on a melee hit against `e`.
+   Called from the shared melee-hit path; respects status clamps, lifesteal cap & boss resistances.
+   The freeze/shock/burn from enchants flow into the existing SHATTER / THERMAL / COMBUST combos. */
+function applyMeleeEnchants(e, p) {
+  p = p || ctxP || player;
+  if (!p || !p.enchants || e.hp <= 0) return;
+  if (!isMeleeForm(weaponDefP(p))) return; // 冷兵器 only
+  const en = p.enchants;
+  // FIRE: ignite (burn DoT) — scales with potency
+  const fire = en.fire || 0;
+  if (fire > 0) applyBurn(e, (3.5 + depth * 0.4) * fire * dmgMul());
+  // ICE: build freeze stacks + chill slow (multiple stacks build faster)
+  const ice = en.ice || 0;
+  if (ice > 0 && e.hp > 0) {
+    e.iceSlow = Math.max(e.iceSlow || 0, 0.4);
+    e.iceSlowT = Math.max(e.iceSlowT || 0, 1.0);
+    e.freezeBuild = (e.freezeBuild || 0) + Math.min(0.9, 0.22 + 0.12 * ice);
+    if (e.frozenT <= 0 && e.freezeBuild >= 1 && canFreeze(e)) {
+      e.freezeBuild = 0;
+      if ((e.shockT || 0) > 0) { shatterCombo(e); }       // FREEZE + SHOCK = SHATTER
+      else if ((e.burnT || 0) > 0) { thermalSnap(e); }    // BURN + FREEZE = THERMAL SNAP
+      else {
+        e.frozenT = e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur;
+        e.vx = 0; e.vy = 0;
+        burst(e.x, e.y, "#bfe8ff", 6, 120, 0.35, 2.2);
+      }
+    }
+  }
+  // ELECTRIC: shock + a small chain (auto-triggers FREEZE->SHATTER on frozen foes via applyShock)
+  const shock = en.shock || 0;
+  if (shock > 0 && e.hp > 0) applyShock(e, (3 + depth * 0.35) * shock * dmgMul(), shock >= 2 ? 1 : 0);
+  // POISON: stacking DoT that ramps & lingers (more potency = more stacks per hit)
+  const poison = en.poison || 0;
+  if (poison > 0 && e.hp > 0) applyPoison(e, (3 + depth * 0.35) * poison * dmgMul(), 1 + Math.floor(poison * 0.5));
+  // LIFESTEAL: heal on hit, respecting the SHARED per-second lifesteal throughput cap
+  const steal = en.steal || 0;
+  if (steal > 0) {
+    const heal = Math.max(1, Math.round(steal));
+    const capPerSec = 8 + 6 * (steal + (p.boonPow && p.boonPow.steal ? p.boonPow.steal : 0)); // shared cap with SIPHON EDGE
+    if ((p.stealBudget || 0) < capPerSec) {
+      const give = Math.min(heal, capPerSec - (p.stealBudget || 0));
+      p.hp = Math.min(p.maxHp, p.hp + give);
+      p.stealBudget = (p.stealBudget || 0) + give;
+    }
+  }
+  // EXECUTE: finish badly-wounded non-bosses below a (potency-scaled, clamped) HP threshold
+  const exec = en.exec || 0;
+  if (exec > 0 && e.hp > 0 && e.type !== "boss") {
+    const thr = Math.min(0.22, 0.06 + 0.04 * exec); // clamped so it can't execute healthy foes
+    if (e.hp <= e.maxHp * thr) {
+      dnum(e.x, e.y - e.r - 14, "EXECUTE", "#cffaff", true);
+      burst(e.x, e.y, "#cffaff", 14, 240, 0.45, 3);
+      statusDamage(e, e.hp + 999, "#cffaff");
+    }
+  }
+}
 /* META EFFECT SOFT-CAPS: levels stay purchasable forever (geometric cost), but the *effect*
    has diminishing returns past a knee so stacking can't break the game (no hard "MAX" on the
    purchase — only the benefit tapers). Damage past +150% and dash recharge past +100% each
@@ -1640,7 +1809,14 @@ function applyBoon(id, rar, who) {
   p.boonPow[id] = (p.boonPow[id] || 0) + R.mul;
   p.boonBest[id] = Math.max(p.boonBest[id] || 0, rar);
   const b = boonById(id);
-  toast((numPlayers > 1 ? p.tag + " " : "") + (rar > 0 ? R.name + " " : "") + b.name + (p.boons[id] > 1 ? " " + "II III".split(" ")[p.boons[id] - 2] : ""), rar > 0 ? R.col : b.col);
+  // 元素附魔: an ELEMENTAL ENCHANT boon imbues this player's melee weapon — stack its potency by rarity.
+  if (b && b.enchant) {
+    p.enchants = p.enchants || {};
+    p.enchants[b.enchant] = (p.enchants[b.enchant] || 0) + R.mul;
+  }
+  const roman = ["II", "III", "IV", "V", "VI", "VII", "VIII"];
+  const tier = p.boons[id] > 1 ? " " + (roman[p.boons[id] - 2] || ("x" + p.boons[id])) : "";
+  toast((numPlayers > 1 ? p.tag + " " : "") + (rar > 0 ? R.name + " " : "") + b.name + tier, rar > 0 ? R.col : b.col);
   if (id === "wind") { /* passive */ }
   audio.boon();
   burst(p.x, p.y, R.col, 26, 220, 0.7, 3);
@@ -1741,6 +1917,7 @@ function spawnEnemy(type, x, y) {
     dirX: 0, dirY: 0, phase: rand(0, TAU), strafe: Math.random() < 0.5 ? 1 : -1,
     contactCD: 0, spawnT: 0.25, frozenT: 0,
     burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0,
+    poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
     shieldA: 0, exposeT: 0, healTgt: null, beeped: false, elite: false,
   };
   if (type === "shield") e.shieldA = player ? angTo(x, y, player.x, player.y) : -Math.PI / 2;
@@ -1789,6 +1966,7 @@ function spawnBoss(forceKind) {
     dirX: 0, dirY: 0, phase: 0, sub: 0, rot: 0,
     contactCD: 0, spawnT: 0.4, tier, hard, gen: 0, frozenT: 0,
     burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
+    poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
     strafe: Math.random() < 0.5 ? 1 : -1, tx: 0, ty: 0,
     plates: 0, sweepA: 0,
   };
@@ -1820,6 +1998,7 @@ function splitBoss(e) {
       contactCD: 0, spawnT: 0.2, tier: e.tier, hard: e.hard,
       gen: e.gen + 1, frozenT: 0, strafe: 1, tx: 0, ty: 0,
       burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
+      poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
     });
   }
   burst(e.x, e.y, e.col, 36, 320, 0.8, 4);
@@ -1878,6 +2057,9 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
         sp.stealBudget = (sp.stealBudget || 0) + give;
       }
     }
+    // 冷兵器附魔: stacked elemental enchants all fire on the melee hit (survivors only; combos/poison
+    // self-resolve kills via the guarded killEnemy). Reads the acting player's per-player enchant set.
+    if (e.hp > 0) applyMeleeEnchants(e, ctxP || player);
   }
   if (e.hp <= 0) killEnemy(e);
 }
@@ -1918,12 +2100,48 @@ function applyShock(e, dmg, chains) {
       if (dd < 170) cands.push([dd, o]);
     }
     cands.sort((a, b) => a[0] - b[0]);
+    const srcPoison = (e.poisonStacks || 0) > 0 ? e.poisonDps : 0; // POISON + SHOCK conducts poison to chained foes
     for (let i = 0; i < Math.min(2, cands.length); i++) {
       const o = cands[i][1];
       beams.push({ x1: e.x, y1: e.y, x2: o.x, y2: o.y, t: 0.18, col: "#ffee55" });
+      if (srcPoison > 0) applyPoison(o, srcPoison, 1); // toxic conduction
       applyShock(o, dmg * 0.7, chains - 1);
     }
   }
+}
+
+/* POISON (毒) — a stacking damage-over-time that RAMPS with stacks and LINGERS longer than burn.
+   Combos: POISON + FIRE = COMBUST (consume poison stacks for a fire burst + ignite);
+            POISON + SHOCK spreads the poison to nearby foes (toxic conduction). */
+function applyPoison(e, dps, stacks) {
+  if (!e || e.hp <= 0) return;
+  stacks = stacks || 1;
+  // POISON + FIRE = COMBUST: an already-burning foe combusts its poison into a fire burst
+  if ((e.burnT || 0) > 0 && (e.poisonStacks || 0) > 0) { combustCombo(e); /* re-seed poison below */ }
+  e.poisonStacks = Math.min(CONFIG.poisonMaxStacks, (e.poisonStacks || 0) + stacks);
+  e.poisonDps = Math.max(e.poisonDps || 0, dps);
+  e.poisonT = e.type === "boss" ? CONFIG.poisonDur * 0.5 : CONFIG.poisonDur; // bosses: reduced duration like other statuses
+  if (!(e.poisonTick > 0)) e.poisonTick = 0.6;
+  if (Math.random() < 0.4) {
+    addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: rand(-12, 12), vy: -rand(20, 50), t: 0.5, tm: 0.5, col: Math.random() < 0.5 ? "#7fff5a" : "#3fce3a", r: rand(1.4, 2.8), drag: 1 });
+  }
+}
+
+/* POISON + FIRE = COMBUST: consume the foe's poison stacks for an immediate fire burst + ignite. */
+function combustCombo(e) {
+  const stacks = e.poisonStacks || 0;
+  if (stacks <= 0) return;
+  e.poisonStacks = 0; e.poisonT = 0; e.poisonDps = 0;
+  const dmg = (10 + depth * 1.6 + stacks * (6 + depth * 0.8)) * dmgMul();
+  burst(e.x, e.y, "#9fff5a", 14, 240, 0.45, 3);
+  burst(e.x, e.y, "#ffaa44", 12, 260, 0.5, 3);
+  dnum(e.x, e.y - e.r - 14, "COMBUST", "#bfff66", true);
+  audio.comboSnap();
+  shake(3, 0.12);
+  ffx.ring(e.x, e.y, 60, "#bfff66", 0.35, 4);
+  ffx.spawnLight(e.x, e.y, 80, "#bfff66", 0.6);
+  statusDamage(e, dmg, "#bfff66");
+  if (e.hp > 0) applyBurn(e, (5 + depth * 0.5) * dmgMul());
 }
 
 /* freeze gate: bosses can't be re-frozen during their thaw-resistance window, so even
@@ -2009,6 +2227,8 @@ function styleKill() {
 }
 
 function killEnemy(e) {
+  if (e._dead) return;   // re-entry guard: a status/combo may have already finished this foe
+  e._dead = true;
   e.hp = -1;
   kills++;
   stats.kills++;
@@ -2619,6 +2839,8 @@ function genRoom() {
   clearGlaives();
   clearSpells();
   clearBullets();
+  clearArrows();
+  arrowRains.length = 0;
   hazards = []; barrels = []; quakes = []; slashGhosts = [];
   styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
@@ -2779,6 +3001,7 @@ const SHOP_ITEMS = [
   { id: "fdmg",  name: "SHATTER EDGE",   desc: "frozen foes take +40% dmg",  col: "#aaeeff", glyph: "✸", price: () => 24 + Math.floor(depth * 1.6) },
   { id: "bolt",  name: "BOLT AMP",       desc: "+25% bolt damage this run",  col: "#ff66ee", glyph: "⚡", price: () => 28 + Math.floor(depth * 1.8) },
   { id: "melee", name: "EDGE AMP",       desc: "+25% melee damage this run", col: "#66ffff", glyph: "▲", price: () => 28 + Math.floor(depth * 1.8) },
+  { id: "enchant", name: "RUNE FORGE",   desc: "add a random melee enchant", col: "#7fff5a", glyph: "✦", price: () => 30 + Math.floor(depth * 2) },
 ];
 
 function makeShopStock() {
@@ -2854,6 +3077,13 @@ function applyShopItem(it, who) {
   else if (it.id === "fdmg") p.frozenBonus += 0.4;
   else if (it.id === "bolt") p.boltMul += 0.25;
   else if (it.id === "melee") p.meleeMul += 0.25;
+  else if (it.id === "enchant") { // RUNE FORGE: imbue a random elemental enchant on the buyer's melee weapon
+    p.enchants = p.enchants || {};
+    const el = pick(ENCHANTS);
+    p.enchants[el.id] = (p.enchants[el.id] || 0) + 1.5; // a solid (rare-tier) chunk of potency
+    toast((numPlayers > 1 ? p.tag + " " : "") + "ENCHANT " + el.name + " " + el.zh, el.col);
+    burst(p.x, p.y, el.col, 18, 200, 0.5, 3);
+  }
   else if (it.id === "tcores") { const g = coreGain(20 + depth * 4); saveMeta(); toast("+" + g + " CORES", "#ffcc44"); }
   else if (it.id === "theal") p.hp = Math.min(p.maxHp, p.hp + Math.round(p.maxHp * 0.4));
 }
@@ -2917,6 +3147,8 @@ function enterHub() {
   clearGlaives();
   clearSpells();
   clearBullets();
+  clearArrows();
+  arrowRains.length = 0;
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
@@ -3067,6 +3299,15 @@ function trySlash(p) {
     if (p.gunCD > 0) return;
     if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
     fireGun(p, W);
+    return;
+  }
+  // BOWS: the slash button NOCKS & LOOSES an arrow (own nock cadence). The LONGBOW is chargeable
+  // and looses on RELEASE (handled in updatePlayer); the QUICK BOW & STORMBOW loose on each press.
+  if (W.isBow) {
+    if (p.bowCD > 0) return;
+    if (W.id === "lbow") return; // longbow draws while held, looses on release (see updatePlayer)
+    if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
+    fireBow(p, W, 0);
     return;
   }
   if (p.slashCD > 0) return;
@@ -4104,6 +4345,283 @@ function updateBullets(dt) {
   }
 }
 
+/* ---------------- §L4 ARCHERY / BOWS (pooled physical arrows) ---------------- */
+/* Arrows are pooled PHYSICAL projectiles, distinct from spells/bullets/pbolts: a draw-and-release
+   feel, precision/headshot flavor (high crit base), and per-bow cadence. They flow through the
+   shared hitEnemy / status / crit / lifesteal / style systems via the firing player's ctxP. */
+function getArrow() {
+  let a = arrowPool.pop();
+  if (!a) a = { kind: "", x: 0, y: 0, vx: 0, vy: 0, ang: 0, r: 0, t: 0, tm: 0,
+                dmg: 0, kb: 0, col: "#fff", owner: null, hitSet: [], pierce: 0,
+                crit: false, charge: 0, split: 0, shock: 0, mark: 0, rico: 0, gale: false, falloff: 0 };
+  a.hitSet.length = 0; a.pierce = 0; a.crit = false; a.charge = 0; a.split = 0;
+  a.shock = 0; a.mark = 0; a.rico = 0; a.gale = false; a.kb = 0; a.falloff = 0;
+  return a;
+}
+function freeArrow(a) {
+  const i = arrows.indexOf(a);
+  if (i >= 0) arrows.splice(i, 1);
+  a.hitSet.length = 0; a.owner = null;
+  if (arrowPool.length < 80) arrowPool.push(a);
+}
+/* recycle live arrows back to the pool (room / run reset) */
+function clearArrows() {
+  for (const a of arrows) { a.hitSet.length = 0; a.owner = null; if (arrowPool.length < 80) arrowPool.push(a); }
+  arrows.length = 0;
+  for (const p of players) if (p) { p.drawing = false; p.drawT = 0; }
+}
+function spawnArrow(p, kind, a, spd, dmg, col, r, opts) {
+  // hard cap on live arrows so a stormbow + barrage volley can't blow the pool/particle budget
+  if (arrows.length >= 72) { const old = arrows[0]; if (old) freeArrow(old); }
+  const o = getArrow();
+  o.kind = kind;
+  o.x = p.x + Math.cos(a) * (p.r + 6); o.y = p.y + Math.sin(a) * (p.r + 6);
+  o.vx = Math.cos(a) * spd; o.vy = Math.sin(a) * spd; o.ang = a;
+  o.r = r; o.dmg = dmg; o.col = col; o.owner = p;
+  o.t = (opts && opts.life) || 0.9; o.tm = o.t;
+  o.kb = (opts && opts.kb) || 0;
+  o.pierce = (opts && opts.pierce) || 0;
+  o.crit = !!(opts && opts.crit);
+  o.charge = (opts && opts.charge) || 0;
+  o.split = (opts && opts.split) || 0;     // SPLIT ARROW shards remaining
+  o.shock = (opts && opts.shock) || 0;     // STATIC ARROWS shock power
+  o.mark = (opts && opts.mark) || 0;       // HUNTER'S MARK power
+  o.rico = (opts && opts.rico) || 0;       // RICOCHET bounces remaining
+  o.gale = !!(opts && opts.gale);          // GALEFORCE knockback flag
+  o.falloff = (opts && opts.falloff) || 0; // STORMBOW range falloff
+  arrows.push(o);
+  return o;
+}
+
+/* base per-arrow damage for BOWS; shares the melee/HEAVY EDGE power budget (slash button drives
+   it) but tuned per-bow so archery sits inside the existing single-target DPS band. */
+function bowDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weaponDefP(p).dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * p.meleeMul; }
+
+/* loose an arrow / volley for the wielded bow. `charge` is the LONGBOW draw fraction (0..1). */
+function fireBow(p, W, charge) {
+  ctxP = p;
+  p.bowN = (p.bowN || 0) + 1;
+  p.slashAng = p.aim;
+  const a = p.slashAng;
+  const base = bowDamage();
+  if (W.id === "qbow") fireQuickBow(p, W, a, base);
+  else if (W.id === "lbow") fireLongBow(p, W, a, base, charge);
+  else fireStormBow(p, W, a, base);
+}
+
+/* QUICK BOW: a fast stream of light arrows. RAPID NOCK ramps fire rate + damage on sustained fire;
+   SPLIT ARROW shards arrows on hit; HEARTSEEKER ramps crit on the same foe; BARRAGE fans every 4th. */
+function fireQuickBow(p, W, a, base) {
+  if (boonLv("rapidnock")) { p.rapidN = Math.min(16, (p.rapidN || 0) + 1); p.rapidT = 0.8; }
+  const ramp = boonLv("rapidnock") ? Math.min(1, 0.06 * (p.rapidN || 0) * boonPow("rapidnock")) : 0;
+  p.bowCD = W.fireCD * (1 - ramp * 0.4);  // RAPID NOCK: up to 40% faster
+  p.recoilT = 0.12;
+  const dmg = base * 0.46 * (1 + ramp * 0.4); // light per-hit; RAPID NOCK up to +40%
+  // BARRAGE: every 4th shot looses a 3-arrow fan instead of a single arrow
+  const barrage = boonLv("barrage") && (p.bowN % 4 === 0);
+  const angs = barrage ? [0, -0.14, 0.14] : [0];
+  for (const off of angs) {
+    let crit = critRoll();
+    spawnArrow(p, "qarrow", a + off + rand(-0.015, 0.015), 880, dmg, W.col, 3, {
+      life: 0.8, kb: 70, crit,
+      pierce: boonLv("rapidnock") ? 0 : 0,
+      split: boonLv("splitarrow") ? 1 + Math.round(boonPow("splitarrow")) : 0,
+    });
+  }
+  audio.bowShot("quick");
+  if (Math.random() < 0.5) burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#eaffd0", 2, 110, 0.13, 1.6);
+}
+
+/* LONGBOW: a single heavy arrow scaled by draw `charge` (0..1). A full draw PIERCES a line.
+   PENETRATOR: full-draw pierces ALL & crits.  GALEFORCE: knockback + wind shockwave.
+   HUNTER'S MARK: marks foes for bonus damage.  QUICKDRAW: a perfect release refunds + buffs next. */
+function fireLongBow(p, W, a, base, charge) {
+  charge = clamp(charge || 0, 0, 1);
+  p.bowCD = W.fireCD;
+  p.recoilT = 0.22;
+  // damage scales steeply with draw: a tap is weak, a full draw hits hard (great single-target).
+  // Tuned so the measured DPS (draw time + cooldown included) sits inside the existing weapon band.
+  const dmgMulC = 0.9 + charge * 2.9;     // 0.9x .. 3.8x of base
+  let dmg = base * dmgMulC * (1 + (p.qdrawBuff || 0));
+  const full = charge >= 0.92;
+  const penetrator = boonLv("penetrator") && full;
+  let crit = critRoll() || penetrator;
+  // a full natural draw pierces a couple of foes; PENETRATOR pierces everything
+  const pierce = penetrator ? 99 : (full ? 2 : (charge > 0.5 ? 1 : 0));
+  spawnArrow(p, "larrow", a, 1000, dmg, W.col, full ? 4.4 : 3.4, {
+    life: 1.0, kb: 220 + charge * 220, crit, charge,
+    pierce, gale: boonLv("galeforce") && charge > 0.5,
+    mark: boonLv("huntmark") ? boonPow("huntmark") : 0,
+  });
+  // GALEFORCE: a charged release also cracks a forward wind shockwave (knockback + chip)
+  if (boonLv("galeforce") && charge > 0.5) {
+    const gx = p.x + Math.cos(a) * 90, gy = p.y + Math.sin(a) * 90;
+    const gr = 70 + 16 * boonPow("galeforce");
+    novas.push({ x: gx, y: gy, t: 0.3, tm: 0.3, maxR: gr, col: "#e8f0c0" });
+    ffx.ring(gx, gy, gr, "#e8f0c0", 0.32, 4);
+    for (const e of enemies) {
+      if (e.hp <= 0) continue;
+      if (dist(gx, gy, e.x, e.y) < gr + e.r) {
+        const ka = angTo(p.x, p.y, e.x, e.y);
+        e.kbx += Math.cos(ka) * 320; e.kby += Math.sin(ka) * 320;
+        statusDamage(e, base * 0.4 * boonPow("galeforce"), "#e8f0c0");
+      }
+    }
+  }
+  // QUICKDRAW: a perfect (near-full) release refunds the cooldown and buffs the next shot
+  if (boonLv("quickdraw") && charge >= 0.85) {
+    p.bowCD = 0;
+    p.qdrawBuff = Math.min(0.6, 0.2 * boonPow("quickdraw"));
+    burst(p.x, p.y, "#fff0c0", 8, 160, 0.3, 2.2);
+    dnum(p.x, p.y - 20, "QUICKDRAW", "#fff0c0", false);
+  } else {
+    p.qdrawBuff = 0;
+  }
+  ffx.spawnLight(p.x + Math.cos(a) * 20, p.y + Math.sin(a) * 20, 50, W.col, 0.5 + charge * 0.3);
+  shake(2 + charge * 3, 0.1 + charge * 0.08);
+  audio.bowShot("long");
+}
+
+/* STORMBOW: looses a spread of arrows at once for area coverage; arrows fall off at range.
+   ARROW RAIN: a volley also arcs down on the target zone.  STATIC ARROWS: arrows apply SHOCK.
+   THICKET: more arrows + wider spread.  RICOCHET: arrows bounce to a nearby foe once. */
+function fireStormBow(p, W, a, base) {
+  p.bowCD = W.fireCD;
+  p.recoilT = 0.2;
+  const extra = boonLv("thicket") ? 1 + Math.round(boonPow("thicket")) : 0;
+  const count = 5 + extra;                          // base 5 arrows
+  const spread = 0.62 * (boonLv("thicket") ? 1 + 0.18 * boonPow("thicket") : 1);
+  const dmg = base * 0.42;                          // per-arrow; many arrows, range falloff
+  for (let i = 0; i < count; i++) {
+    const off = (count === 1 ? 0 : (i / (count - 1) - 0.5) * spread) + rand(-0.03, 0.03);
+    spawnArrow(p, "sarrow", a + off, 820 + rand(-40, 50), dmg, W.col, 2.8, {
+      life: 0.6, kb: 90, crit: critRoll(), falloff: 0.0024,
+      shock: boonLv("staticarr") ? boonPow("staticarr") : 0,
+      rico: boonLv("ricoarr") ? 1 : 0,
+    });
+  }
+  // ARROW RAIN: a delayed volley arcs down onto the aimed target zone (mortar-style telegraph)
+  if (boonLv("arrowrain")) {
+    let tx = p.x + Math.cos(a) * 260, ty = p.y + Math.sin(a) * 260;
+    const near = nearestEnemy(p.x, p.y, 460);
+    if (near && Math.abs(angDiff(a, angTo(p.x, p.y, near.x, near.y))) < 0.6) { tx = near.x; ty = near.y; }
+    tx = clamp(tx, CONFIG.wall + 10, CONFIG.arenaW - CONFIG.wall - 10);
+    ty = clamp(ty, CONFIG.wall + 10, CONFIG.arenaH - CONFIG.wall - 10);
+    const rainR = 64 + 14 * boonPow("arrowrain");
+    arrowRains.push({ x: tx, y: ty, r: rainR, t: 0.55, dmg: base * (0.5 + 0.12 * boonPow("arrowrain")) * dmgMul(),
+                      col: W.col, owner: p, shock: boonLv("staticarr") ? boonPow("staticarr") : 0 });
+  }
+  p.vx -= Math.cos(a) * 70; p.vy -= Math.sin(a) * 70; // light recoil
+  burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#cfeaff", 5, 160, 0.18, 2);
+  shake(2.5, 0.09);
+  audio.bowShot("storm");
+}
+
+/* per-hit resolution for an arrow striking an enemy (crit / lifesteal / statuses / style / enchants
+   all flow through the shared hitEnemy path; the firing player is the ctxP boon context). */
+function arrowHitEnemy(a, e) {
+  const p = a.owner || player;
+  ctxP = p;
+  let dmg = a.dmg;
+  // STORMBOW arrows fall off with travelled distance (area weapon, weak at range)
+  if (a.falloff > 0) {
+    const travelled = (a.tm - a.t) * Math.hypot(a.vx, a.vy);
+    dmg *= Math.max(0.4, 1 - a.falloff * travelled);
+  }
+  // HUNTER'S MARK: marked foes take bonus damage; QUICK BOW HEARTSEEKER ramps crit on the same foe
+  if ((e.markT || 0) > 0) dmg *= 1 + 0.14 * (e.markPow || 0);
+  let crit = a.crit;
+  if (a.kind === "qarrow" && boonLv("heartseek")) {
+    if (p.seekTgt === e) p.seekN = Math.min(6, (p.seekN || 0) + 1);
+    else { p.seekTgt = e; p.seekN = 0; }
+    if (!crit && Math.random() < 0.10 * boonPow("heartseek") * p.seekN) crit = true;
+  }
+  hitEnemy(e, dmg, Math.cos(a.ang) * a.kb, Math.sin(a.ang) * a.kb, crit, false);
+  if (e.hp <= 0) return;
+  // GALEFORCE knockback already folded into kb; STATIC ARROWS apply SHOCK (chains + shatters frozen)
+  if (a.shock > 0) applyShock(e, (4 + depth * 0.4) * a.shock * dmgMul(), 1);
+  // HUNTER'S MARK: (re)apply the damage-amp mark (reuses the TRACER FIRE mark fields)
+  if (a.mark > 0) { e.markT = 3; e.markPow = a.mark; }
+  // shared on-hit element boons + melee/cold enchants do NOT apply to bows (ranged, see applyOnHitElements)
+  if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul()); // IGNITION EDGE is universal (slashes); allow on arrows for parity with guns
+}
+
+/* arrow update: motion, wall/pillar collision, enemy hits (pierce + split + ricochet), barrels,
+   lifetime — pooled, no per-frame allocations in the hot loop. */
+function updateArrows(dt) {
+  const A = CONFIG;
+  for (let ai = arrows.length - 1; ai >= 0; ai--) {
+    const a = arrows[ai];
+    ctxP = a.owner || player;
+    a.x += a.vx * dt; a.y += a.vy * dt; a.t -= dt;
+    // cheap fletching trail spark (respects particle cap via addPart)
+    if (Math.random() < 0.35) addPart({ x: a.x, y: a.y, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: a.col, r: 1.5, drag: 0 });
+    let dead = a.t <= 0;
+    if (!dead && (a.x < A.wall || a.x > A.arenaW - A.wall || a.y < A.wall || a.y > A.arenaH - A.wall)) dead = true;
+    if (!dead && pointInPillar(a.x, a.y, a.r)) { burst(a.x, a.y, a.col, 4, 100, 0.18, 1.8); dead = true; }
+    if (dead) { freeArrow(a); continue; }
+    // enemy collisions (pierce-aware)
+    for (const e of enemies) {
+      if (e.hp <= 0 || a.hitSet.includes(e)) continue;
+      if (dist(a.x, a.y, e.x, e.y) >= a.r + e.r) continue;
+      if (shieldBlocks(e, a.x - a.vx * 0.02, a.y - a.vy * 0.02)) {
+        burst(a.x, a.y, "#88aaff", 5, 130, 0.2, 2); audio.clank(); dead = true; break;
+      }
+      const ex = a.x, ey = a.y;
+      arrowHitEnemy(a, e);
+      a.hitSet.push(e);
+      // SPLIT ARROW: spawn shard arrows fanning off the impact (QUICK BOW)
+      if (a.split > 0) {
+        const shards = a.split; a.split = 0;
+        for (let sI = 0; sI < shards; sI++) {
+          const sa = a.ang + (sI === 0 ? 0.5 : -0.5) + rand(-0.1, 0.1);
+          spawnArrow(a.owner, "qarrow", sa, 760, a.dmg * 0.5, a.col, 2.4, { life: 0.4, kb: 40, crit: critRoll() });
+        }
+      }
+      // RICOCHET: redirect toward a nearby unhit foe instead of stopping (STORMBOW)
+      if (a.rico > 0 && a.kind === "sarrow") {
+        let tgt = null, bd = 200;
+        for (const o of enemies) {
+          if (o.hp <= 0 || a.hitSet.includes(o)) continue;
+          const dd = dist(ex, ey, o.x, o.y);
+          if (dd < bd) { bd = dd; tgt = o; }
+        }
+        if (tgt) { a.ang = angTo(ex, ey, tgt.x, tgt.y); const sp = Math.hypot(a.vx, a.vy); a.vx = Math.cos(a.ang) * sp; a.vy = Math.sin(a.ang) * sp; a.rico--; }
+        else { dead = true; }
+        break;
+      }
+      if (a.pierce > 0) a.pierce--;
+      else { burst(ex, ey, a.col, 4, 110, 0.18, 2); dead = true; break; }
+    }
+    if (dead) { freeArrow(a); continue; }
+    // volatile barrels
+    for (const bl of barrels) {
+      if (bl.dead || bl.fuse >= 0) continue;
+      if (dist(a.x, a.y, bl.x, bl.y) < a.r + bl.r) { igniteBarrel(bl, 0.05); dead = true; break; }
+    }
+    if (dead) { freeArrow(a); continue; }
+  }
+  // ARROW RAIN volleys: a brief telegraph, then arrows rain down dealing AoE in the zone
+  for (let ri = arrowRains.length - 1; ri >= 0; ri--) {
+    const r = arrowRains[ri];
+    r.t -= dt;
+    if (Math.random() < dt * 30) addPart({ x: r.x + rand(-r.r, r.r), y: r.y + rand(-r.r, r.r) - 40, vx: 0, vy: 360, t: 0.18, tm: 0.18, col: r.col, r: rand(1.5, 2.6), drag: 0 });
+    if (r.t <= 0) {
+      ctxP = r.owner || player;
+      burst(r.x, r.y, r.col, 16, 240, 0.4, 3);
+      ffx.ring(r.x, r.y, r.r, r.col, 0.32, 4);
+      for (const e of enemies) {
+        if (e.hp <= 0) continue;
+        if (dist(r.x, r.y, e.x, e.y) < r.r + e.r) {
+          hitEnemy(e, r.dmg, 0, 0, critRoll(), false);
+          if (e.hp > 0 && r.shock > 0) applyShock(e, (4 + depth * 0.4) * r.shock * dmgMul(), 1);
+        }
+      }
+      arrowRains.splice(ri, 1);
+    }
+  }
+}
+
 function tryBolt(p) {
   p = p || ctxP || player;
   ctxP = p;
@@ -4174,17 +4692,18 @@ canvas.addEventListener("mousemove", () => { mouseActive = true; });
 function readPlayerControls(p) {
   const pad = padForPlayer(p.idx);
   p.padBound = !!pad;
-  const c = { aimHas: false, aimAng: 0, aimIsDir: false, bolt: false, interact: false };
+  const c = { aimHas: false, aimAng: 0, aimIsDir: false, bolt: false, interact: false, fireHeld: false };
   if (p.idx === 0) {
     // P1 mouse aim (only while recent and not pad-bound)
     if (!pad && (!touchUI || mouseActive) && !mouseIdle()) {
       c.aimHas = true; c.aimAng = angTo(p.x, p.y, s2wX(mouse.x), s2wY(mouse.y));
     }
     // P1 keyboard/touch fire
-    if (mouse.left || keys["j"]) p.slashBuf = Math.max(p.slashBuf, 0.05);
+    if (mouse.left || keys["j"]) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; }
     if (mouse.right || keys["Shift"] || keys["ctrlRight"] || keys["e"] || boltHeld) c.bolt = true;
     if (keys["k"] || keys["q"]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
     if (keys[" "]) p.dashBuf = Math.max(p.dashBuf, 0.05);
+    if (touchFireHeld) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; } // touch tap held on the right half
   }
   // gamepad bindings (twin-stick PS4 layout):
   // left stick move (handled in moveInputFor), right stick aim, □(2) slash, R2(7)/R1(5) bolt,
@@ -4193,13 +4712,14 @@ function readPlayerControls(p) {
     const rs = gpStick(pad.rx, pad.ry);
     if (rs.mag > 0) { c.aimHas = true; c.aimAng = Math.atan2(rs.y, rs.x); c.aimIsDir = true; }
     if (gpPressed(pad, 2)) p.slashBuf = 0.12;
+    if (gpButton(pad, 2)) c.fireHeld = true; // □ held = bow draw
     if (gpButton(pad, 7) || gpButton(pad, 5)) c.bolt = true; // R2 / R1 held = bolt
     if (gpPressed(pad, 0)) { p.dashBuf = 0.15; c.interact = true; }
     if (gpPressed(pad, 3) || gpPressed(pad, 4)) p.freezeBuf = 0.18;
   }
   // P2 keyboard scheme
   if (p.idx === 1 && p2UsesKeyboard()) {
-    if (keys["."]) p.slashBuf = Math.max(p.slashBuf, 0.05);
+    if (keys["."]) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; }
     if (keys["/"]) c.bolt = true;
     if (keys[","]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
     if (keys["Enter"]) p.dashBuf = Math.max(p.dashBuf, 0.05);
@@ -4236,9 +4756,9 @@ function updatePlayer(p, dt) {
   if (p.tempoT <= 0) p.tempoN = 0;
   p.dashedT = Math.max(0, (p.dashedT || 0) - dt); // BLADE RIPOSTE post-dash window
   p.velBuffT = Math.max(0, (p.velBuffT || 0) - dt);
-  // SIPHON EDGE lifesteal budget refills (drains toward 0) over real time, so the cap is
-  // genuinely "per second" — a satisfying steady heal, never a runaway immortality loop.
-  const stealCap = 8 + 6 * (p.boonPow && p.boonPow.steal ? p.boonPow.steal : 0);
+  // SIPHON EDGE + LIFESTEAL enchant share one budget that drains toward 0 over real time, so the cap
+  // is genuinely "per second" — a satisfying steady heal, never a runaway immortality loop.
+  const stealCap = 8 + 6 * ((p.boonPow && p.boonPow.steal ? p.boonPow.steal : 0) + (p.enchants && p.enchants.steal ? p.enchants.steal : 0));
   p.stealBudget = Math.max(0, (p.stealBudget || 0) - stealCap * dt);
   p.castCD = Math.max(0, (p.castCD || 0) - dt);
   p.gunCD = Math.max(0, (p.gunCD || 0) - dt);
@@ -4246,6 +4766,9 @@ function updatePlayer(p, dt) {
   if (p.heatT <= 0) p.heatN = 0; // OVERHEAT ramp decays when fire isn't sustained
   // RAILGUN CAPACITOR: store charge while the rail is between shots (caps ~1.6s of charge)
   if (p.weapon === "rail" && p.gunCD <= 0) p.railChargeT = Math.min(1.6, (p.railChargeT || 0) + dt);
+  p.bowCD = Math.max(0, (p.bowCD || 0) - dt);
+  p.rapidT = Math.max(0, (p.rapidT || 0) - dt);
+  if (p.rapidT <= 0) p.rapidN = 0; // QUICK BOW RAPID NOCK ramp decays when not sustaining fire
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
   p.freezeCD = Math.max(0, p.freezeCD - dt);
@@ -4264,7 +4787,30 @@ function updatePlayer(p, dt) {
   p.energy = Math.min(p.maxEnergy, p.energy + CONFIG.energyRegen * (1 + boonPow("over") * 0.4) * dt);
 
   // actions
-  if (p.slashBuf > 0) { trySlash(p); const Wp = weaponDefP(p); if (p.slashT > 0 || (Wp.isCaster && p.castCD > 0) || (Wp.isGun && p.gunCD > 0)) p.slashBuf = 0; }
+  if (p.slashBuf > 0) { trySlash(p); const Wp = weaponDefP(p); if (p.slashT > 0 || (Wp.isCaster && p.castCD > 0) || (Wp.isGun && p.gunCD > 0) || (Wp.isBow && Wp.id !== "lbow" && p.bowCD > 0)) p.slashBuf = 0; }
+  // LONGBOW draw-and-release: hold the fire button to draw (drawT charges); loose on release.
+  {
+    const Wp = weaponDefP(p);
+    if (Wp.isBow && Wp.id === "lbow" && (state === "play" || state === "hub")) {
+      if (c.fireHeld && p.bowCD <= 0 && p.dashT <= 0) {
+        if (!p.drawing) { p.drawing = true; p.drawT = 0; audio.bowDraw(0); }
+        const prev = p.drawT;
+        p.drawT = Math.min(1, p.drawT + dt / 0.85); // ~0.85s to full draw
+        // a soft creak tick partway through the draw
+        if (prev < 0.55 && p.drawT >= 0.55) audio.bowDraw(p.drawT);
+        if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
+        p.recoilT = Math.max(p.recoilT, 0.05);
+      } else if (p.drawing) {
+        // released — loose an arrow scaled by how far it was drawn
+        const charge = p.drawT;
+        p.drawing = false; p.drawT = 0;
+        if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
+        fireBow(p, Wp, charge);
+      }
+    } else if (p.drawing) {
+      p.drawing = false; p.drawT = 0; // swapped away / dashed mid-draw
+    }
+  }
   if (c.bolt && (state === "play" || state === "hub")) tryBolt(p);
   if (p.freezeBuf > 0) tryFreeze(p);
   if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
@@ -4456,6 +5002,23 @@ function updateEnemy(e, dt) {
       addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: rand(-15, 15), vy: -rand(30, 70), t: 0.45, tm: 0.45, col: Math.random() < 0.5 ? "#ff8844" : "#ffcc66", r: rand(1.5, 3), drag: 1 });
     }
     if (e.burnT <= 0) { e.burnStacks = 0; e.burnDps = 0; }
+  }
+  // POISON: a stacking DoT that ramps with stacks and lingers (works alongside any state)
+  if ((e.poisonT || 0) > 0) {
+    e.poisonT -= dt;
+    e.poisonTick -= dt;
+    if (e.poisonTick <= 0) {
+      e.poisonTick = 0.6;
+      // ramps with stacks: each stack adds a little more than linear so deep stacks bite
+      const stacks = e.poisonStacks || 0;
+      const ramp = stacks * (1 + 0.10 * (stacks - 1)); // mild super-linear ramp, clamped by poisonMaxStacks
+      statusDamage(e, e.poisonDps * 0.6 * ramp, "#7fff5a");
+      if (e.hp <= 0) return;
+    }
+    if (Math.random() < dt * 6) {
+      addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: rand(-10, 10), vy: -rand(20, 50), t: 0.5, tm: 0.5, col: Math.random() < 0.5 ? "#7fff5a" : "#3fce3a", r: rand(1.4, 2.6), drag: 1 });
+    }
+    if (e.poisonT <= 0) { e.poisonStacks = 0; e.poisonDps = 0; }
   }
   // SHOCK: brief stun — no movement, no attacks
   if ((e.shockT || 0) > 0) {
@@ -5547,6 +6110,9 @@ function step(dt) {
   // ballistic gun bullets (pooled): rifle rounds, scatter pellets
   updateBullets(dt);
 
+  // bow arrows (pooled): quick/long/storm arrows + ARROW RAIN volleys
+  updateArrows(dt);
+
   // beams
   for (const bm of beams) bm.t -= dt;
   beams = beams.filter((bm) => bm.t > 0);
@@ -6457,7 +7023,9 @@ function drawBossBody(e, fl, col, dark, detail) {
 function drawEnemy(e) {
   const fl = e.flash > 0;
   const frozen = e.frozenT > 0;
-  const col = fl ? "#ffffff" : frozen ? "#bfe8ff" : e.col;
+  const poisoned = (e.poisonT || 0) > 0;
+  // poison tints the body sickly green (flash/freeze take priority)
+  const col = fl ? "#ffffff" : frozen ? "#bfe8ff" : (poisoned ? "#7fdf6a" : e.col);
   ctx.save();
   if (e.spawnT > 0) ctx.globalAlpha = 1 - e.spawnT / 0.4;
   // shock: the whole sprite jitters (frozen targets are locked, so no jitter then)
@@ -7010,11 +7578,12 @@ function drawEnemy(e) {
     ctx.fillRect(e.x - w / 2, e.y - e.r - 9, w * clamp(e.hp / e.maxHp, 0, 1), 3.5);
   }
   // tiny status icons above afflicted enemies
-  if (frozen || (e.burnT || 0) > 0 || (e.shockT || 0) > 0) {
+  if (frozen || (e.burnT || 0) > 0 || (e.shockT || 0) > 0 || (e.poisonT || 0) > 0) {
     const sts = [];
     if (frozen) sts.push(["❄", "#aaeeff"]);
     if ((e.burnT || 0) > 0) sts.push(["❋", "#ff8844"]);
     if ((e.shockT || 0) > 0) sts.push(["↯", "#ffee55"]);
+    if ((e.poisonT || 0) > 0) sts.push(["☣", "#7fff5a"]);
     ctx.font = "bold 10px 'Courier New', monospace";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
     let sx0 = e.x - (sts.length - 1) * 6;
@@ -7032,8 +7601,9 @@ function drawEnemy(e) {
 
 /* the held weapon, drawn in the android's lead hand at local coords
    (hand near (hx,hy), aiming +x). Each form is visually distinct & weapon-tinted. */
-function drawHeldWeapon(W, hx, hy, recoil, fl) {
+function drawHeldWeapon(W, hx, hy, recoil, fl, drawAmt) {
   const wc = fl ? "#ffffff" : W.col;
+  drawAmt = drawAmt || 0;
   ctx.save();
   ctx.translate(hx, hy);
   glow(wc, 8);
@@ -7173,6 +7743,48 @@ function drawHeldWeapon(W, hx, hy, recoil, fl) {
       ctx.strokeStyle = "#eafaff"; ctx.lineWidth = 1.6;
       ctx.beginPath(); ctx.moveTo(26 + recoil * 8, -2.4); ctx.lineTo(30 + recoil * 8, 0); ctx.lineTo(26 + recoil * 8, 2.4); ctx.stroke();
     }
+  } else if (W.isBow) {
+    // BOWS: a curved limb held vertical with a string; drawing pulls the string + nocked arrow back.
+    // QUICK BOW = small recurve; LONGBOW = tall longbow (bigger limbs); STORMBOW = wide multi-limb.
+    const big = W.id === "lbow", wide = W.id === "sbow";
+    const limb = big ? 13 : (wide ? 11 : 9);          // limb half-height
+    const bx = 6;                                       // bow handle x-offset from hand
+    const pull = drawAmt * 7;                           // string draw-back distance
+    ctx.lineWidth = big ? 2.6 : 2.2; ctx.lineCap = "round";
+    // the bow limbs (an arc bulging forward)
+    ctx.beginPath();
+    ctx.moveTo(bx, -limb);
+    ctx.quadraticCurveTo(bx + (big ? 8 : 6), 0, bx, limb);
+    ctx.stroke();
+    if (wide) { // STORMBOW: a second offset limb pair for the multishot look
+      ctx.globalAlpha = 0.6;
+      ctx.beginPath();
+      ctx.moveTo(bx - 2, -limb * 0.7);
+      ctx.quadraticCurveTo(bx + 4, 0, bx - 2, limb * 0.7);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    // bowstring: pulled back to the hand by `pull`, with a nocked arrow when drawing
+    ctx.strokeStyle = "rgba(230,240,255,0.85)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(bx, -limb);
+    ctx.lineTo(bx - 2 - pull, 0);
+    ctx.lineTo(bx, limb);
+    ctx.stroke();
+    if (drawAmt > 0.04) { // nocked arrow drawn back along the aim line
+      glow(wc, 6 + drawAmt * 8);
+      ctx.strokeStyle = wc; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(bx - 2 - pull, 0); ctx.lineTo(bx + 8 + drawAmt * 6, 0); ctx.stroke();
+      ctx.fillStyle = "#f4ffe8";
+      ctx.beginPath(); // arrowhead
+      ctx.moveTo(bx + 11 + drawAmt * 6, 0); ctx.lineTo(bx + 8 + drawAmt * 6, -2); ctx.lineTo(bx + 8 + drawAmt * 6, 2);
+      ctx.closePath(); ctx.fill();
+      if (big && drawAmt > 0.9) { // LONGBOW full-draw glint
+        ctx.fillStyle = "#fff3c0";
+        ctx.beginPath(); ctx.arc(bx + 11 + drawAmt * 6, 0, 1.6, 0, TAU); ctx.fill();
+      }
+    }
+    ctx.strokeStyle = wc;
   } else { // grav — gravity flail: short haft + orb on a chain
     ctx.lineWidth = 2; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(8, 0); ctx.stroke();
@@ -7284,7 +7896,9 @@ function drawAndroid(p) {
   ctx.lineTo(handX - 2, handY);
   ctx.stroke();
   ctx.lineCap = "butt";
-  if (!p.glaiveOut) drawHeldWeapon(W, handX, handY, recoil, blink); // glaive: hide held blade while it's in flight
+  // BOW draw amount drives the held-bow nock/draw/release pose
+  const drawAmt = (W.isBow ? (W.id === "lbow" ? (p.drawing ? p.drawT : 0) : (recoil > 0.05 ? 0.6 : 0)) : 0);
+  if (!p.glaiveOut) drawHeldWeapon(W, handX, handY, recoil, blink, drawAmt); // glaive: hide held blade while it's in flight
 
   ctx.restore();
 
@@ -7571,6 +8185,50 @@ function drawBullets() {
   }
 }
 
+/* bow arrows: a slim physical shaft with a bright head + fletching tail (distinct from tracers).
+   ARROW RAIN target zones telegraph as a falling-arrow reticle. */
+function drawArrows() {
+  const detail = spriteDetail();
+  for (const a of arrows) {
+    const len = a.r * (a.kind === "larrow" ? 5.5 : 4.2);
+    bloomCircle(a.x, a.y, a.r * 3, a.col, 0.28);
+    ctx.save();
+    ctx.translate(a.x, a.y);
+    ctx.rotate(a.ang);
+    glow(a.col, a.kind === "larrow" ? 11 : 8);
+    // shaft
+    ctx.strokeStyle = a.crit ? "#fff3c0" : a.col;
+    ctx.lineWidth = a.kind === "larrow" ? 2.2 : 1.6; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-len * 0.6, 0); ctx.lineTo(len * 0.4, 0); ctx.stroke();
+    // arrowhead
+    ctx.fillStyle = a.crit ? "#fff3c0" : "#f4ffe8";
+    ctx.beginPath();
+    ctx.moveTo(len * 0.6, 0); ctx.lineTo(len * 0.4, -a.r * 0.9); ctx.lineTo(len * 0.4, a.r * 0.9);
+    ctx.closePath(); ctx.fill();
+    if (detail) { // fletching feathers at the tail
+      ctx.strokeStyle = a.col; ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-len * 0.6, 0); ctx.lineTo(-len * 0.75, -a.r * 0.8);
+      ctx.moveTo(-len * 0.6, 0); ctx.lineTo(-len * 0.75, a.r * 0.8);
+      ctx.stroke();
+    }
+    noglow();
+    ctx.lineCap = "butt";
+    ctx.restore();
+  }
+  for (const r of arrowRains) {
+    const f = clamp(r.t / 0.55, 0, 1);
+    ctx.save();
+    ctx.globalAlpha = 0.5 + 0.4 * (1 - f);
+    glow(r.col, 8);
+    ctx.strokeStyle = r.col; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r * (0.6 + 0.4 * (1 - f)), 0, TAU); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawBeamsParts() {
   for (const bm of beams) {
     ctx.save();
@@ -7671,20 +8329,20 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — HEAT CONTRACT" : "PRESS E — HEAT CONTRACT", t.heatX, t.heatY - 48);
   }
-  // ARMORY weapon rack (武器架): cycle weapon forms — 15 forms in a 5x3 grid
+  // ARMORY weapon rack (武器架): cycle weapon forms — 18 forms in a 6x3 grid
   const Wsel = weaponDef();
   glow(Wsel.col, 16);
   ctx.fillStyle = "#121a2c";
-  rrect(t.rackX - 74, t.rackY - 34, 148, 80, 8); ctx.fill();
+  rrect(t.rackX - 86, t.rackY - 34, 172, 80, 8); ctx.fill();
   ctx.strokeStyle = Wsel.col;
   ctx.lineWidth = 2.5;
-  rrect(t.rackX - 74, t.rackY - 34, 148, 80, 8); ctx.stroke();
+  rrect(t.rackX - 86, t.rackY - 34, 172, 80, 8); ctx.stroke();
   noglow();
-  const cols = 5;
+  const cols = 6;
   for (let i = 0; i < WEAPONS.length; i++) { // grid slots, current highlighted
     const w2 = WEAPONS[i];
     const sel = w2.id === curWeapon;
-    const cx = t.rackX + ((i % cols) - 2) * 28;
+    const cx = t.rackX + ((i % cols) - 2.5) * 27;
     const cy = t.rackY - 20 + Math.floor(i / cols) * 21;
     if (sel) glow(w2.col, 12);
     ctx.fillStyle = sel ? w2.col : "rgba(150,170,220,0.4)";
@@ -7930,6 +8588,33 @@ function drawPlayerBars(p, u, by, side) {
     if (right) { ctx.textAlign = "right"; ctx.fillText(W.glyph + " " + W.name, bx - 12, by + bh / 2 + 1); }
     else { ctx.textAlign = "left"; ctx.fillText(W.glyph + " " + W.name, bx + bw + 12, by + bh / 2 + 1); }
     noglow();
+    // 元素附魔: active melee enchant icons (with stack counts) just under the weapon readout
+    if (p.enchants) {
+      const active = ENCHANTS.filter((x) => (p.enchants[x.id] || 0) > 0);
+      if (active.length) {
+        ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+        ctx.textBaseline = "middle";
+        const ey2 = by + bh / 2 + 15 * u;
+        if (right) {
+          let exx = bx - 12;
+          ctx.textAlign = "right";
+          for (let i = active.length - 1; i >= 0; i--) {
+            const en = active[i];
+            ctx.fillStyle = en.col;
+            ctx.fillText(en.glyph, exx, ey2);
+            exx -= 16 * u;
+          }
+        } else {
+          let exx = bx + bw + 12;
+          ctx.textAlign = "left";
+          for (const en of active) {
+            ctx.fillStyle = en.col;
+            ctx.fillText(en.glyph, exx, ey2);
+            exx += 16 * u;
+          }
+        }
+      }
+    }
   }
 }
 
@@ -8165,9 +8850,10 @@ function drawTitle() {
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
-    "持法杖时挥砍键改为施放法术，持枪械则开火 — STAFF/WAND: slash casts a spell · GUN: slash fires the gun",
+    "持法杖施法·持枪械开火·持弓射箭(长弓蓄力) — STAFF casts · GUN fires · BOW looses arrows (hold to draw the LONGBOW)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
-    "枢纽武器架：15 种武器形态（含 3 法杖与 3 枪械）与战绩终端 — hub ARMORY: 15 weapon forms (incl. 3 staves + 3 guns) · STATS terminal",
+    "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
+    "冷兵器可叠加元素附魔：火/冰/电/毒/吸血 — melee weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -8176,10 +8862,11 @@ function drawTitle() {
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
-    "J 近战斩击／法杖施法／枪械开火 · 右Ctrl 发射光弹 — J slash / cast (staves) / fire (guns) / Right-Ctrl bolt (LMB/RMB too)",
+    "J 近战／法杖施法／枪械开火／弓箭(长弓蓄力) · 右Ctrl 光弹 — J slash / cast / fire gun / loose arrow (hold = draw LONGBOW) · R-Ctrl bolt",
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
-    "枢纽武器架：15 种武器形态（含 3 法杖与 3 枪械）与战绩终端 — hub ARMORY: 15 weapon forms (incl. 3 staves + 3 guns) · STATS terminal",
+    "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
+    "冷兵器可叠加元素附魔：火/冰/电/毒/吸血 — melee weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -8668,6 +9355,7 @@ function render() {
   drawGlaives();
   drawSpells();
   drawBullets();
+  drawArrows();
   drawBolts();
   drawBeamsParts();
   drawFxRings();
