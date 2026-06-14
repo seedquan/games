@@ -68,13 +68,17 @@
              progress; each player has own HP/energy/dash/weapon and picks
              their own boon.  HP=0 = DOWNED; a partner revives by standing
              close ~3s; both down = game over.  Style meter shared.
-   Hub ARMORY rack: 12 weapon forms (BLADE / LANCE / MAUL /
+   Hub ARMORY rack: 15 weapon forms (BLADE / LANCE / MAUL /
              TWIN FANG / ARC CASTER / GRAVITON MACE /
              GLAIVE / CHAIN WHIP / PRISM SABER /
-             EMBER STAFF / FROST WAND / STORM STAFF).
-             The last three are MAGIC WAND/STAFF casters: the slash
+             EMBER STAFF / FROST WAND / STORM STAFF /
+             AUTO-RIFLE / SCATTERGUN / RAILGUN).
+             EMBER/FROST/STORM are MAGIC WAND/STAFF casters: the slash
              key/button CASTS a ranged/area spell (own cast cadence)
-             instead of a melee swing.
+             instead of a melee swing. AUTO-RIFLE/SCATTERGUN/RAILGUN are
+             BALLISTIC FIREARMS: the slash key/button FIRES the gun in the
+             aim direction (own fire cadence, pooled bullets) — distinct
+             from the magic casters and the shared plasma BOLT ability.
    Pause menu: EFFECTS toggle (F while paused) cycles bloom/scanlines/shake
              intensity (full / reduced / off), persisted; plus FULLSCREEN and
              AUTO-FULLSCREEN items (gamepad d-pad navigates, × confirms).
@@ -479,6 +483,28 @@ class AudioEngine {
     this.noise(t, 0.3, 0.16, "lowpass", 2400, 120);
     this.tone("sawtooth", 180, 600, t, 0.12, 0.05, true);
   }
+  rifleShot() { // AUTO-RIFLE: snappy dry mechanical crack
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.05, 0.14, "highpass", 2600, 5200);
+    this.tone("square", 360, 110, t, 0.05, 0.08, false);
+    this.tone("sawtooth", 180, 60, t, 0.04, 0.05, false);
+  }
+  scatterShot() { // SCATTERGUN: heavy boomy blast with a wide noise tail
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.22, 0.26, "lowpass", 2600, 200);
+    this.tone("sawtooth", 200, 50, t, 0.18, 0.16, true);
+    this.noise(t, 0.06, 0.16, "highpass", 1800, 4000);
+  }
+  railShot() { // RAILGUN: charged electromagnetic THWANG — bright zip over a low thump
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 1400, 260, t, 0.16, 0.1, true);
+    this.tone("sine", 90, 38, t, 0.22, 0.14, true);
+    this.noise(t, 0.14, 0.12, "highpass", 3200, 7000);
+    this.tone("square", 700, 1900, t + 0.01, 0.07, 0.05, false);
+  }
   styleUp(rank) {
     if (!this.ok()) return;
     const t = this.ctx.currentTime;
@@ -821,6 +847,16 @@ const WEAPONS = [
   { id: "frost", name: "FROST WAND",  zh: "冰霜法杖", col: "#7fd8ff", glyph: "❅", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.04, isCaster: true, castCD: 0.42 },
   // STORM STAFF: emits a chaining lightning bolt that arcs to several nearby foes, applying SHOCK. Multi-target chain.
   { id: "storm", name: "STORM STAFF", zh: "闪电法杖", col: "#ffe24a", glyph: "⚡", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isCaster: true, castCD: 0.5 },
+  /* ---- BALLISTIC FIREARM / GUN class: the slash button FIRES the gun in the aim direction
+     (mechanical bullets, distinct from the magic casters and the shared plasma BOLT ability).
+     Guns trade melee reach for ranged pressure; each gates on its own fireCD cadence and emits
+     pooled `bullets`, so they sit at a comparable per-weapon power budget. ---- */
+  // AUTO-RIFLE: rapid stream of low-damage bullets with mild spread/recoil; sustained DPS, needs aim discipline.
+  { id: "rifle",  name: "AUTO-RIFLE", zh: "速射枪", col: "#cfd8e6", glyph: "⊐", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.04, isGun: true, fireCD: 0.11 },
+  // SCATTERGUN: close-range cone of pellets, high burst up close, range falloff + knockback; slower cadence.
+  { id: "scatter", name: "SCATTERGUN", zh: "霰弹枪", col: "#ffb86b", glyph: "⋔", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isGun: true, fireCD: 0.6 },
+  // RAILGUN: chargeable single high-damage piercing shot that hits everything in a line; slow cadence, great vs lines/bosses.
+  { id: "rail",   name: "RAILGUN", zh: "轨道炮", col: "#7fd0ff", glyph: "‡", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.06, isGun: true, fireCD: 0.95 },
 ];
 let curWeapon = store.get("weapon") || "blade";
 if (!WEAPONS.some((w) => w.id === curWeapon)) curWeapon = "blade";
@@ -915,6 +951,13 @@ const BOONS = [
   { id: "icelance",name: "ICE LANCE",   desc: "Frost shots pierce all and shatter frozen foes for big damage", col: "#bfeeff", glyph: "➶", max: 2, weapon: "frost" },
   { id: "tempest",name: "TEMPEST",      desc: "Storm chains to +2 foes with reduced damage falloff", col: "#ffe24a", glyph: "↯", max: 2, weapon: "storm" },
   { id: "overvolt",name: "OVERVOLT",    desc: "Shocked foes hit again take bonus; storm chain can crit", col: "#fff39a", glyph: "⌁", max: 2, weapon: "storm" },
+  /* ---- GUN-class exclusive boons (only in the pool while that firearm is wielded) ---- */
+  { id: "overheat",name: "OVERHEAT",    desc: "Auto-Rifle: sustained fire ramps fire rate & damage", col: "#ffae6b", glyph: "♨", max: 2, weapon: "rifle" },
+  { id: "ricoR",  name: "RICOCHET ROUNDS", desc: "Rifle bullets bounce off walls / to a nearby foe once", col: "#cfd8e6", glyph: "⤡", max: 2, weapon: "rifle" },
+  { id: "pblank", name: "POINT BLANK",  desc: "Scattergun: bonus damage up close; executes low-HP foes point-blank", col: "#ffb86b", glyph: "✸", max: 2, weapon: "scatter" },
+  { id: "dbarrel",name: "DOUBLE BARREL",desc: "Scattergun fires an extra pellet in the spread", col: "#ffd29a", glyph: "⋔", max: 2, weapon: "scatter" },
+  { id: "ocharge2",name: "OVERCHARGE",  desc: "Railgun: full-charge shots crit and pierce further", col: "#7fd0ff", glyph: "⇈", max: 2, weapon: "rail" },
+  { id: "recoild",name: "RECOIL DASH",  desc: "Railgun firing dashes you back a step with brief i-frames", col: "#bfeaff", glyph: "⇤", max: 2, weapon: "rail" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -973,6 +1016,7 @@ let hazards = [], barrels = [], quakes = [], slashGhosts = [];
 let singularities = [];                // graviton mace mini black holes
 let glaives = [], glaivePool = [];     // GLAIVE thrown blades (live) + free-list pool
 let spells = [], spellPool = [];       // STAFF/WAND spell projectiles (live) + free-list pool
+let bullets = [], bulletPool = [];     // GUN ballistic projectiles (live) + free-list pool
 let lights = [];                       // dynamic point lights (rebuilt each frame)
 let motes = [];                        // drifting ambient dust/ember particles
 let slowmoT = 0;                       // execution slow-mo pulse (decays in REAL time)
@@ -1458,6 +1502,8 @@ function newPlayer(idx) {
     prismN: 0, prismT: 0,              // PRISM SABER OVERCHARGE+ consecutive-hit charge
     velBuffT: 0,                       // RETURN VELOCITY catch speed buff timer
     castCD: 0, castN: 0,               // STAFF/WAND cast cadence + cast counter (METEOR cadence)
+    gunCD: 0, gunN: 0,                  // GUN fire cadence + shots-fired counter
+    heatN: 0, heatT: 0,                 // AUTO-RIFLE OVERHEAT sustained-fire ramp
     boltCD: 0,
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
@@ -2224,11 +2270,18 @@ function clearSpells() {
   spells.length = 0;
 }
 
+/* recycle any live gun bullets back to the pool (room/run reset) */
+function clearBullets() {
+  for (const b of bullets) { b.hitSet.length = 0; b.owner = null; if (bulletPool.length < 80) bulletPool.push(b); }
+  bullets.length = 0;
+}
+
 function genRoom() {
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; mortars = []; novas = []; pedestals = []; boss = null;
   clearGlaives();
   clearSpells();
+  clearBullets();
   hazards = []; barrels = []; quakes = []; slashGhosts = [];
   styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
@@ -2525,6 +2578,7 @@ function enterHub() {
   singularities = []; lights = []; motes = []; ffx.rings = []; ffx.shocks = []; ffx.traumaV = 0;
   clearGlaives();
   clearSpells();
+  clearBullets();
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
@@ -2668,6 +2722,13 @@ function trySlash(p) {
     if (p.castCD > 0) return;
     if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
     castSpell(p, W);
+    return;
+  }
+  // BALLISTIC GUNS: the slash button FIRES the gun in the aim direction (own fire cadence).
+  if (W.isGun) {
+    if (p.gunCD > 0) return;
+    if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
+    fireGun(p, W);
     return;
   }
   if (p.slashCD > 0) return;
@@ -3252,6 +3313,232 @@ function emberBlast(s) {
   }
 }
 
+/* ---------------- §L3 BALLISTIC FIREARMS (GUN class) ---------------- */
+/* Pooled bullet objects (no per-shot allocation in the hot path). Bullets are mechanical
+   ballistic rounds — distinct from the magic `spells` and the plasma `pbolts` BOLT ability. */
+function getBullet() {
+  let b = bulletPool.pop();
+  if (!b) b = { kind: "", x: 0, y: 0, vx: 0, vy: 0, ang: 0, r: 0, t: 0, tm: 0,
+                dmg: 0, kb: 0, col: "#fff", owner: null, hitSet: [], pierce: 0,
+                bounces: 0, falloff: 0, crit: false, pblank: false };
+  b.hitSet.length = 0; b.pierce = 0; b.bounces = 0; b.falloff = 0; b.crit = false; b.pblank = false; b.kb = 0;
+  return b;
+}
+function freeBullet(b) {
+  const i = bullets.indexOf(b);
+  if (i >= 0) bullets.splice(i, 1);
+  b.hitSet.length = 0; b.owner = null;
+  if (bulletPool.length < 80) bulletPool.push(b);
+}
+function spawnBullet(p, kind, a, spd, dmg, col, r, opts) {
+  // hard cap on live bullets so the rifle stream can't blow the pool/particle budget
+  if (bullets.length >= 72) { const old = bullets[0]; if (old) freeBullet(old); }
+  const b = getBullet();
+  b.kind = kind;
+  b.x = p.x + Math.cos(a) * (p.r + 4); b.y = p.y + Math.sin(a) * (p.r + 4);
+  b.vx = Math.cos(a) * spd; b.vy = Math.sin(a) * spd; b.ang = a;
+  b.r = r; b.dmg = dmg; b.col = col; b.owner = p;
+  b.t = (opts && opts.life) || 1.2; b.tm = b.t;
+  b.kb = (opts && opts.kb) || 0;
+  b.pierce = (opts && opts.pierce) || 0;
+  b.falloff = (opts && opts.falloff) || 0;   // per-pixel damage falloff fraction (scattergun)
+  b.crit = !!(opts && opts.crit);
+  b.pblank = !!(opts && opts.pblank);
+  b.bounces = (opts && opts.bounces) || 0;
+  bullets.push(b);
+  return b;
+}
+
+/* slash-button fire for the three firearm forms — distinctly ballistic, ranged. */
+function fireGun(p, W) {
+  ctxP = p;
+  p.gunN = (p.gunN || 0) + 1;
+  p.slashAng = p.aim;
+  const a = p.slashAng;
+  const base = gunDamage();
+  if (W.id === "rifle") fireRifle(p, W, a, base);
+  else if (W.id === "scatter") fireScatter(p, W, a, base);
+  else fireRail(p, W, a, base);
+}
+
+/* base per-pellet/round damage for GUN firearms; shares the melee/HEAVY EDGE power budget
+   (slash button drives it) but tuned low/per-pellet so sustained guns don't outclass melee. */
+function gunDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weaponDefP(p).dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * p.meleeMul; }
+
+/* AUTO-RIFLE: rapid low-damage rounds with mild spread + recoil. OVERHEAT ramps rate & damage
+   on sustained fire; RICOCHET ROUNDS lets a round bounce once (wall or to a nearby foe). */
+function fireRifle(p, W, a, base) {
+  // OVERHEAT: each shot while sustaining fire ramps the counter; decays via heatT.
+  if (boonLv("overheat")) { p.heatN = Math.min(20, (p.heatN || 0) + 1); p.heatT = 0.9; }
+  const heat = boonLv("overheat") ? Math.min(1, 0.05 * (p.heatN || 0) * boonPow("overheat")) : 0;
+  p.gunCD = W.fireCD * (1 - heat * 0.4);   // OVERHEAT: up to 40% faster
+  p.recoilT = 0.1;
+  const spread = (0.10 - heat * 0.04) * (Math.random() * 2 - 1); // recoil/spread, tightens as it heats
+  const aa = a + spread;
+  const dmg = base * 0.34 * (1 + heat * 0.5); // per-round low; OVERHEAT up to +50%
+  spawnBullet(p, "rifle", aa, 760, dmg, W.col, 3.2, {
+    life: 1.0, kb: 60, crit: critRoll(),
+    bounces: boonLv("ricoR") ? Math.round(boonPow("ricoR")) : 0,
+  });
+  audio.rifleShot();
+  if (Math.random() < 0.5) burst(p.x + Math.cos(aa) * 18, p.y + Math.sin(aa) * 18, "#ffe6b0", 2, 120, 0.14, 1.8);
+}
+
+/* SCATTERGUN: a tight cone of pellets — devastating point-blank, sharp range falloff, big knockback.
+   DOUBLE BARREL adds a pellet; POINT BLANK boosts close damage and executes low-HP foes up close. */
+function fireScatter(p, W, a, base) {
+  p.gunCD = W.fireCD;
+  p.recoilT = 0.2;
+  const pellets = 6 + (boonLv("dbarrel") ? 1 + Math.round(boonPow("dbarrel")) : 0);
+  const spread = 0.5;
+  for (let i = 0; i < pellets; i++) {
+    const off = (i / (pellets - 1) - 0.5) * spread + rand(-0.04, 0.04);
+    const aa = a + off;
+    spawnBullet(p, "pellet", aa, 640 + rand(-40, 60), base * 0.42, W.col, 2.6, {
+      life: 0.34, kb: 220, falloff: 0.0042, crit: critRoll(), pblank: boonLv("pblank") > 0,
+    });
+  }
+  // recoil shove backward (mechanical kick)
+  p.vx -= Math.cos(a) * 120; p.vy -= Math.sin(a) * 120;
+  burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#ffd29a", 7, 200, 0.22, 2.4);
+  ffx.spawnLight(p.x + Math.cos(a) * 24, p.y + Math.sin(a) * 24, 60, W.col, 0.5);
+  shake(3, 0.1);
+  audio.scatterShot();
+}
+
+/* RAILGUN: an instant charged piercing rail that hits everything along a line. Slow cadence;
+   OVERCHARGE makes shots crit & pierce/reach further; RECOIL DASH kicks you back with i-frames. */
+function fireRail(p, W, a, base) {
+  p.gunCD = W.fireCD;
+  p.recoilT = 0.24;
+  const over = boonLv("ocharge2");
+  const reachMul = over ? 1.35 + 0.15 * boonPow("ocharge2") : 1;
+  const len = (560 * reachMul);
+  const dmg = base * 2.3 * (over ? 1.15 : 1);   // single big hit; balanced vs slow cadence
+  const ex = clamp(p.x + Math.cos(a) * len, CONFIG.wall, CONFIG.arenaW - CONFIG.wall);
+  const ey = clamp(p.y + Math.sin(a) * len, CONFIG.wall, CONFIG.arenaH - CONFIG.wall);
+  // visual rail beam + sparks
+  beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.22, col: W.col });
+  beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.14, col: "#eafaff" });
+  sparkLine(p.x, p.y, ex, ey, W.col, 10);
+  ffx.spawnLight(p.x, p.y, 70, W.col, 0.6);
+  ffx.spawnLight(ex, ey, 60, W.col, 0.5);
+  shake(5, 0.18);
+  audio.railShot();
+  // hitscan: damage every enemy whose center is within the rail band
+  const dx = ex - p.x, dy = ey - p.y, len2 = dx * dx + dy * dy || 1;
+  const bandW = 16 + (over ? 6 : 0);
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    let t = ((e.x - p.x) * dx + (e.y - p.y) * dy) / len2;
+    t = clamp(t, 0, 1);
+    const px = p.x + dx * t, py = p.y + dy * t;
+    if (dist(px, py, e.x, e.y) > bandW + e.r) continue;
+    if (shieldBlocks(e, p.x, p.y)) { e.exposeT = 1.1; e.kbx += Math.cos(a) * 200; audio.clank(); continue; }
+    let crit = critRoll() || over;       // OVERCHARGE: full-charge shots always crit
+    hitEnemy(e, dmg, Math.cos(a) * 160, Math.sin(a) * 160, crit, false);
+    if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+  }
+  for (const bl of barrels) {
+    if (bl.dead || bl.fuse >= 0) continue;
+    let t = ((bl.x - p.x) * dx + (bl.y - p.y) * dy) / len2; t = clamp(t, 0, 1);
+    if (dist(p.x + dx * t, p.y + dy * t, bl.x, bl.y) < bandW + bl.r) igniteBarrel(bl, 0.06);
+  }
+  // RECOIL DASH: fire dashes the wielder backward a step with brief i-frames
+  if (boonLv("recoild")) {
+    p.dashDX = -Math.cos(a); p.dashDY = -Math.sin(a);
+    p.dashT = Math.max(p.dashT, 0.14);
+    p.ifr = Math.max(p.ifr, 0.22 * boonPow("recoild"));
+    burst(p.x, p.y, W.col, 8, 160, 0.3, 2.4);
+  } else {
+    p.vx -= Math.cos(a) * 90; p.vy -= Math.sin(a) * 90;
+  }
+}
+
+/* per-hit resolution for a ballistic bullet striking an enemy (crit/lifesteal/statuses/style
+   all flow through the shared hitEnemy path; the firing player is the ctxP boon context). */
+function bulletHitEnemy(b, e) {
+  const p = b.owner || player;
+  ctxP = p;
+  let dmg = b.dmg;
+  // scattergun pellets fall off with travelled distance (close-range weapon)
+  if (b.falloff > 0) {
+    const travelled = (b.tm - b.t) * Math.hypot(b.vx, b.vy);
+    dmg *= Math.max(0.3, 1 - b.falloff * travelled);
+  }
+  // POINT BLANK: bonus damage + execute low-HP foes when struck very close to the muzzle
+  let exec = false;
+  if (b.pblank && dist(p.x, p.y, e.x, e.y) < 110) {
+    dmg *= 1 + 0.35 * boonPow("pblank");
+    if (e.type !== "boss" && e.hp <= e.maxHp * (0.14 + 0.05 * boonPow("pblank"))) exec = true;
+  }
+  if (exec) {
+    burst(e.x, e.y, "#ffd29a", 16, 260, 0.5, 3);
+    dnum(e.x, e.y - e.r - 14, "POINT BLANK", "#ffd29a", true);
+    statusDamage(e, e.hp + 999, "#ffd29a");
+    return;
+  }
+  hitEnemy(e, dmg, Math.cos(b.ang) * b.kb, Math.sin(b.ang) * b.kb, b.crit, false);
+  if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+  if (e.hp > 0 && b.crit && boonLv("volt")) applyShock(e, 7 * boonPow("volt") * dmgMul(), 1); // VOLT ROUNDS works for guns too
+}
+
+/* pooled bullet update: motion, wall/pillar collision (with RICOCHET bounce), enemy hits with
+   pierce, barrels, and lifetime — no per-frame allocations in the loop. */
+function updateBullets(dt) {
+  const A = CONFIG;
+  for (let bi = bullets.length - 1; bi >= 0; bi--) {
+    const b = bullets[bi];
+    ctxP = b.owner || player;
+    b.x += b.vx * dt; b.y += b.vy * dt; b.t -= dt;
+    // cheap tracer spark (respects particle cap via addPart)
+    if (Math.random() < 0.4) addPart({ x: b.x, y: b.y, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: b.col, r: 1.6, drag: 0 });
+    let dead = b.t <= 0;
+    // wall bounce (RICOCHET ROUNDS) or expire
+    if (!dead && (b.x < A.wall || b.x > A.arenaW - A.wall)) {
+      if (b.bounces > 0) { b.vx = -b.vx; b.ang = Math.atan2(b.vy, b.vx); b.bounces--; b.x = clamp(b.x, A.wall, A.arenaW - A.wall); b.hitSet.length = 0; }
+      else dead = true;
+    }
+    if (!dead && (b.y < A.wall || b.y > A.arenaH - A.wall)) {
+      if (b.bounces > 0) { b.vy = -b.vy; b.ang = Math.atan2(b.vy, b.vx); b.bounces--; b.y = clamp(b.y, A.wall, A.arenaH - A.wall); b.hitSet.length = 0; }
+      else dead = true;
+    }
+    if (!dead && pointInPillar(b.x, b.y, b.r)) { burst(b.x, b.y, b.col, 4, 110, 0.2, 2); dead = true; }
+    if (dead) { freeBullet(b); continue; }
+    // enemy collisions (pierce-aware)
+    for (const e of enemies) {
+      if (e.hp <= 0 || b.hitSet.includes(e)) continue;
+      if (dist(b.x, b.y, e.x, e.y) >= b.r + e.r) continue;
+      if (shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02)) {
+        burst(b.x, b.y, "#88aaff", 5, 130, 0.22, 2); audio.clank(); dead = true; break;
+      }
+      bulletHitEnemy(b, e);
+      b.hitSet.push(e);
+      // RICOCHET ROUNDS: a rifle round can redirect toward a nearby unhit foe instead of stopping
+      if (b.bounces > 0 && b.kind === "rifle") {
+        let tgt = null, bd = 200;
+        for (const o of enemies) {
+          if (o.hp <= 0 || b.hitSet.includes(o)) continue;
+          const dd = dist(b.x, b.y, o.x, o.y);
+          if (dd < bd) { bd = dd; tgt = o; }
+        }
+        if (tgt) { b.ang = angTo(b.x, b.y, tgt.x, tgt.y); const sp = Math.hypot(b.vx, b.vy); b.vx = Math.cos(b.ang) * sp; b.vy = Math.sin(b.ang) * sp; b.bounces--; }
+        else { dead = true; }
+        break;
+      }
+      if (b.pierce > 0) b.pierce--;
+      else { burst(b.x, b.y, b.col, 4, 120, 0.2, 2); dead = true; break; }
+    }
+    if (dead) { freeBullet(b); continue; }
+    // volatile barrels
+    for (const bl of barrels) {
+      if (bl.dead || bl.fuse >= 0) continue;
+      if (dist(b.x, b.y, bl.x, bl.y) < b.r + bl.r) { igniteBarrel(bl, 0.05); dead = true; break; }
+    }
+    if (dead) { freeBullet(b); continue; }
+  }
+}
+
 function tryBolt(p) {
   p = p || ctxP || player;
   ctxP = p;
@@ -3380,7 +3667,9 @@ function updatePlayer(p, dt) {
   if (p.prismT <= 0) p.prismN = 0;
   p.velBuffT = Math.max(0, (p.velBuffT || 0) - dt);
   p.castCD = Math.max(0, (p.castCD || 0) - dt);
-  p.boltCD = Math.max(0, p.boltCD - dt);
+  p.gunCD = Math.max(0, (p.gunCD || 0) - dt);
+  p.heatT = Math.max(0, (p.heatT || 0) - dt);
+  if (p.heatT <= 0) p.heatN = 0; // OVERHEAT ramp decays when fire isn't sustained
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
   p.freezeCD = Math.max(0, p.freezeCD - dt);
@@ -3399,7 +3688,7 @@ function updatePlayer(p, dt) {
   p.energy = Math.min(p.maxEnergy, p.energy + CONFIG.energyRegen * (1 + boonPow("over") * 0.4) * dt);
 
   // actions
-  if (p.slashBuf > 0) { trySlash(p); if (p.slashT > 0 || (weaponDefP(p).isCaster && p.castCD > 0)) p.slashBuf = 0; }
+  if (p.slashBuf > 0) { trySlash(p); const Wp = weaponDefP(p); if (p.slashT > 0 || (Wp.isCaster && p.castCD > 0) || (Wp.isGun && p.gunCD > 0)) p.slashBuf = 0; }
   if (c.bolt && (state === "play" || state === "hub")) tryBolt(p);
   if (p.freezeBuf > 0) tryFreeze(p);
   if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
@@ -4362,6 +4651,9 @@ function step(dt) {
   // staff/wand spell projectiles (pooled): fireballs & icebolts
   updateSpells(dt);
 
+  // ballistic gun bullets (pooled): rifle rounds, scatter pellets
+  updateBullets(dt);
+
   // beams
   for (const bm of beams) bm.t -= dt;
   beams = beams.filter((bm) => bm.t > 0);
@@ -4476,6 +4768,7 @@ function drawLighting() {
   }
   for (const g of glaives) add(g.x, g.y, 50, g.col, 0.34);
   for (const s of spells) add(s.x, s.y, s.kind === "fire" ? 60 : 44, s.col, s.kind === "fire" ? 0.4 : 0.3);
+  for (const b of bullets) add(b.x, b.y, 30, b.col, 0.22);
   for (const b of pbolts) add(b.x, b.y, 46, "#ff66ee", 0.32);
   for (const b of ebolts) add(b.x, b.y, 40, b.col, 0.26);
   for (const z of zones) add(z.x, z.y, 64, "#ffaa44", 0.3);
@@ -5739,6 +6032,49 @@ function drawHeldWeapon(W, hx, hy, recoil, fl) {
       ctx.fillStyle = "#fff6a0";
       ctx.beginPath(); ctx.arc(fx + 6, 0, 1.6 + recoil * 1.5, 0, TAU); ctx.fill();
     }
+  } else if (W.id === "rifle") {
+    // AUTO-RIFLE: a slim carbine — body, barrel, mag, with a muzzle flash on recoil
+    ctx.lineWidth = 2.4; ctx.lineCap = "round";
+    ctx.fillRect(-4, -2, 12, 4);                 // receiver
+    ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(18 + recoil * 5, 0); ctx.stroke(); // barrel
+    ctx.fillRect(0, 2, 3, 5);                     // magazine
+    if (recoil > 0.25) {                          // muzzle flash + ejected shell
+      glow("#ffe6a0", 10);
+      ctx.fillStyle = "#fff3c8";
+      ctx.beginPath(); ctx.arc(19 + recoil * 5, 0, 2 + recoil * 2.4, 0, TAU); ctx.fill();
+      ctx.fillStyle = "#ffcf7a";
+      ctx.fillRect(2, -5 - recoil * 3, 1.6, 2.4);
+    }
+  } else if (W.id === "scatter") {
+    // SCATTERGUN: a stubby double-barrel with a wide muzzle that flares hard on fire
+    ctx.lineWidth = 3.2; ctx.lineCap = "round";
+    ctx.fillRect(-5, -3, 9, 6);                   // chunky receiver
+    for (const o of [-1.6, 1.6]) {                // twin short barrels
+      ctx.beginPath(); ctx.moveTo(4, o); ctx.lineTo(14 + recoil * 4, o); ctx.stroke();
+    }
+    if (recoil > 0.2) {
+      glow("#ffd29a", 12 + recoil * 8);
+      ctx.fillStyle = "#fff0d0";
+      ctx.beginPath();                            // cone of muzzle flash
+      ctx.moveTo(14 + recoil * 4, -4 - recoil * 3);
+      ctx.lineTo(22 + recoil * 8, 0);
+      ctx.lineTo(14 + recoil * 4, 4 + recoil * 3);
+      ctx.closePath(); ctx.fill();
+    }
+  } else if (W.id === "rail") {
+    // RAILGUN: a long heavy rail with twin rails and a charge coil that glows when fired
+    ctx.lineWidth = 2; ctx.lineCap = "round";
+    ctx.fillRect(-5, -3, 9, 6);                   // body
+    for (const o of [-2.4, 2.4]) {                // parallel rails
+      ctx.beginPath(); ctx.moveTo(4, o); ctx.lineTo(26 + recoil * 8, o); ctx.stroke();
+    }
+    glow(W.col, 8 + recoil * 14);
+    ctx.fillStyle = recoil > 0.3 ? "#eafaff" : "#7fd0ff";
+    ctx.beginPath(); ctx.arc(2, 0, 2.4 + recoil * 2.2, 0, TAU); ctx.fill(); // charge coil
+    if (recoil > 0.3) {                           // rail discharge arc at the muzzle
+      ctx.strokeStyle = "#eafaff"; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(26 + recoil * 8, -2.4); ctx.lineTo(30 + recoil * 8, 0); ctx.lineTo(26 + recoil * 8, 2.4); ctx.stroke();
+    }
   } else { // grav — gravity flail: short haft + orb on a chain
     ctx.lineWidth = 2; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(8, 0); ctx.stroke();
@@ -6117,6 +6453,26 @@ function drawBolts() {
   }
 }
 
+/* ballistic bullets: short metallic tracers (rifle rounds / scatter pellets) */
+function drawBullets() {
+  for (const b of bullets) {
+    bloomCircle(b.x, b.y, b.r * 3, b.col, 0.3);
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(b.ang);
+    glow(b.col, 9);
+    ctx.fillStyle = b.crit ? "#fff3c0" : "#f4f8ff";
+    // elongated tracer slug
+    ctx.beginPath();
+    ctx.ellipse(0, 0, b.r * 1.8, b.r * 0.7, 0, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = b.col;
+    ctx.beginPath(); ctx.ellipse(-b.r * 0.6, 0, b.r * 0.9, b.r * 0.45, 0, 0, TAU); ctx.fill();
+    noglow();
+    ctx.restore();
+  }
+}
+
 function drawBeamsParts() {
   for (const bm of beams) {
     ctx.save();
@@ -6217,20 +6573,20 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — HEAT CONTRACT" : "PRESS E — HEAT CONTRACT", t.heatX, t.heatY - 48);
   }
-  // ARMORY weapon rack (武器架): cycle weapon forms — 12 forms in a 4x3 grid
+  // ARMORY weapon rack (武器架): cycle weapon forms — 15 forms in a 5x3 grid
   const Wsel = weaponDef();
   glow(Wsel.col, 16);
   ctx.fillStyle = "#121a2c";
-  rrect(t.rackX - 60, t.rackY - 34, 120, 80, 8); ctx.fill();
+  rrect(t.rackX - 74, t.rackY - 34, 148, 80, 8); ctx.fill();
   ctx.strokeStyle = Wsel.col;
   ctx.lineWidth = 2.5;
-  rrect(t.rackX - 60, t.rackY - 34, 120, 80, 8); ctx.stroke();
+  rrect(t.rackX - 74, t.rackY - 34, 148, 80, 8); ctx.stroke();
   noglow();
-  const cols = 4;
+  const cols = 5;
   for (let i = 0; i < WEAPONS.length; i++) { // grid slots, current highlighted
     const w2 = WEAPONS[i];
     const sel = w2.id === curWeapon;
-    const cx = t.rackX + ((i % cols) - 1.5) * 28;
+    const cx = t.rackX + ((i % cols) - 2) * 28;
     const cy = t.rackY - 20 + Math.floor(i / cols) * 21;
     if (sel) glow(w2.col, 12);
     ctx.fillStyle = sel ? w2.col : "rgba(150,170,220,0.4)";
@@ -6711,9 +7067,9 @@ function drawTitle() {
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
-    "持法杖时挥砍键改为施放法术 — with a STAFF/WAND equipped, slash casts a spell",
+    "持法杖时挥砍键改为施放法术，持枪械则开火 — STAFF/WAND: slash casts a spell · GUN: slash fires the gun",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
-    "枢纽武器架：12 种武器形态（含 3 法杖）与战绩终端 — hub ARMORY: 12 weapon forms (incl. 3 staves) · STATS terminal",
+    "枢纽武器架：15 种武器形态（含 3 法杖与 3 枪械）与战绩终端 — hub ARMORY: 15 weapon forms (incl. 3 staves + 3 guns) · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -6722,10 +7078,10 @@ function drawTitle() {
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
-    "J 近战斩击／法杖施法 · 右Ctrl 发射光弹 — J slash or cast (staves) / Right-Ctrl bolt (LMB/RMB too)",
+    "J 近战斩击／法杖施法／枪械开火 · 右Ctrl 发射光弹 — J slash / cast (staves) / fire (guns) / Right-Ctrl bolt (LMB/RMB too)",
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
-    "枢纽武器架：12 种武器形态（含 3 法杖）与战绩终端 — hub ARMORY: 12 weapon forms (incl. 3 staves) · STATS terminal",
+    "枢纽武器架：15 种武器形态（含 3 法杖与 3 枪械）与战绩终端 — hub ARMORY: 15 weapon forms (incl. 3 staves + 3 guns) · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -7212,6 +7568,7 @@ function render() {
   drawPlayer();
   drawGlaives();
   drawSpells();
+  drawBullets();
   drawBolts();
   drawBeamsParts();
   drawFxRings();
