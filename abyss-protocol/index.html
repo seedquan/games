@@ -691,6 +691,24 @@ class AudioEngine {
       this.tone("sawtooth", 60, 28, t, 0.9, 0.24, true);
       this.tone("sawtooth", 88, 40, t + 0.18, 0.8, 0.2, true);
       this.noise(t, 1.0, 0.2, "lowpass", 700, 60);
+    } else if (kind === "overseer") {
+      // OVERSEER: cold scanning whine — rising laser shimmer over an electric hum
+      this.tone("sine", 1400, 2600, t, 0.7, 0.07, true);
+      this.tone("sawtooth", 220, 180, t, 0.6, 0.12, true);
+      this.tone("square", 660, 990, t + 0.1, 0.4, 0.05, false);
+      this.noise(t, 0.6, 0.1, "bandpass", 2600, 1800);
+    } else if (kind === "juggernaut") {
+      // JUGGERNAUT: massive metallic clang + sub-bass stomp
+      this.tone("square", 110, 50, t, 0.5, 0.2, true);
+      this.tone("sine", 60, 28, t, 0.9, 0.26, true);
+      this.noise(t, 0.4, 0.22, "lowpass", 1600, 120);
+      this.noise(t + 0.06, 0.18, 0.16, "bandpass", 2400, 900);
+    } else if (kind === "hexweaver") {
+      // HEXWEAVER: dissonant arcane chant — detuned dyad over a shimmering hiss
+      this.tone("sawtooth", 180, 300, t, 0.7, 0.13, true);
+      this.tone("sawtooth", 190, 320, t, 0.7, 0.1, true);
+      this.tone("sine", 880, 1320, t + 0.12, 0.5, 0.06, true);
+      this.noise(t, 0.7, 0.1, "highpass", 2400, 6000);
     } else {
       this.roar();
     }
@@ -995,6 +1013,10 @@ let pillars = [], doors = [], pickups = [], spawnQ = [], zones = [], toasts = []
 let waves = [], waveIdx = 0, roomClear = false, boss = null;
 let freezeT = 0, shakeT = 0, shakeA = 0, redFlash = 0, roomFade = 0;
 let mortars = [], novas = [], pedestals = [];
+/* boss telegraph FX (pooled): rotating laser sweeps + radial rune-zones.
+   sweeps: telegraphed rotating beam lines (OVERSEER).  used by no other system. */
+let sweeps = [], sweepPool = [];
+const SWEEP_CAP = 10;
 let shopRoom = false, pendingRoom = null, lastShopDepth = 0;
 let roomType = "normal";   // normal | boss | shop | treasure | fountain | challenge
 let challengeT = 0, challengeFailed = false, fountainUsed = false;
@@ -1665,6 +1687,9 @@ const BOSS_KINDS = [
   { kind: "summoner",  name: "VOIDCALLER",    col: "#bb66ff", r: 36, hp: 360, speed: 72 },
   { kind: "artillery", name: "LANCE-7",       col: "#ff8833", r: 38, hp: 380, speed: 55 },
   { kind: "splitter",  name: "MITOSIS PRIME", col: "#66ff88", r: 52, hp: 470, speed: 50 },
+  { kind: "overseer",  name: "OVERSEER 监视者",  col: "#33ddee", r: 40, hp: 430, speed: 58 },
+  { kind: "juggernaut",name: "JUGGERNAUT 重锤者", col: "#ffaa44", r: 50, hp: 540, speed: 52 },
+  { kind: "hexweaver", name: "HEXWEAVER 咒织者",  col: "#cc66ff", r: 38, hp: 410, speed: 64 },
 ];
 
 function spawnBoss(forceKind) {
@@ -1688,7 +1713,10 @@ function spawnBoss(forceKind) {
     contactCD: 0, spawnT: 0.4, tier, hard, gen: 0, frozenT: 0,
     burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
     strafe: Math.random() < 0.5 ? 1 : -1, tx: 0, ty: 0,
+    plates: 0, sweepA: 0,
   };
+  // JUGGERNAUT: armored plates that break off as HP drops, exposing the weak core
+  if (def.kind === "juggernaut") boss.plates = 4;
   bossName = def.name; bossBarMax = hp;
   enemies.push(boss);
   audio.bossRoar(def.kind);
@@ -1738,6 +1766,8 @@ function nearestEnemy(x, y, maxD) {
 function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (e.hp <= 0) return;
   let mul = isCrit ? 2.5 : 1;
+  // JUGGERNAUT: stripped armor plates expose the weak core — bonus damage when exposed
+  if (e.kind === "juggernaut" && e.plates !== undefined) mul *= 1 + 0.18 * (4 - e.plates);
   if (e.frozenT > 0) { // shatter: frozen targets take bonus damage
     const sp = ctxP || player;
     mul *= 1.3 + 0.4 * boonPow("shatter") + (sp ? sp.frozenBonus : 0);
@@ -2012,7 +2042,29 @@ function fireEbolt(x, y, a, spd, dmg, col, r) {
   ebolts.push({
     x, y, vx: Math.cos(a) * spd * slow, vy: Math.sin(a) * spd * slow,
     r: r || 6, t: 5, dmg: dmg * eDmgMul(), col: col || "#ff5577",
+    homing: 0, spd: 0,
   });
+}
+/* HEXWEAVER homing hex-orb: a slow ebolt that curves toward its target for a window,
+   then flies straight. Reuses the ebolt pool/update; `homing` is the turn-rate window. */
+function fireHexOrb(x, y, a, spd, dmg, col, r, homing) {
+  const slow = 1 - Math.min(0.6, 0.25 * boonPow("slow"));
+  const sp = spd * slow;
+  ebolts.push({
+    x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+    r: r || 7, t: 4.5, dmg: dmg * eDmgMul(), col: col || "#cc66ff",
+    homing: homing || 1.2, spd: sp,
+  });
+}
+/* OVERSEER laser sweep: a rotating telegraphed beam line. Pooled, capped.
+   warn → the line glows but is harmless; live → it damages players it crosses. */
+function addSweep(cx, cy, a0, sweepRate, len, dmg, col) {
+  if (sweeps.length >= SWEEP_CAP) return;
+  const s = sweepPool.pop() || {};
+  s.cx = cx; s.cy = cy; s.a = a0; s.rate = sweepRate; s.len = len;
+  s.dmg = dmg; s.col = col || "#33ddee";
+  s.warn = 0.7; s.live = 1.1; s.t = 0; s.hitCD = 0;
+  sweeps.push(s);
 }
 
 function addZone(x, y) {
@@ -2022,19 +2074,158 @@ function addZone(x, y) {
 /* ---------------- §M ROOMS / GEN ---------------- */
 function isBossDepth(d) { return d > 0 && d % CONFIG.bossEvery === 0; }
 
+/* ----- ARENA LAYOUTS -----
+   The combat room obstacle layout. Several themed configurations pick from a weighted
+   set scaling with depth, beyond the original random scatter. Every layout guarantees
+   fairness: the player spawn band (bottom-center) and top spawn band stay clear, pillars
+   never overlap, and a navigability check (open lanes + reachable center) gates the result.
+   Hazards (spikes/lasers/barrels) are layered on afterward by spawnHazards(). */
+const PILLAR_HUES = ["#223a66", "#2a2a55", "#1d3355"];
+function arenaHue() { return pick(PILLAR_HUES); }
+
+/* clear of both spawn bands? (player start bottom-center; enemy top-center) */
+function spawnBandsClear(x, y, r) {
+  const A = CONFIG;
+  if (dist(x, y, A.arenaW / 2, A.arenaH - 90) < r + 120) return false; // player spawn
+  if (dist(x, y, A.arenaW / 2, 150) < r + 110) return false;           // top spawn
+  return true;
+}
+/* try to add a pillar at (x,y,r); rejects spawn-band overlap & crowding. returns ok */
+function tryAddPillar(x, y, r, gap) {
+  const A = CONFIG;
+  if (x < r + 60 || x > A.arenaW - r - 60 || y < r + 80 || y > A.arenaH - r - 80) return false;
+  if (!spawnBandsClear(x, y, r)) return false;
+  const g = gap === undefined ? 80 : gap;
+  for (const p of pillars) if (dist(x, y, p.x, p.y) < r + p.r + g) return false;
+  pillars.push({ x, y, r, hue: arenaHue() });
+  return true;
+}
+
+/* original random scatter (also used for boss arenas: few/no pillars) */
 function genPillars(n) {
   pillars = [];
-  const A = CONFIG;
   let tries = 0;
   while (pillars.length < n && tries++ < 200) {
     const r = rand(26, 46);
-    const x = rand(r + 70, A.arenaW - r - 70);
-    const y = rand(r + 90, A.arenaH - r - 90);
-    if (dist(x, y, A.arenaW / 2, A.arenaH - 90) < r + 120) continue; // player spawn
-    if (dist(x, y, A.arenaW / 2, 150) < r + 110) continue;           // top spawn
-    let ok = true;
-    for (const p of pillars) if (dist(x, y, p.x, p.y) < r + p.r + 80) ok = false;
-    if (ok) pillars.push({ x, y, r, hue: pick(["#223a66", "#2a2a55", "#1d3355"]) });
+    const A = CONFIG;
+    tryAddPillar(rand(r + 70, A.arenaW - r - 70), rand(r + 90, A.arenaH - r - 90), r, 80);
+  }
+}
+
+/* central pillar cluster: a knot of obstacles in the middle, open perimeter to circle */
+function layoutCluster() {
+  const A = CONFIG, cx = A.arenaW / 2, cy = A.arenaH / 2 - 10;
+  const n = randi(3, 5);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU + rand(-0.3, 0.3);
+    const rr = rand(40, 95);
+    tryAddPillar(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr, rand(26, 40), 28);
+  }
+}
+/* symmetric columns: mirrored pairs left/right — readable lanes between */
+function layoutColumns() {
+  const A = CONFIG;
+  const rows = randi(2, 3);
+  const offX = rand(150, 230);
+  for (let i = 0; i < rows; i++) {
+    const y = lerp(170, A.arenaH - 170, rows === 1 ? 0.5 : i / (rows - 1));
+    const r = rand(28, 40);
+    tryAddPillar(A.arenaW / 2 - offX, y, r, 24);
+    tryAddPillar(A.arenaW / 2 + offX, y, r, 24);
+  }
+}
+/* corner cover: chunky blocks in the four corners, wide-open middle */
+function layoutCorners() {
+  const A = CONFIG, m = 150;
+  const spots = [[m, m + 30], [A.arenaW - m, m + 30], [m, A.arenaH - m - 30], [A.arenaW - m, A.arenaH - m - 30]];
+  for (const [x, y] of spots) tryAddPillar(x, y, rand(34, 46), 24);
+}
+/* open arena: nearly empty — relies on hazards for danger (handled by spawnHazards) */
+function layoutOpen() {
+  if (Math.random() < 0.5) tryAddPillar(CONFIG.arenaW / 2, CONFIG.arenaH / 2 - 10, rand(34, 46), 24);
+}
+/* maze-ish: staggered short walls (clusters of touching pillars) forming lanes */
+function layoutMaze() {
+  const A = CONFIG;
+  const cols = randi(2, 3);
+  for (let c = 0; c < cols; c++) {
+    const x = lerp(220, A.arenaW - 220, cols === 1 ? 0.5 : c / (cols - 1));
+    const segs = randi(2, 3);
+    const y0 = rand(160, 230);
+    for (let s = 0; s < segs; s++) {
+      tryAddPillar(x, y0 + s * 64 + (c % 2) * 40, rand(24, 32), 10);
+    }
+  }
+}
+/* pit/chasm-edged: a ring of pillars hugging the perimeter, open center (visual "edge") */
+function layoutPitEdge() {
+  const A = CONFIG;
+  const n = randi(5, 7);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU + rand(-0.2, 0.2);
+    const rx = A.arenaW / 2 + Math.cos(a) * (A.arenaW * 0.36);
+    const ry = A.arenaH / 2 + Math.sin(a) * (A.arenaH * 0.32);
+    tryAddPillar(rx, ry, rand(26, 38), 18);
+  }
+}
+
+const ARENA_LAYOUTS = [
+  { fn: genPillars, scatter: true }, // handled specially (needs a count)
+  { fn: layoutCluster },
+  { fn: layoutColumns },
+  { fn: layoutCorners },
+  { fn: layoutOpen },
+  { fn: layoutMaze },
+  { fn: layoutPitEdge },
+];
+
+/* navigability check: enough open floor + clear vertical lane somewhere so the player
+   can always reach the fight. Conservative — rejects pathological dense layouts. */
+function arenaNavigable() {
+  const A = CONFIG;
+  // total obstacle coverage must stay modest
+  let area = 0;
+  for (const p of pillars) area += Math.PI * p.r * p.r;
+  if (area > A.arenaW * A.arenaH * 0.22) return false;
+  // at least one wide vertical lane (a 70px-radius corridor top→bottom) must be open
+  for (let x = 120; x <= A.arenaW - 120; x += 40) {
+    let open = true;
+    for (const p of pillars) {
+      if (Math.abs(p.x - x) < p.r + 30) { open = false; break; }
+    }
+    if (open) return true;
+  }
+  return false;
+}
+
+/* build the combat-room obstacle layout: pick a layout (weighted, depth-scaled),
+   generate it, then verify navigability — falling back to a safe scatter if needed. */
+function genArena(d) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    pillars = [];
+    if (attempt >= 3) { genPillars(randi(2, 4)); break; } // guaranteed-safe fallback
+    // weight: early depths favor simpler open/scatter; deeper favors structured layouts
+    let choice;
+    const roll = Math.random();
+    if (d <= 2) choice = roll < 0.5 ? "scatter" : (roll < 0.7 ? "open" : "corners");
+    else {
+      const r = Math.random();
+      if (r < 0.20) choice = "scatter";
+      else if (r < 0.34) choice = "cluster";
+      else if (r < 0.48) choice = "columns";
+      else if (r < 0.62) choice = "corners";
+      else if (r < 0.74) choice = "open";
+      else if (r < 0.88) choice = "maze";
+      else choice = "pit";
+    }
+    if (choice === "scatter") genPillars(randi(2, 5));
+    else if (choice === "cluster") layoutCluster();
+    else if (choice === "columns") layoutColumns();
+    else if (choice === "corners") layoutCorners();
+    else if (choice === "open") layoutOpen();
+    else if (choice === "maze") layoutMaze();
+    else layoutPitEdge();
+    if (arenaNavigable()) break;
   }
 }
 
@@ -2071,6 +2262,21 @@ function buildWaves(d) {
   }
 }
 
+/* a point inside the arena not overlapping any pillar — always returns something
+   (scans a grid, picks the open cell furthest from any obstacle). */
+function clearSpawnPoint() {
+  const A = CONFIG;
+  let best = { x: A.arenaW / 2, y: A.arenaH / 2 }, bestD = -1;
+  for (let gx = 90; gx <= A.arenaW - 90; gx += 60) {
+    for (let gy = 110; gy <= A.arenaH - 90; gy += 60) {
+      let md = 1e9;
+      for (const p of pillars) md = Math.min(md, dist(gx, gy, p.x, p.y) - p.r);
+      if (md > bestD) { bestD = md; best = { x: gx, y: gy }; }
+    }
+  }
+  return best;
+}
+
 function queueWave(list) {
   eliteSpawned = false; // one elite per wave in elite rooms
   let cx = rand(180, CONFIG.arenaW - 180), cy = rand(140, CONFIG.arenaH - 200);
@@ -2082,6 +2288,7 @@ function queueWave(list) {
       ok = dist(x, y, player.x, player.y) > 170;
       for (const p of pillars) if (dist(x, y, p.x, p.y) < p.r + 30) ok = false;
     }
+    if (!ok) { const f = clearSpawnPoint(); x = f.x; y = f.y; } // guaranteed never inside a wall
     spawnQ.push({ type, x, y, t: rand(0.7, 1.1) });
     if (Math.random() < 0.35) { cx = rand(180, CONFIG.arenaW - 180); cy = rand(140, CONFIG.arenaH - 200); }
   }
@@ -2252,9 +2459,24 @@ function updateHazards(dt) {
     }
   }
   quakes = quakes.filter((q) => q.t > 0);
+  // HEXWEAVER temporary barriers: tick down & dissolve (pillars with a ttl field)
+  let pillarDirty = false;
+  for (const pl of pillars) {
+    if (pl.ttl !== undefined) {
+      pl.ttl -= dt;
+      if (pl.ttl <= 0) { pillarDirty = true; burst(pl.x, pl.y, "#cc88ff", 12, 220, 0.4, 3); }
+    }
+  }
+  if (pillarDirty) pillars = pillars.filter((pl) => pl.ttl === undefined || pl.ttl > 0);
   // melee swing trail afterimages
   for (const g of slashGhosts) g.t -= dt;
   slashGhosts = slashGhosts.filter((g) => g.t > 0);
+}
+
+/* recycle any live boss laser sweeps back to the pool (room/run reset) */
+function clearSweeps() {
+  for (const s of sweeps) if (sweepPool.length < SWEEP_CAP) sweepPool.push(s);
+  sweeps.length = 0;
 }
 
 /* recycle any in-flight glaives to the pool and clear per-player flight locks */
@@ -2279,6 +2501,7 @@ function clearBullets() {
 function genRoom() {
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; mortars = []; novas = []; pedestals = []; boss = null;
+  clearSweeps();
   clearGlaives();
   clearSpells();
   clearBullets();
@@ -2330,7 +2553,7 @@ function genRoom() {
     spawnBoss();
     waveIdx = 1;
   } else {
-    genPillars(randi(2, 5));
+    genArena(depth);
     spawnHazards(false);
     buildWaves(depth);
     if (roomType === "challenge") {
@@ -2576,6 +2799,7 @@ function enterHub() {
   mortars = []; novas = []; pedestals = []; shopRoom = false; pendingRoom = null;
   hazards = []; barrels = []; quakes = []; slashGhosts = []; runTrack = [];
   singularities = []; lights = []; motes = []; ffx.rings = []; ffx.shocks = []; ffx.traumaV = 0;
+  clearSweeps();
   clearGlaives();
   clearSpells();
   clearBullets();
@@ -4092,6 +4316,9 @@ function updateEnemy(e, dt) {
     if (e.kind === "summoner") updateBossSummoner(e, dt, d);
     else if (e.kind === "artillery") updateBossArtillery(e, dt, d);
     else if (e.kind === "splitter") updateBossSplitter(e, dt, d);
+    else if (e.kind === "overseer") updateBossOverseer(e, dt, d);
+    else if (e.kind === "juggernaut") updateBossJuggernaut(e, dt, d);
+    else if (e.kind === "hexweaver") updateBossHexweaver(e, dt, d);
     else updateBoss(e, dt, d);
   }
 
@@ -4111,7 +4338,7 @@ function updateEnemy(e, dt) {
   if ((e.gravSlow || 0) > 0) { e.vx *= 0.45; e.vy *= 0.45; } // EVENT HORIZON: pulled foes are sluggish
   if ((e.iceSlowT || 0) > 0) { e.iceSlowT -= dt; e.vx *= (1 - (e.iceSlow || 0)); e.vy *= (1 - (e.iceSlow || 0)); } // FROST WAND chill
   e.x += e.vx * dt; e.y += e.vy * dt;
-  if (!(e.type === "boss" && e.state === "dash")) collidePillars(e);
+  if (!(e.type === "boss" && (e.state === "dash" || e.state === "charge"))) collidePillars(e);
   collideArena(e);
   // separation
   for (const o of enemies) {
@@ -4384,6 +4611,265 @@ function updateBossSplitter(e, dt, d) {
   }
 }
 
+/* --- OVERSEER: hovering eye-sentinel — rotating laser sweeps, turret-drone summons,
+   radial bullet bloom. Phase 2 fires DUAL opposed sweeps and faster blooms.
+   Telegraphs: sweep beams glow before they cut; bloom flashes a ring before firing. --- */
+function updateBossOverseer(e, dt, d) {
+  const p = e._tgt || targetFor(e) || player;
+  const phase2 = e.hp < e.maxHp * 0.5;
+  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.82 : 1) * (e.enraged ? 0.65 : 1);
+  e.rot += dt * (e.state === "bloom" ? 4 : 1.4);
+  e.cd = Math.max(0, e.cd - dt);
+  if (e.state === "move") {
+    // hover at mid range, gently strafing so its sweeps come from varied angles
+    const v = seekVec(e, p.x, p.y);
+    const want = d > 340 ? 0.7 : (d < 230 ? -0.7 : 0.1);
+    e.vx = lerp(e.vx, (v.x * want - v.y * 0.5 * e.strafe) * e.speed, 3 * dt);
+    e.vy = lerp(e.vy, (v.y * want + v.x * 0.5 * e.strafe) * e.speed, 3 * dt);
+    if (Math.random() < dt * 0.3) e.strafe *= -1;
+    if (e.cd <= 0) {
+      e.atk = (e.atk + 1) % 3;
+      e.sub = 0;
+      if (e.atk === 0) { e.state = "sweep"; e.t = 0.45; }
+      else if (e.atk === 1) { e.state = "summon"; e.t = 0.8; audio.bossRoar("overseer"); }
+      else { e.state = "bloom"; e.t = 0.7; }
+    }
+  } else if (e.state === "sweep") {
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const len = 640 + e.tier * 20;
+      const dmg = 12;
+      const base = angTo(e.x, e.y, p.x, p.y);
+      const rate = (phase2 ? 1.5 : 1.1) * (e.hard ? 1.25 : 1) * (Math.random() < 0.5 ? 1 : -1);
+      addSweep(e.x, e.y, base - rate * 0.5, rate, len, dmg, "#33ddee");
+      if (phase2 || e.hard) addSweep(e.x, e.y, base + Math.PI - rate * 0.5, rate, len, dmg, "#33ddee"); // dual opposed
+      audio.bolt();
+      shake(3, 0.12);
+      e.state = "move"; e.cd = (phase2 ? 1.6 : 2.3) * cdm;
+    }
+  } else if (e.state === "summon") {
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const n = (phase2 ? 3 : 2) + (e.hard ? 1 : 0);
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU + e.rot;
+        const x = clamp(e.x + Math.cos(a) * 120, 50, CONFIG.arenaW - 50);
+        const y = clamp(e.y + Math.sin(a) * 120, 50, CONFIG.arenaH - 50);
+        spawnQ.push({ type: "shooter", x, y, t: 0.8 }); // turret-drones
+      }
+      e.state = "move"; e.cd = rand(2.4, 3.0) * cdm;
+    }
+  } else if (e.state === "bloom") {
+    e.vx *= 0.92; e.vy *= 0.92;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const volleys = (phase2 ? 3 : 2) + (e.hard ? 1 : 0);
+      const n = 18 + e.tier * 2;
+      const baseA = e.rot + e.sub * 0.16;
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 175 + e.tier * 10, 10, "#7fe8ff", 6);
+      audio.bolt();
+      shake(3, 0.12);
+      e.sub++;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = (phase2 ? 1.7 : 2.4) * cdm; }
+      else e.t = 0.4;
+    }
+  }
+  enemyContact(e, 12, dt);
+}
+
+/* --- JUGGERNAUT: heavy armored brute — telegraphed charge-dashes (leave a shockwave),
+   ground-pound slams with expanding rings, hurls debris arcs. Armor plates break off
+   as HP drops, exposing the weak core (more damage taken when plates gone). --- */
+function updateBossJuggernaut(e, dt, d) {
+  // shed armor plates at HP thresholds: 4 plates -> 0 over the fight
+  const wantPlates = Math.max(0, Math.ceil(4 * (e.hp / e.maxHp)));
+  if (wantPlates < e.plates) {
+    e.plates = wantPlates;
+    burst(e.x, e.y, "#cc9966", 18, 280, 0.6, 4);
+    ffx.ring(e.x, e.y, e.r + 24, "#ffcc88", 0.4, 5);
+    shake(5, 0.2);
+    audio.heatClunk();
+    toast(e.plates > 0 ? "ARMOR BREAKS — 装甲碎裂!" : "CORE EXPOSED — 核心暴露!", "#ffcc88");
+  }
+  const p = e._tgt || targetFor(e) || player;
+  const phase2 = e.hp < e.maxHp * 0.5;
+  const cdm = (e.hard ? 0.75 : 1) * (e.enraged ? 0.65 : 1);
+  e.rot += dt * 0.6;
+  e.cd = Math.max(0, e.cd - dt);
+  if (e.state === "move") {
+    const v = seekVec(e, p.x, p.y);
+    e.vx = lerp(e.vx, v.x * e.speed, 3 * dt);
+    e.vy = lerp(e.vy, v.y * e.speed, 3 * dt);
+    enemyContact(e, 13, dt);
+    if (e.cd <= 0) {
+      e.atk = (e.atk + 1) % 3;
+      e.sub = 0;
+      if (e.atk === 0) { e.state = "wind"; e.t = 0.6; }       // charge-dash wind-up (telegraph line)
+      else if (e.atk === 1) { e.state = "slam"; e.t = 0.85; } // ground-pound
+      else { e.state = "hurl"; e.t = 0.65; }                  // debris toss
+    }
+  } else if (e.state === "wind") {
+    e.vx *= 0.86; e.vy *= 0.86;
+    if (e.t > 0.18) { const v = seekVec(e, p.x, p.y); e.dirX = v.x; e.dirY = v.y; }
+    e.t -= dt;
+    if (e.t <= 0) {
+      e.state = "charge"; e.t = 0.55;
+      const spd = 540 + e.tier * 30;
+      e.vx = e.dirX * spd; e.vy = e.dirY * spd;
+      audio.dash();
+    }
+  } else if (e.state === "charge") {
+    e.t -= dt;
+    enemyContact(e, 18, dt);
+    addPart({ x: e.x + rand(-22, 22), y: e.y + rand(-22, 22), vx: 0, vy: 0, t: 0.32, tm: 0.32, col: "#ffaa44", r: rand(3, 6), drag: 1 });
+    const A = CONFIG;
+    if (e.x < 80 || e.x > A.arenaW - 80 || e.y < 80 || e.y > A.arenaH - 80 || e.t <= 0) {
+      // slam to a stop, leaving a shockwave ring of bolts
+      burst(e.x, e.y, e.col, 28, 320, 0.5, 4);
+      shake(8, 0.35);
+      audio.enemyDie(true);
+      const n = 12 + (phase2 ? 4 : 0) + (e.hard ? 4 : 0);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 210, 9, "#ffcc88", 7);
+      e.state = "move"; e.cd = rand(1.3, 1.9) * cdm; e.vx *= 0.15; e.vy *= 0.15;
+    }
+  } else if (e.state === "slam") {
+    e.vx *= 0.85; e.vy *= 0.85;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const R = 120 + e.r;
+      burst(e.x, e.y, e.col, 34, 360, 0.6, 4);
+      ffx.ring(e.x, e.y, R, "#ffcc88", 0.5, 6);
+      shake(9, 0.4);
+      audio.enemyDie(true);
+      damagePlayersInRadius(e.x, e.y, R, 20 * eDmgMul(), e);
+      // expanding ring of debris bolts after the pound
+      const n = 16 + e.tier * 2 + (phase2 ? 4 : 0);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU, 200 + (phase2 ? 40 : 0), 10, "#ffcc88", 7);
+      e.state = "move"; e.cd = rand(1.8, 2.4) * cdm;
+    }
+  } else if (e.state === "hurl") {
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      // hurl an arc of heavy debris toward the target
+      const a0 = angTo(e.x, e.y, p.x, p.y);
+      const k = 5 + (phase2 ? 2 : 0) + (e.hard ? 1 : 0);
+      for (let i = 0; i < k; i++) {
+        fireEbolt(e.x, e.y, a0 + (i - (k - 1) / 2) * 0.22, 300 + e.tier * 12, 12, "#ffbb66", 8);
+      }
+      audio.bolt();
+      shake(4, 0.15);
+      e.state = "move"; e.cd = rand(1.6, 2.2) * cdm;
+    }
+  }
+}
+
+/* --- HEXWEAVER: caster — conjures telegraphed AoE rune-zones (reuses the mortar
+   system), fires homing hex-orbs, raises temporary barriers + adds. Punishes standing
+   still: rune-zones drop where the player is. Phase 2 lays overlapping rune patterns. --- */
+function updateBossHexweaver(e, dt, d) {
+  const p = e._tgt || targetFor(e) || player;
+  const phase2 = e.hp < e.maxHp * 0.5;
+  const cdm = (e.hard ? 0.75 : 1) * (phase2 ? 0.84 : 1) * (e.enraged ? 0.65 : 1);
+  e.rot += dt * 1.8;
+  e.cd = Math.max(0, e.cd - dt);
+  if (e.state === "move") {
+    // keep distance, weaving — never sits still
+    const v = seekVec(e, p.x, p.y);
+    const want = d < 300 ? -0.9 : (d > 440 ? 0.6 : 0.1);
+    e.vx = lerp(e.vx, (v.x * want - v.y * 0.7 * e.strafe) * e.speed, 3 * dt);
+    e.vy = lerp(e.vy, (v.y * want + v.x * 0.7 * e.strafe) * e.speed, 3 * dt);
+    if (Math.random() < dt * 0.4) e.strafe *= -1;
+    if (e.cd <= 0) {
+      e.atk = (e.atk + 1) % 3;
+      e.sub = 0;
+      if (e.atk === 0) { e.state = "runes"; e.t = 0.55; audio.bossRoar("hexweaver"); }
+      else if (e.atk === 1) { e.state = "hex"; e.t = 0.7; }
+      else { e.state = "ward"; e.t = 0.8; }
+    }
+  } else if (e.state === "runes") {
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      // drop rune-zones (telegraphed AoE) on/around each living player — punishes standing still
+      const k = (phase2 ? 4 : 3) + (e.hard ? 1 : 0);
+      for (const tp of players) {
+        if (tp.downed || tp.hp <= 0) continue;
+        for (let i = 0; i < k; i++) {
+          const ox = i === 0 ? 0 : rand(-150, 150);
+          const oy = i === 0 ? 0 : rand(-130, 130);
+          const tt = 1.0 + i * 0.1;
+          mortars.push({
+            x: clamp(tp.x + ox, 50, CONFIG.arenaW - 50),
+            y: clamp(tp.y + oy, 50, CONFIG.arenaH - 50),
+            r: 62, t: tt, tm: tt, dmg: 15, col: e.col,
+          });
+        }
+      }
+      if (phase2) { // overlapping ring of runes around the weaver
+        const ring = 6;
+        for (let i = 0; i < ring; i++) {
+          const a = (i / ring) * TAU + e.rot;
+          const tt = 1.2;
+          mortars.push({
+            x: clamp(e.x + Math.cos(a) * 150, 50, CONFIG.arenaW - 50),
+            y: clamp(e.y + Math.sin(a) * 150, 50, CONFIG.arenaH - 50),
+            r: 58, t: tt, tm: tt, dmg: 14, col: e.col,
+          });
+        }
+      }
+      audio.bolt();
+      e.state = "move"; e.cd = rand(1.8, 2.4) * cdm;
+    }
+  } else if (e.state === "hex") {
+    e.vx *= 0.92; e.vy *= 0.92;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const volleys = (phase2 ? 2 : 1) + (e.hard ? 1 : 0);
+      const n = 3 + (phase2 ? 1 : 0);
+      const a0 = angTo(e.x, e.y, p.x, p.y);
+      for (let i = 0; i < n; i++) {
+        fireHexOrb(e.x, e.y, a0 + (i - (n - 1) / 2) * 0.4, 150 + e.tier * 8, 12, "#dd88ff", 8, 1.4);
+      }
+      audio.bolt();
+      e.sub++;
+      if (e.sub >= volleys) { e.state = "move"; e.cd = rand(1.6, 2.2) * cdm; }
+      else e.t = 0.4;
+    }
+  } else if (e.state === "ward") {
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      // raise a couple of temporary barriers (timed pillars) + summon adds behind them
+      const k = phase2 ? 3 : 2;
+      for (let i = 0; i < k; i++) {
+        for (let tries = 0; tries < 18; tries++) {
+          const a = rand(0, TAU), rr = rand(110, 200);
+          const bx = clamp(e.x + Math.cos(a) * rr, 90, CONFIG.arenaW - 90);
+          const by = clamp(e.y + Math.sin(a) * rr, 110, CONFIG.arenaH - 110);
+          if (pointInPillar(bx, by, 40)) continue;
+          if (dist(bx, by, CONFIG.arenaW / 2, CONFIG.arenaH - 90) < 130) continue;
+          if (dist(bx, by, p.x, p.y) < 70) continue;
+          pillars.push({ x: bx, y: by, r: 30, hue: "#3a2255", ttl: 6 + (phase2 ? 3 : 0), maxTtl: 6 + (phase2 ? 3 : 0) });
+          break;
+        }
+      }
+      const adds = (phase2 ? 3 : 2) + (e.hard ? 1 : 0);
+      for (let i = 0; i < adds; i++) {
+        const a = (i / adds) * TAU + e.rot;
+        const x = clamp(e.x + Math.cos(a) * 120, 50, CONFIG.arenaW - 50);
+        const y = clamp(e.y + Math.sin(a) * 120, 50, CONFIG.arenaH - 50);
+        spawnQ.push({ type: Math.random() < 0.5 ? "swarmer" : "chaser", x, y, t: 0.8 });
+      }
+      audio.bossRoar("hexweaver");
+      e.state = "move"; e.cd = rand(2.2, 3.0) * cdm;
+    }
+  }
+  enemyContact(e, 12, dt);
+}
+
 /* ---------------- §R UPDATE: WORLD ---------------- */
 function step(dt) {
   timeNow += dt;
@@ -4546,6 +5032,17 @@ function step(dt) {
 
   // enemy bolts
   for (const b of ebolts) {
+    // HEXWEAVER hex-orbs curve toward the nearest player while their homing window lasts
+    if (b.homing > 0) {
+      b.homing -= dt;
+      const tp = nearestPlayer(b.x, b.y, false);
+      if (tp) {
+        const desired = angTo(b.x, b.y, tp.x, tp.y);
+        const cur = Math.atan2(b.vy, b.vx);
+        const na = cur + clamp(angDiff(cur, desired), -2.6 * dt, 2.6 * dt);
+        b.vx = Math.cos(na) * b.spd; b.vy = Math.sin(na) * b.spd;
+      }
+    }
     b.x += b.vx * dt; b.y += b.vy * dt;
     b.t -= dt;
     const A = CONFIG;
@@ -4596,6 +5093,32 @@ function step(dt) {
     }
   }
   mortars = mortars.filter((m) => m.t > 0);
+
+  // OVERSEER laser sweeps: rotate, telegraph, then damage players the live beam crosses
+  for (const s of sweeps) {
+    s.t += dt;
+    s.a += s.rate * dt;
+    s.hitCD = Math.max(0, s.hitCD - dt);
+    if (s.t >= s.warn && s.t < s.warn + s.live && s.hitCD <= 0) {
+      const ex = s.cx + Math.cos(s.a) * s.len, ey = s.cy + Math.sin(s.a) * s.len;
+      for (const p of players) {
+        if (p.downed || p.hp <= 0) continue;
+        if (p.ifr > 0 || p.hurtT > 0) continue;
+        const sd = segDist(p.x, p.y, s.cx, s.cy, ex, ey);
+        if (sd.d < 9 + p.r) {
+          damagePlayer(s.dmg * eDmgMul(), angTo(sd.cx, sd.cy, p.x, p.y), null, p);
+          s.hitCD = 0.45;
+          break;
+        }
+      }
+    }
+  }
+  for (let i = sweeps.length - 1; i >= 0; i--) {
+    if (sweeps[i].t >= sweeps[i].warn + sweeps[i].live) {
+      if (sweepPool.length < SWEEP_CAP) sweepPool.push(sweeps[i]);
+      sweeps.splice(i, 1);
+    }
+  }
 
   // freeze novas (visual rings)
   for (const nv of novas) nv.t -= dt;
@@ -4721,13 +5244,27 @@ function rrect(x, y, w, h, r) {
   ctx.closePath();
 }
 
+/* biome tints by depth range — deeper sectors look distinct (floor/grid/center light).
+   Hub keeps the default cold blue. Purely visual; doesn't affect collision/gameplay. */
+const BIOMES = [
+  { floor: "#070720", grid: "rgba(70,80,160,0.13)",  light: "rgba(60,70,160,0.10)" },  // 0: SURFACE (cold blue)
+  { floor: "#0a0518", grid: "rgba(150,80,170,0.12)", light: "rgba(150,70,180,0.10)" }, // 1: VOID (violet)
+  { floor: "#0a0712", grid: "rgba(190,90,60,0.12)",  light: "rgba(190,90,50,0.10)" },  // 2: FORGE (amber/red)
+  { floor: "#04140f", grid: "rgba(60,180,140,0.12)", light: "rgba(50,180,140,0.10)" }, // 3: REACTOR (teal/green)
+  { floor: "#0f0510", grid: "rgba(210,70,110,0.13)", light: "rgba(210,60,110,0.11)" }, // 4: ABYSS (crimson)
+];
+function biomeForDepth(d) {
+  if (d <= 0) return BIOMES[0];
+  return BIOMES[Math.min(BIOMES.length - 1, Math.floor((d - 1) / 4) + 1)];
+}
 function drawArenaFloor() {
   const A = CONFIG;
+  const bi = state === "hub" ? BIOMES[0] : biomeForDepth(depth);
   // floor
-  ctx.fillStyle = "#070720";
+  ctx.fillStyle = bi.floor;
   ctx.fillRect(0, 0, A.arenaW, A.arenaH);
   // grid
-  ctx.strokeStyle = "rgba(70,80,160,0.13)";
+  ctx.strokeStyle = bi.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (let x = 60; x < A.arenaW; x += 60) { ctx.moveTo(x, 0); ctx.lineTo(x, A.arenaH); }
@@ -4735,7 +5272,7 @@ function drawArenaFloor() {
   ctx.stroke();
   // soft center light
   const g = ctx.createRadialGradient(A.arenaW / 2, A.arenaH / 2, 50, A.arenaW / 2, A.arenaH / 2, A.arenaW * 0.7);
-  g.addColorStop(0, "rgba(60,70,160,0.10)");
+  g.addColorStop(0, bi.light);
   g.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, A.arenaW, A.arenaH);
@@ -4772,6 +5309,9 @@ function drawLighting() {
   for (const b of pbolts) add(b.x, b.y, 46, "#ff66ee", 0.32);
   for (const b of ebolts) add(b.x, b.y, 40, b.col, 0.26);
   for (const z of zones) add(z.x, z.y, 64, "#ffaa44", 0.3);
+  for (const s of sweeps) { // OVERSEER beam emitter glow when live
+    if (s.t >= s.warn && s.t < s.warn + s.live) add(s.cx, s.cy, 70, s.col, 0.3);
+  }
   for (const nv of novas) {
     const pr = 1 - clamp(nv.t / nv.tm, 0, 1);
     add(nv.x, nv.y, lerp(40, nv.maxR, pr), nv.col || "#aaeeff", (1 - pr) * 0.5);
@@ -4892,6 +5432,35 @@ function drawFxRings() {
 
 function drawPillars() {
   for (const p of pillars) {
+    const tmp = p.ttl !== undefined;
+    ctx.save();
+    if (tmp) {
+      // HEXWEAVER ward barrier: pulsing arcane sigil; fades as it expires
+      const lifeIn = clamp((p.maxTtl - p.ttl) / 0.5, 0, 1);
+      const lifeOut = clamp(p.ttl / 0.6, 0, 1);
+      ctx.globalAlpha = Math.min(lifeIn, lifeOut);
+      glow("#cc66ff", 12 + 4 * Math.sin(timeNow * 6));
+      ctx.fillStyle = p.hue;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+      noglow();
+      ctx.strokeStyle = "rgba(204,136,255,0.7)";
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.stroke();
+      ctx.save();
+      ctx.translate(p.x, p.y); ctx.rotate(timeNow * 1.5);
+      ctx.strokeStyle = "rgba(230,180,255,0.45)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * TAU;
+        if (i === 0) ctx.moveTo(Math.cos(a) * p.r * 0.6, Math.sin(a) * p.r * 0.6);
+        else ctx.lineTo(Math.cos(a) * p.r * 0.6, Math.sin(a) * p.r * 0.6);
+      }
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+      ctx.restore();
+      continue;
+    }
     glow("#3355ff", 10);
     ctx.fillStyle = p.hue;
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
@@ -4901,6 +5470,7 @@ function drawPillars() {
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.stroke();
     ctx.strokeStyle = "rgba(110,140,255,0.18)";
     ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.62, 0, TAU); ctx.stroke();
+    ctx.restore();
   }
 }
 
@@ -5028,6 +5598,33 @@ function drawZonesAndPickups() {
       ctx.fillRect(pk.x - 2, pk.y + bob - 6, 4, 12);
     }
     noglow();
+  }
+}
+
+/* OVERSEER laser sweeps: dashed warning line while arming, solid hot beam when live */
+function drawSweeps() {
+  for (const s of sweeps) {
+    const ex = s.cx + Math.cos(s.a) * s.len, ey = s.cy + Math.sin(s.a) * s.len;
+    const live = s.t >= s.warn && s.t < s.warn + s.live;
+    ctx.save();
+    if (live) {
+      glow(s.col, 16);
+      ctx.strokeStyle = s.col;
+      ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(ex, ey); ctx.stroke();
+      noglow();
+    } else {
+      const p = clamp(s.t / s.warn, 0, 1);
+      ctx.globalAlpha = 0.25 + p * 0.55;
+      ctx.strokeStyle = s.col;
+      ctx.lineWidth = 2 + p * 2;
+      ctx.setLineDash([12, 9]);
+      ctx.beginPath(); ctx.moveTo(s.cx, s.cy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
   }
 }
 
@@ -5309,6 +5906,135 @@ function drawBossBody(e, fl, col, dark, detail) {
       ctx.beginPath(); ctx.arc(Math.cos(a) * sep, Math.sin(a) * sep, e.r * 0.16, 0, TAU); ctx.fill();
     }
     noglow();
+  } else if (e.kind === "overseer") {
+    // OVERSEER — hovering eye-sentinel: a big iris ringed by orbiting sensor lenses;
+    // the iris narrows & the ring spins up when it sweeps or blooms.
+    const charge = (e.state === "sweep") ? (1 - clamp(e.t / 0.45, 0, 1))
+      : (e.state === "bloom") ? (1 - clamp(e.t / 0.7, 0, 1)) : 0;
+    const nL = detail ? 8 : 4;
+    ctx.save();
+    ctx.rotate(e.rot * (0.6 + charge));
+    glow(col, 7 + charge * 14);
+    ctx.fillStyle = col;
+    for (let i = 0; i < nL; i++) {
+      const a = (i / nL) * TAU;
+      const orb = e.r + 14;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * orb, Math.sin(a) * orb, detail ? 4.5 : 3.5, 0, TAU);
+      ctx.fill();
+    }
+    noglow();
+    ctx.restore();
+    // segmented outer iris ring
+    ctx.save();
+    ctx.rotate(-e.rot * 0.7);
+    ctx.strokeStyle = col; ctx.lineWidth = 3 + charge * 2;
+    glow(col, 5 + charge * 10);
+    ctx.beginPath();
+    for (let i = 0; i < 8; i++) {
+      const a0 = (i / 8) * TAU, a1 = a0 + TAU / 12;
+      ctx.moveTo(Math.cos(a0) * (e.r + 6), Math.sin(a0) * (e.r + 6));
+      ctx.arc(0, 0, e.r + 6, a0, a1);
+    }
+    ctx.stroke();
+    noglow();
+    ctx.restore();
+    // sclera + iris; pupil narrows (slit) while charging a sweep/bloom
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.8, 0, TAU); ctx.fill();
+    glow(charge > 0 ? "#bff6ff" : col, 6 + charge * 16);
+    ctx.fillStyle = fl ? "#ffffff" : "#bdf3ff";
+    ctx.beginPath(); ctx.arc(0, 0, e.r * 0.5, 0, TAU); ctx.fill();
+    noglow();
+    // pupil: round at rest, vertical slit when charging, tracks the target
+    ctx.fillStyle = dark;
+    ctx.save();
+    ctx.rotate(aimP + Math.PI / 2);
+    const pw = e.r * (0.34 - charge * 0.24), ph = e.r * (0.34 + charge * 0.12);
+    ctx.beginPath(); ctx.ellipse(0, 0, Math.max(2, pw), ph, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+  } else if (e.kind === "juggernaut") {
+    // JUGGERNAUT — heavy armored brute: a blocky hull plated in armor segments that
+    // visibly break off as it loses HP, exposing a glowing weak core. Hunkers on slams.
+    const pound = (e.state === "slam") ? (1 - clamp(e.t / 0.85, 0, 1)) : 0;
+    const brace = (e.state === "wind") ? (1 - clamp(e.t / 0.6, 0, 1)) : 0;
+    const mv = (e.state === "charge" || e.state === "wind") ? Math.atan2(e.dirY, e.dirX) : aimP;
+    ctx.save();
+    ctx.rotate(mv);
+    ctx.scale(1 + brace * 0.1, 1 - brace * 0.08);
+    // hull
+    ctx.fillStyle = "#7a4410";
+    rrect(-e.r * 0.85, -e.r * 0.85, e.r * 1.7, e.r * 1.7, 10); ctx.fill();
+    ctx.fillStyle = col;
+    rrect(-e.r * 0.7, -e.r * 0.7, e.r * 1.4, e.r * 1.4, 8); ctx.fill();
+    // armor plates around the rim — one wedge per remaining plate (break off as HP drops)
+    ctx.fillStyle = col;
+    glow(col, 6);
+    for (let i = 0; i < 4; i++) {
+      if (i >= e.plates) continue;
+      const a = (i / 4) * TAU + Math.PI / 4;
+      ctx.save();
+      ctx.rotate(a);
+      rrect(e.r * 0.55, -e.r * 0.32, e.r * 0.5, e.r * 0.64, 5); ctx.fill();
+      if (detail) {
+        ctx.strokeStyle = "rgba(255,230,180,0.5)"; ctx.lineWidth = 2;
+        rrect(e.r * 0.55, -e.r * 0.32, e.r * 0.5, e.r * 0.64, 5); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    noglow();
+    // exposed core — brighter & angrier as plates are stripped; pulses on slam
+    const exposure = 1 - e.plates / 4;
+    glow(exposure > 0.5 ? "#ffee88" : col, 5 + exposure * 14 + pound * 10);
+    ctx.fillStyle = fl ? "#ffffff" : (exposure > 0.5 ? "#ffdd66" : "#3a2008");
+    const cr = e.r * (0.3 + exposure * 0.14 + pound * 0.08);
+    ctx.beginPath(); ctx.arc(0, 0, cr, 0, TAU); ctx.fill();
+    if (exposure > 0 && detail) {
+      ctx.strokeStyle = "rgba(255,200,120," + (0.3 + exposure * 0.5) + ")"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, cr + 3, 0, TAU); ctx.stroke();
+    }
+    noglow();
+    ctx.restore();
+  } else if (e.kind === "hexweaver") {
+    // HEXWEAVER — robed caster: a hovering cowl with conjuring rune-rings that flare
+    // when it casts; trailing wisps. Splays its sigil ring wide on rune/ward casts.
+    const cast = (e.state === "runes" || e.state === "ward") ? (1 - clamp(e.t / 0.6, 0, 1))
+      : (e.state === "hex") ? 0.5 : 0;
+    // outer counter-rotating rune rings
+    for (let ring = 0; ring < (detail ? 2 : 1); ring++) {
+      ctx.save();
+      ctx.rotate((ring === 0 ? 1 : -1.4) * e.rot * (0.5 + cast));
+      ctx.strokeStyle = ring === 0 ? col : "rgba(221,136,255,0.6)";
+      ctx.lineWidth = 2.5;
+      glow(col, 5 + cast * 12);
+      const rr = e.r + 8 + ring * 8 + cast * 14;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) {
+        const a = (i / 3) * TAU - Math.PI / 2;
+        if (i === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.stroke();
+      noglow();
+      ctx.restore();
+    }
+    // cowl body
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(0, -e.r);
+    ctx.quadraticCurveTo(e.r, -e.r * 0.3, e.r * 0.6, e.r);
+    ctx.lineTo(-e.r * 0.6, e.r);
+    ctx.quadraticCurveTo(-e.r, -e.r * 0.3, 0, -e.r);
+    ctx.closePath(); ctx.fill();
+    // dark hood + glowing inner eye(s)
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(0, -e.r * 0.15, e.r * 0.55, 0, TAU); ctx.fill();
+    glow(cast > 0 ? "#f0d0ff" : col, 6 + cast * 14);
+    ctx.fillStyle = fl ? "#ffffff" : "#e6b3ff";
+    const ex = Math.cos(aimP) * e.r * 0.12;
+    ctx.beginPath(); ctx.arc(ex - e.r * 0.16, -e.r * 0.15, e.r * 0.1, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(ex + e.r * 0.16, -e.r * 0.15, e.r * 0.1, 0, TAU); ctx.fill();
+    noglow();
   } else {
     // THE WARDEN — armored core with counter-rotating guard rings; the rings spin up
     // and the eye glares forward when it aims its dash or fires a radial volley.
@@ -5435,23 +6161,25 @@ function drawEnemy(e) {
     ctx.restore();
   }
   if (e.type === "boss" && e.state === "wind") {
-    // splitter lunge telegraph
-    const p = 1 - e.t / 0.55;
-    ctx.strokeStyle = "rgba(102,255,136," + (0.3 + p * 0.6) + ")";
-    ctx.lineWidth = 4;
+    // splitter lunge / juggernaut charge-dash telegraph (direction line)
+    const jug = e.kind === "juggernaut";
+    const p = 1 - e.t / (jug ? 0.6 : 0.55);
+    const len = jug ? 520 : 260;
+    ctx.strokeStyle = hexA(e.col, 0.3 + p * 0.6);
+    ctx.lineWidth = jug ? 6 : 4;
     ctx.setLineDash([10, 7]);
     ctx.beginPath();
     ctx.moveTo(e.x, e.y);
-    ctx.lineTo(e.x + e.dirX * 260, e.y + e.dirY * 260);
+    ctx.lineTo(e.x + e.dirX * len, e.y + e.dirY * len);
     ctx.stroke();
     ctx.setLineDash([]);
   }
   if (e.type === "boss" && e.state === "slam") {
-    // splitter slam AoE telegraph
-    const p = 1 - e.t / 0.9;
-    const R = 95 + e.r;
+    // splitter / juggernaut slam AoE telegraph
+    const p = 1 - e.t / (e.kind === "juggernaut" ? 0.85 : 0.9);
+    const R = (e.kind === "juggernaut" ? 120 : 95) + e.r;
     ctx.strokeStyle = e.col;
-    ctx.fillStyle = "rgba(102,255,136," + (0.06 + p * 0.13) + ")";
+    ctx.fillStyle = hexA(e.col, 0.06 + p * 0.13);
     ctx.lineWidth = 2 + p * 2;
     glow(e.col, 12);
     ctx.beginPath(); ctx.arc(e.x, e.y, R, 0, TAU); ctx.fill();
@@ -5474,7 +6202,7 @@ function drawEnemy(e) {
     ctx.beginPath(); ctx.arc(e.x, e.y, 5 + p * 7, 0, TAU); ctx.fill();
     noglow();
   }
-  if (e.type === "boss" && ["radial", "summon", "burst", "mortar"].includes(e.state)) {
+  if (e.type === "boss" && ["radial", "summon", "burst", "mortar", "bloom", "runes", "sweep", "hex", "ward", "hurl"].includes(e.state)) {
     const p = 1 - clamp(e.t / 0.9, 0, 1);
     ctx.save();
     ctx.strokeStyle = e.col;
@@ -7556,6 +8284,7 @@ function render() {
   drawMotes();
   drawLighting();
   drawHazards();
+  drawSweeps();
   drawZonesAndPickups();
   drawSingularities();
   if (state === "hub" || state === "shop" || state === "heat" || state === "stats") drawHubObjects();
