@@ -58,7 +58,9 @@
    Touch:    left half joystick, tap right half = slash,
              on-screen DASH / BOLT / FREEZE buttons.
    Gamepad:  (PS4/PS5/Xbox standard mapping, navigator.getGamepads)
-             left stick move · right stick aim/fire dir (overrides auto-aim)
+             left stick move · right stick aim/fire dir (overrides auto-aim);
+             when the right stick is idle (below deadzone) the pad auto-aims
+             at the nearest enemy, just like keyboard (per-player in co-op)
              □ slash · R2 (or R1) bolt · × dash · △ (or L1) freeze
              d-pad/left stick navigate menus · × confirm · ○ cancel
              Options/Start = pause/start.  ~0.22 radial deadzone.
@@ -4734,6 +4736,16 @@ function updatePlayer(p, dt) {
   // aim resolution
   if (c.aimHas) {
     p.aim = c.aimAng;
+  } else if (p.padBound) {
+    // GAMEPAD auto-aim: when the right stick is idle (below deadzone, so c.aimHas is
+    // false), mirror the keyboard's auto-aim — snap toward this player's nearest enemy,
+    // else fall back to the player's movement / last-facing direction. Per-player: each
+    // pad-bound player resolves against the enemy nearest to ITSELF, so 2P twin pads
+    // auto-aim independently. Manual stick aim above the deadzone already took the branch
+    // above, so twin-stick players are unaffected.
+    const near = nearestEnemy(p.x, p.y, 420);
+    if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
+    else p.aim = Math.atan2(p.lastDir.y, p.lastDir.x);
   } else if (p.idx === 0 && !p.padBound && joy.id !== -1 && Math.hypot(joy.dx, joy.dy) > 0.25) {
     const near = nearestEnemy(p.x, p.y, 380);
     if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
