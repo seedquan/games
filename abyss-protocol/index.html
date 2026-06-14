@@ -2836,13 +2836,15 @@ function spawnEnemy(type, x, y) {
    buff (every boss bolt/contact bakes it in) plus the per-attack contact bumps below.
    Bilingual name (中文 — English) used by the entrance banner. */
 const BOSS_KINDS = [
-  { kind: "warden",    name: "THE WARDEN 监守者",  col: "#ff3366", r: 44, hp: 1040, speed: 70 }, // hp 640->1040
-  { kind: "summoner",  name: "VOIDCALLER 虚空使",  col: "#bb66ff", r: 36, hp: 920,  speed: 82 }, // hp 560->920
-  { kind: "artillery", name: "LANCE-7 炮枪七型",   col: "#ff8833", r: 38, hp: 950,  speed: 64 }, // hp 580->950
-  { kind: "splitter",  name: "MITOSIS PRIME 分裂源", col: "#66ff88", r: 52, hp: 1180, speed: 58 }, // hp 720->1180
-  { kind: "overseer",  name: "OVERSEER 监视者",   col: "#33ddee", r: 40, hp: 1080, speed: 68 }, // hp 660->1080
-  { kind: "juggernaut",name: "JUGGERNAUT 重锤者", col: "#ffaa44", r: 50, hp: 1380, speed: 60 }, // hp 840->1380
-  { kind: "hexweaver", name: "HEXWEAVER 咒织者",  col: "#cc66ff", r: 38, hp: 1030, speed: 74 }, // hp 630->1030
+  // 3-PHASE REBALANCE: HP bumped again so the structured P1/P2/P3 fight is a real, lengthy
+  // challenge vs maxed builds. Each phase is ~1/3 of the bar (see BOSS_PHASES thresholds).
+  { kind: "warden",    name: "THE WARDEN 监守者",  col: "#ff3366", r: 44, hp: 1450, speed: 70 }, // hp 1040->1450
+  { kind: "summoner",  name: "VOIDCALLER 虚空使",  col: "#bb66ff", r: 36, hp: 1280, speed: 82 }, // hp 920->1280
+  { kind: "artillery", name: "LANCE-7 炮枪七型",   col: "#ff8833", r: 38, hp: 1320, speed: 64 }, // hp 950->1320
+  { kind: "splitter",  name: "MITOSIS PRIME 分裂源", col: "#66ff88", r: 52, hp: 1620, speed: 58 }, // hp 1180->1620
+  { kind: "overseer",  name: "OVERSEER 监视者",   col: "#33ddee", r: 40, hp: 1500, speed: 68 }, // hp 1080->1500
+  { kind: "juggernaut",name: "JUGGERNAUT 重锤者", col: "#ffaa44", r: 50, hp: 1900, speed: 60 }, // hp 1380->1900
+  { kind: "hexweaver", name: "HEXWEAVER 咒织者",  col: "#cc66ff", r: 38, hp: 1440, speed: 74 }, // hp 1030->1440
 ];
 
 /* the FINAL boss — a unique, larger, multi-phase threat distinct from the 7. It appears at
@@ -2851,7 +2853,7 @@ const BOSS_KINDS = [
 const FINAL_DEPTH = 24;   // a natural boss depth (24 % bossEvery === 0)
 // BUFF #3: the climactic final boss gets a big HP jump (1500 -> 2600) so beating it is a
 // real multi-phase endurance test even for a fully-maxed late-game loadout.
-const FINAL_BOSS = { kind: "abyss", name: "ABYSS CORE 深渊之核", col: "#ff4fd0", r: 60, hp: 2600, speed: 60, final: true };
+const FINAL_BOSS = { kind: "abyss", name: "ABYSS CORE 深渊之核", col: "#ff4fd0", r: 60, hp: 3600, speed: 60, final: true }; // hp 2600->3600 (3-phase climax)
 let runCleared = false;   // set true once the final boss has been beaten this run
 
 function spawnBoss(forceKind) {
@@ -2870,8 +2872,8 @@ function spawnBoss(forceKind) {
   // FINAL boss: a slightly steeper scale on its big base HP (+co-op), kept beatable by a
   // full late-game loadout but a genuine multi-phase endurance check.
   const hp = def.final
-    ? Math.round(def.hp * (1 + (tier - 1) * 0.34) * coopHpMul())
-    : Math.round(def.hp * (1 + (tier - 1) * 1.05) * (hard ? 1.6 : 1));
+    ? Math.round(def.hp * (1 + (tier - 1) * 0.38) * coopHpMul())
+    : Math.round(def.hp * (1 + (tier - 1) * 1.12) * (hard ? 1.7 : 1));
   // spawn the boss a fixed distance AHEAD of the players' centroid (toward the top wall)
   // — close enough to engage quickly while still telegraphing the entrance, clamped on-map.
   // Offset sized for the ~2:1 map (was 620 on the old huge map).
@@ -2893,6 +2895,7 @@ function spawnBoss(forceKind) {
     poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
     strafe: Math.random() < 0.5 ? 1 : -1, tx: 0, ty: 0,
     plates: 0, sweepA: 0,
+    bphase: 1, phaseInvT: 0, bossRage: false, phaseSpeedBumped: false,
   };
   // JUGGERNAUT: armored plates that break off as HP drops, exposing the weak core
   if (def.kind === "juggernaut") boss.plates = 4;
@@ -2960,7 +2963,8 @@ function bossEntranceSkipRequested() {
   return false;
 }
 
-/* Splitter: at 50% HP it divides into two smaller copies (each splits once more) */
+/* Splitter: at 50% HP the original divides into two smaller copies; the copies do NOT split
+   again — each gen-1 fragment instead runs its own full 3-phase arc to the death. */
 function splitBoss(e) {
   const childHp = Math.max(1, e.hp / 2);
   for (let i = 0; i < 2; i++) {
@@ -2980,6 +2984,7 @@ function splitBoss(e) {
       gen: e.gen + 1, frozenT: 0, strafe: 1, tx: 0, ty: 0,
       burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
       poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
+      bphase: 1, phaseInvT: 0, bossRage: false, phaseSpeedBumped: false,
     });
   }
   burst(e.x, e.y, e.col, 36, 320, 0.8, 4);
@@ -3002,6 +3007,13 @@ function nearestEnemy(x, y, maxD) {
 
 function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
   if (e.hp <= 0) return;
+  // PHASE-CHANGE INVULN: during a boss's brief phase-transition beat it shrugs off hits
+  // (a fair, telegraphed window — the boss flashes/pulses). Shows a small block cue.
+  if (e.type === "boss" && (e.phaseInvT || 0) > 0) {
+    e.flash = Math.max(e.flash, 0.08);
+    dnum(e.x, e.y - e.r, "BLOCK", "#88ddff", false);
+    return;
+  }
   const sp = ctxP || player;
   // DUO PHASE STRIKE (DASH+CRIT): the first hit shortly after a dash always crits & refunds dash
   let blinkHit = false;
@@ -3086,6 +3098,7 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
 /* lightweight damage path for DoTs/AoEs: no knockback, no hit SFX spam */
 function statusDamage(e, dmg, col) {
   if (e.hp <= 0) return;
+  if (e.type === "boss" && (e.phaseInvT || 0) > 0) return; // DoTs paused during phase-change beat
   const final = Math.max(1, Math.round(dmg));
   e.hp -= final;
   e.flash = Math.max(e.flash, 0.05);
@@ -7120,11 +7133,80 @@ function updateEnemy(e, dt) {
   }
 }
 
+/* ===================== STRUCTURED 3-PHASE BOSS SYSTEM =====================
+   Every boss is now a clearly STRUCTURED three-phase fight gated by HP ratio.
+   Per-boss thresholds (t2 = enter Phase 2, t3 = enter Phase 3) are tuned in
+   BOSS_PHASES; defaults are 0.66 / 0.33 (thirds). bossPhaseTick() resolves the
+   current phase from HP, and on each crossing fires a ONE-SHOT transition "tell"
+   (flash/shake/sound + a brief phase-change invuln beat) — it can't double-fire
+   or be skipped (guarded by e.bphase). e.phaseInvT grants the short invuln beat
+   (damage is ignored while >0; see hitEnemy/statusDamage). e.bphase is 1/2/3.
+   Phase pips on the HP bar read the current phase for the player. */
+const BOSS_PHASES = {
+  warden:     { t2: 0.66, t3: 0.33 },
+  summoner:   { t2: 0.66, t3: 0.33 },
+  artillery:  { t2: 0.66, t3: 0.33 },
+  splitter:   { t2: 0.66, t3: 0.30 }, // splits at t2; t3 is for the fragments
+  overseer:   { t2: 0.66, t3: 0.33 },
+  juggernaut: { t2: 0.70, t3: 0.35 }, // armored: spends longer in the heavy phases
+  hexweaver:  { t2: 0.66, t3: 0.33 },
+  abyss:      { t2: 0.66, t3: 0.33 }, // final boss: even thirds, big escalation each
+};
+function bossPhaseThresholds(e) { return BOSS_PHASES[e.kind] || { t2: 0.66, t3: 0.33 }; }
+/* Resolve current phase from HP and fire the one-shot transition tell on crossing.
+   Returns the current phase number (1/2/3). Monotonic on the way down — never
+   un-shifts even if HP is restored, so the tell can't replay. */
+function bossPhaseTick(e, dt) {
+  if (e.phaseInvT === undefined) e.phaseInvT = 0;
+  if (e.phaseInvT > 0) e.phaseInvT = Math.max(0, e.phaseInvT - dt);
+  const th = bossPhaseThresholds(e);
+  const ratio = e.maxHp > 0 ? e.hp / e.maxHp : 0;
+  const cur = e.bphase || 1;
+  let want = 1;
+  if (ratio <= th.t3) want = 3; else if (ratio <= th.t2) want = 2; else want = 1;
+  if (want > cur) {
+    // advance one step at a time so each transition tell fires exactly once even on a big hit
+    const next = cur + 1;
+    e.bphase = next;
+    bossPhaseTransition(e, next);
+  } else if (!e.bphase) {
+    e.bphase = 1;
+  }
+  return e.bphase;
+}
+/* the one-shot phase-change "tell": flash, shake, sound, particles + a brief invuln
+   beat (phaseInvT) and a state reset so a transition can't double-fire a volley. */
+function bossPhaseTransition(e, phase) {
+  e.phaseInvT = phase >= 3 ? 0.55 : 0.45; // short, fair invuln beat
+  e.flash = Math.max(e.flash, 0.3);
+  if (phase >= 3) {
+    // ENRAGE look: visibly powered up + a small permanent speed bump (separate from heat enrage)
+    e.bossRage = true;
+    if (!e.phaseSpeedBumped) { e.speed *= 1.12; e.phaseSpeedBumped = true; }
+    toast("PHASE 3 — 终焉狂暴!", "#ff3366");
+    audio.roar();
+    shake(11, 0.5);
+    burst(e.x, e.y, "#ff3366", 32, 340, 0.7, 4);
+    ffx.ring(e.x, e.y, e.r + 50, "#ff5577", 0.6, 7);
+  } else {
+    toast("PHASE 2 — 强化!", e.col);
+    audio.bossRoar(e.kind);
+    shake(8, 0.4);
+    burst(e.x, e.y, e.col, 24, 300, 0.6, 4);
+    ffx.ring(e.x, e.y, e.r + 40, e.col, 0.5, 6);
+  }
+  ffx.pulse(e.x, e.y, 8);
+  ffx.spawnLight(e.x, e.y, 150, phase >= 3 ? "#ff3366" : e.col, 0.9);
+  // reset the action timer so the boss opens the new phase from a clean MOVE beat
+  e.state = "move"; e.cd = phase >= 3 ? 0.5 : 0.6; e.sub = 0;
+}
+
 function updateBoss(e, dt, d) {
+  const ph = bossPhaseTick(e, dt);
   e.rot += dt * (e.state === "radial" ? 6 : 1.2);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.5;
-  const phase3 = e.hp < e.maxHp * 0.25;   // BUFF: a third desperate phase
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;   // structured third desperate phase
   // BUFF #3: faster pattern cycling overall; phase2/phase3 add speed-ups so the fight
   // crescendos hard. Still fair — telegraph windows below keep strikes dodgeable.
   const cdm = (e.hard ? 0.62 : 1) * (e.enraged ? 0.55 : 1) * (phase3 ? 0.74 : phase2 ? 0.88 : 1);
@@ -7135,13 +7217,46 @@ function updateBoss(e, dt, d) {
     e.vx = lerp(e.vx, v.x * e.speed * want, 3 * dt);
     e.vy = lerp(e.vy, v.y * e.speed * want, 3 * dt);
     if (e.cd <= 0) {
-      // BUFF: phase2 already unlocks the 4th attack (was phase3) — a fast double cross-spiral.
-      e.atk = (e.atk + 1) % (phase2 ? 4 : 3);
-      e.sub = 0;
-      if (e.atk === 0) { e.state = "radial"; e.t = 0.54; }       // tighter telegraph (was 0.62)
-      else if (e.atk === 1) { e.state = "aim"; e.t = 0.48; }      // (was 0.55)
-      else if (e.atk === 2) { e.state = "summon"; e.t = 0.62; audio.roar(); }
-      else { e.state = "spiral"; e.t = 0.44; }                    // spiral barrage
+      // DISTINCT ATTACK SETS PER PHASE (not just scaling):
+      //  P1: radial ring + a telegraphed dash (2 moves) — the basics.
+      //  P2: + add-summon + counter-spiral barrage (4 moves) — denser, more varied.
+      //  P3: signature "cross nova" replaces the plain radial, dash leaves a wake (5 moves).
+      if (phase3) {
+        // P3 roster: nova(signature), aim/dash, summon, spiral, radial — overlapping pressure
+        e.atk = (e.atk + 1) % 5; e.sub = 0;
+        if (e.atk === 0) { e.state = "nova"; e.t = 0.5; audio.roar(); }   // signature desperation
+        else if (e.atk === 1) { e.state = "aim"; e.t = 0.4; }
+        else if (e.atk === 2) { e.state = "summon"; e.t = 0.5; audio.roar(); }
+        else if (e.atk === 3) { e.state = "spiral"; e.t = 0.38; }
+        else { e.state = "radial"; e.t = 0.42; }
+      } else if (phase2) {
+        e.atk = (e.atk + 1) % 4; e.sub = 0;
+        if (e.atk === 0) { e.state = "radial"; e.t = 0.5; }
+        else if (e.atk === 1) { e.state = "aim"; e.t = 0.44; }
+        else if (e.atk === 2) { e.state = "summon"; e.t = 0.58; audio.roar(); }
+        else { e.state = "spiral"; e.t = 0.42; }
+      } else {
+        e.atk = (e.atk + 1) % 2; e.sub = 0;
+        if (e.atk === 0) { e.state = "radial"; e.t = 0.6; }
+        else { e.state = "aim"; e.t = 0.5; }
+      }
+    }
+  } else if (e.state === "nova") {
+    // P3 SIGNATURE: a slow-expanding cross-nova — two interleaved counter-rotating rings.
+    // Telegraphed by the wind-up beat; the gaps between arms are the dodge lanes.
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const n = 20 + e.tier * 2;
+      const baseA = e.rot + e.sub * 0.22;
+      for (let i = 0; i < n; i++) {
+        fireEbolt(e.x, e.y, baseA + (i / n) * TAU, 175, 9, "#ff3366", 7);
+        fireEbolt(e.x, e.y, -baseA + (i / n) * TAU + Math.PI / n, 215, 8, "#ff8aa0", 6);
+      }
+      audio.bolt(); shake(4, 0.16);
+      e.sub++;
+      if (e.sub >= (4 + (e.hard ? 1 : 0))) { e.state = "move"; e.cd = 1.1 * cdm; }
+      else e.t = 0.26;
     }
   } else if (e.state === "radial") {
     e.vx *= 0.92; e.vy *= 0.92;
@@ -7183,15 +7298,17 @@ function updateBoss(e, dt, d) {
     }
   } else if (e.state === "dash") {
     e.t -= dt;
-    enemyContact(e, 26, dt);   // BUFF: dash contact 22 -> 26
+    enemyContact(e, 28, dt);   // dash contact (3-phase rebalance): 26 -> 28
+    if (phase3 && Math.random() < dt * 28) fireEbolt(e.x, e.y, rand(0, TAU), 150, 7, "#ff8aa0", 5); // P3 dash leaves a bolt wake
     addPart({ x: e.x + rand(-20, 20), y: e.y + rand(-20, 20), vx: 0, vy: 0, t: 0.3, tm: 0.3, col: "#ff3366", r: rand(2, 5), drag: 1 });
     const A = CONFIG;
     if (e.x < 70 || e.x > A.arenaW - 70 || e.y < 70 || e.y > A.arenaH - 70 || e.t <= 0) {
       e.state = "move"; e.cd = (phase2 ? 1.0 : 1.6) * cdm;
       e.vx *= 0.2; e.vy *= 0.2;
       shake(6, 0.25);
-      // BUFF: the slam at the end of a dash now coughs out a small ring of bolts.
-      if (phase2 || e.hard) for (let i = 0; i < 8; i++) fireEbolt(e.x, e.y, (i / 8) * TAU + e.rot, 190, 8, "#ff3366", 6);
+      // BUFF: the slam at the end of a dash coughs out a ring of bolts; denser in P3.
+      const dn = phase3 ? 12 : 8;
+      if (phase2 || e.hard) for (let i = 0; i < dn; i++) fireEbolt(e.x, e.y, (i / dn) * TAU + e.rot, 190, 8, "#ff3366", 6);
     }
   } else if (e.state === "summon") {
     e.vx *= 0.9; e.vy *= 0.9;
@@ -7216,9 +7333,10 @@ function updateBoss(e, dt, d) {
 
 /* --- VOIDCALLER: teleports, spawns adds, radial bursts --- */
 function updateBossSummoner(e, dt, d) {
+  const ph = bossPhaseTick(e, dt);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.5;
-  const phase3 = e.hp < e.maxHp * 0.25;
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;
   const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.74 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * 2.2;
   e.cd = Math.max(0, e.cd - dt);
@@ -7229,10 +7347,13 @@ function updateBossSummoner(e, dt, d) {
     e.vy = lerp(e.vy, (v.y * want + v.x * 0.6 * e.strafe) * e.speed, 3 * dt);
     if (Math.random() < dt * 0.3) e.strafe *= -1;
     if (e.cd <= 0) {
-      e.atk = (e.atk + 1) % 3;
-      e.sub = 0;
-      if (e.atk === 0) {
-        e.state = "tele"; e.t = 0.55;
+      // PHASE-DISTINCT SETS:
+      //  P1: blink (tele) + radial burst — pure hit-and-run.
+      //  P2: + add-summon (3 moves); arrivals/bursts denser.
+      //  P3: + "void collapse" converging implosion (4 moves) — signature desperation.
+      const setIdx = (e.atk = (e.atk + 1) % (phase3 ? 4 : phase2 ? 3 : 2)); e.sub = 0;
+      const doTele = () => {
+        e.state = "tele"; e.t = phase3 ? 0.42 : 0.55;
         let tx = 0, ty = 0, tries = 0;
         do {
           const a = rand(0, TAU), rr = rand(200, 340);
@@ -7240,12 +7361,29 @@ function updateBossSummoner(e, dt, d) {
           ty = clamp(p.y + Math.sin(a) * rr, 70, CONFIG.arenaH - 70);
         } while (pointInPillar(tx, ty, e.r) && tries++ < 20);
         e.tx = tx; e.ty = ty;
-      } else if (e.atk === 1) {
-        e.state = "summon"; e.t = 0.9;
-        audio.bossRoar("summoner");
-      } else {
-        e.state = "burst"; e.t = 0.7;
+      };
+      if (phase3 && setIdx === 3) { e.state = "collapse"; e.t = 0.7; audio.bossRoar("summoner"); }
+      else if (setIdx === 0) doTele();
+      else if (setIdx === 1) { e.state = "burst"; e.t = 0.7; }
+      else { e.state = "summon"; e.t = 0.9; audio.bossRoar("summoner"); }
+    }
+  } else if (e.state === "collapse") {
+    // P3 SIGNATURE "void collapse": a wide ring of orbs spawns AROUND the player and converges
+    // inward — telegraphed by the wind-up; the safe spot is to dash through a gap before it closes.
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const cx = p.x, cy = p.y, n = 18 + e.tier;
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU;
+        const sx = clamp(cx + Math.cos(a) * 300, 50, CONFIG.arenaW - 50);
+        const sy = clamp(cy + Math.sin(a) * 300, 50, CONFIG.arenaH - 50);
+        fireEbolt(sx, sy, a + Math.PI, 230, 9, "#cc88ff", 6); // inward-converging
       }
+      // plus a small outward ring from the boss so it's not a clean retreat lane
+      for (let i = 0; i < 12; i++) fireEbolt(e.x, e.y, (i / 12) * TAU + e.rot, 175, 8, "#dda0ff", 5);
+      audio.bolt(); shake(5, 0.18);
+      e.state = "move"; e.cd = rand(1.3, 1.7) * cdm;
     }
   } else if (e.state === "tele") {
     e.vx *= 0.85; e.vy *= 0.85;
@@ -7255,10 +7393,10 @@ function updateBossSummoner(e, dt, d) {
       e.x = e.tx; e.y = e.ty;
       burst(e.x, e.y, e.col, 24, 260, 0.6, 3);
       audio.dash();
-      const n = 10 + e.tier * 2 + (e.hard ? 4 : 0); // arrival burst (hard pairing: denser)
+      const n = 10 + e.tier * 2 + (e.hard ? 4 : 0) + (phase2 ? 2 : 0); // arrival burst (denser in P2+)
       const a0 = angTo(e.x, e.y, p.x, p.y);
       for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, a0 + (i / n) * TAU, 195 + e.tier * 10, 9, e.col, 6);
-      if (phase3) for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, a0 + (i / n) * TAU + Math.PI / n, 150, 8, "#dda0ff", 5); // phase3: second offset ring
+      if (phase3) for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, a0 + (i / n) * TAU + Math.PI / n, 150, 8, "#dda0ff", 5); // P3: second offset ring
       audio.bolt();
       e.state = "move"; e.cd = rand(1.1, 1.5) * cdm;
     }
@@ -7295,9 +7433,10 @@ function updateBossSummoner(e, dt, d) {
 
 /* --- LANCE-7: long-range lance shots with laser-sight + mortar AoE circles --- */
 function updateBossArtillery(e, dt, d) {
+  const ph = bossPhaseTick(e, dt);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.5;
-  const phase3 = e.hp < e.maxHp * 0.25;
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;
   const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.74 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt;
   e.cd = Math.max(0, e.cd - dt);
@@ -7308,10 +7447,49 @@ function updateBossArtillery(e, dt, d) {
     e.vy = lerp(e.vy, (v.y * want + v.x * 0.5 * e.strafe) * e.speed, 3 * dt);
     if (Math.random() < dt * 0.4) e.strafe *= -1;
     if (e.cd <= 0) {
-      e.atk = (e.atk + 1) % 2;
-      e.sub = 0;
-      if (e.atk === 0) { e.state = "aim"; e.t = 0.82; }   // BUFF: tighter sight lock (was 0.95)
-      else { e.state = "mortar"; e.t = 0.55; }
+      // PHASE-DISTINCT SETS:
+      //  P1: precision lance + targeted mortar volley.
+      //  P2: + sweeping scatter-spread (3 moves); twin lances, denser mortars.
+      //  P3: + "barrage grid" — a wall of mortars across the arena (4 moves) — signature.
+      e.atk = (e.atk + 1) % (phase3 ? 4 : phase2 ? 3 : 2); e.sub = 0;
+      if (e.atk === 0) { e.state = "aim"; e.t = phase3 ? 0.66 : 0.82; }   // sight lock
+      else if (e.atk === 1) { e.state = "mortar"; e.t = 0.55; }
+      else if (e.atk === 2) { e.state = "scatter"; e.t = 0.6; }           // P2+ spread
+      else { e.state = "grid"; e.t = 0.85; audio.bossRoar("artillery"); } // P3 signature
+    }
+  } else if (e.state === "scatter") {
+    // P2+ SWEEPING SCATTER: a wide arc of fast shells that sweeps across the player's lane.
+    e.vx *= 0.86; e.vy *= 0.86;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const a0 = angTo(e.x, e.y, p.x, p.y);
+      const k = 9 + (phase3 ? 4 : 0);
+      const spread = phase3 ? 1.4 : 1.1;
+      for (let i = 0; i < k; i++) fireEbolt(e.x, e.y, a0 + (i - (k - 1) / 2) * (spread / k), 430 + e.tier * 14, 11, "#ffc090", 6);
+      audio.bolt(); shake(3, 0.12);
+      e.state = "move"; e.cd = rand(1.1, 1.5) * cdm;
+    }
+  } else if (e.state === "grid") {
+    // P3 SIGNATURE BARRAGE GRID: rows of telegraphed mortars carpet the arena, leaving safe
+    // lanes — read the gaps and reposition. Heavy but fully telegraphed by the arm timers.
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const cols = 5, rows = 3;
+      const mw = (CONFIG.arenaW - 160) / (cols - 1), mh = (CONFIG.arenaH - 220) / (rows - 1);
+      const jitter = (p.x % mw); // shift the grid so a safe lane isn't always the same
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        // leave one safe column near the player so it stays dodgeable
+        if (c === Math.round((p.x - 80) / mw)) continue;
+        const tt = 1.0 + r * 0.18 + c * 0.04;
+        mortars.push({
+          x: clamp(80 + c * mw + (jitter % 40) - 20, 50, CONFIG.arenaW - 50),
+          y: clamp(110 + r * mh, 50, CONFIG.arenaH - 50),
+          r: 70, t: tt, tm: tt, dmg: 26, col: e.col,
+        });
+      }
+      audio.bolt(); shake(4, 0.16);
+      e.state = "move"; e.cd = rand(1.7, 2.2) * cdm;
     }
   } else if (e.state === "aim") {
     e.vx *= 0.85; e.vy *= 0.85;
@@ -7320,8 +7498,9 @@ function updateBossArtillery(e, dt, d) {
     if (e.t <= 0) {
       const a = Math.atan2(e.dirY, e.dirX);
       fireEbolt(e.x + e.dirX * e.r, e.y + e.dirY * e.r, a, 760 + e.tier * 30, 16, "#ffd0a0", 7);
-      // BUFF (phase3): twin lances flanking the main shot — punishes lazy strafing.
-      if (phase3) { fireEbolt(e.x, e.y, a + 0.16, 720, 13, "#ffd0a0", 6); fireEbolt(e.x, e.y, a - 0.16, 720, 13, "#ffd0a0", 6); }
+      // P2: twin lances flank the main shot; P3: a fourth pair widens the kill-cone.
+      if (phase2) { fireEbolt(e.x, e.y, a + 0.16, 720, 13, "#ffd0a0", 6); fireEbolt(e.x, e.y, a - 0.16, 720, 13, "#ffd0a0", 6); }
+      if (phase3) { fireEbolt(e.x, e.y, a + 0.32, 700, 12, "#ffd0a0", 6); fireEbolt(e.x, e.y, a - 0.32, 700, 12, "#ffd0a0", 6); }
       audio.bolt();
       shake(3, 0.1);
       e.sub++;
@@ -7355,21 +7534,43 @@ function updateBossArtillery(e, dt, d) {
   enemyContact(e, 16, dt);   // BUFF: contact 12 -> 16
 }
 
-/* --- MITOSIS PRIME: big brute; splits at 50% HP, fragments split once more --- */
+/* --- MITOSIS PRIME: big brute; splits ONCE at 50% HP into two fragments, each a 3-phase mini-boss --- */
 function updateBossSplitter(e, dt, d) {
-  if (e.gen < 2 && e.hp <= e.maxHp * 0.5) { splitBoss(e); return; }
+  // SPLIT happens ONCE at 50% HP (the dramatic mid-fight event) — only the original (gen 0)
+  // divides. For the PARENT this falls inside its Phase 2; each gen-1 fragment then runs its
+  // OWN full 3-phase arc (P2 fission tremor, P3 enrage) on its smaller HP pool. Splitting only
+  // once keeps the phases legible and the entity count bounded (was: gen<2 — two split tiers).
+  if (e.gen < 1 && e.hp <= e.maxHp * 0.5) { splitBoss(e); return; }
+  const ph = bossPhaseTick(e, dt);
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;   // fragments reach P3; parent splits before its own P3
   const p = e._tgt || targetFor(e) || player;
-  const cdm = (e.hard ? 0.62 : 1) * (e.enraged ? 0.55 : 1);
-  e.rot += dt * 0.8;
+  const cdm = (e.hard ? 0.62 : 1) * (phase3 ? 0.7 : phase2 ? 0.85 : 1) * (e.enraged ? 0.55 : 1);
+  e.rot += dt * (0.8 + (phase3 ? 0.8 : 0));
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     const v = seekVec(e, p.x, p.y);
-    e.vx = lerp(e.vx, v.x * e.speed, 4 * dt);
-    e.vy = lerp(e.vy, v.y * e.speed, 4 * dt);
+    // P3 fragments jitter erratically (visibly enraged), making their lunges harder to read-stop.
+    const sp = e.speed * (phase3 ? 1.25 : 1);
+    e.vx = lerp(e.vx, v.x * sp, 4 * dt);
+    e.vy = lerp(e.vy, v.y * sp, 4 * dt);
     enemyContact(e, 15, dt);   // BUFF: contact 12 -> 15
     if (e.cd <= 0) {
+      // P2+ unlocks a ranged "fission tremor" so it isn't a pure melee chaser at range.
       if (d < 150) { e.state = "slam"; e.t = 0.9; }
+      else if (phase2 && d < 520 && Math.random() < 0.5) { e.state = "tremor"; e.t = 0.5; }
       else if (d < 460) { e.state = "wind"; e.t = 0.55; }
+    }
+  } else if (e.state === "tremor") {
+    // P2+ FISSION TREMOR: a telegraphed double-ring of spores — denser in P3.
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const n = 14 + (phase3 ? 6 : 0);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 215, 9, e.col, 6);
+      if (phase3) for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU - e.rot + Math.PI / n, 160, 8, "#a8ffc0", 5);
+      audio.bolt(); shake(3, 0.12);
+      e.state = "move"; e.cd = rand(0.9, 1.3) * cdm;
     }
   } else if (e.state === "wind") {
     e.vx *= 0.86; e.vy *= 0.86;
@@ -7394,9 +7595,10 @@ function updateBossSplitter(e, dt, d) {
       shake(8, 0.35);
       audio.enemyDie(true);
       damagePlayersInRadius(e.x, e.y, R, 30 * eDmgMul(), e);   // BUFF: 24 -> 30, hits all co-op players in range
-      // every slam coughs a shockwave ring; denser on hard.
-      const n = 16 + (e.hard ? 4 : 0);   // BUFF: 12 -> 16
+      // every slam coughs a shockwave ring; denser on hard / in P3.
+      const n = 16 + (e.hard ? 4 : 0) + (phase3 ? 6 : 0);   // BUFF: 12 -> 16
       for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 220, 9, e.col, 6);
+      if (phase3) for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot + Math.PI / n, 165, 8, "#a8ffc0", 5);
       e.state = "move"; e.cd = rand(1.1, 1.6) * cdm;
     }
   }
@@ -7406,9 +7608,10 @@ function updateBossSplitter(e, dt, d) {
    radial bullet bloom. Phase 2 fires DUAL opposed sweeps and faster blooms.
    Telegraphs: sweep beams glow before they cut; bloom flashes a ring before firing. --- */
 function updateBossOverseer(e, dt, d) {
+  const ph = bossPhaseTick(e, dt);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.5;
-  const phase3 = e.hp < e.maxHp * 0.25;
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;
   const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.72 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * (e.state === "bloom" ? 4 : 1.4);
   e.cd = Math.max(0, e.cd - dt);
@@ -7420,11 +7623,29 @@ function updateBossOverseer(e, dt, d) {
     e.vy = lerp(e.vy, (v.y * want + v.x * 0.5 * e.strafe) * e.speed, 3 * dt);
     if (Math.random() < dt * 0.3) e.strafe *= -1;
     if (e.cd <= 0) {
-      e.atk = (e.atk + 1) % 3;
-      e.sub = 0;
+      // PHASE-DISTINCT SETS:
+      //  P1: single rotating sweep + drone summon + radial bloom (3 moves).
+      //  P2: sweeps become dual-opposed, blooms denser/faster, more drones.
+      //  P3: + "prism lattice" signature — a converging 4-arm cross of sweeps (4 moves).
+      e.atk = (e.atk + 1) % (phase3 ? 4 : 3); e.sub = 0;
       if (e.atk === 0) { e.state = "sweep"; e.t = 0.45; }
       else if (e.atk === 1) { e.state = "summon"; e.t = 0.8; audio.bossRoar("overseer"); }
-      else { e.state = "bloom"; e.t = 0.7; }
+      else if (e.atk === 2) { e.state = "bloom"; e.t = 0.7; }
+      else { e.state = "lattice"; e.t = 0.6; audio.bossRoar("overseer"); }
+    }
+  } else if (e.state === "lattice") {
+    // P3 SIGNATURE PRISM LATTICE: four sweeps in a rotating cross + a slow converging bloom.
+    // Telegraphed (sweeps warn before cutting); the rotating gaps are the dodge lanes.
+    e.vx *= 0.92; e.vy *= 0.92;
+    e.t -= dt;
+    if (e.t <= 0) {
+      const len = 700 + e.tier * 20, dmg = 17;
+      const base = e.rot, rate = 1.3 * (Math.random() < 0.5 ? 1 : -1);
+      for (let q = 0; q < 4; q++) addSweep(e.x, e.y, base + q * (Math.PI / 2) - rate * 0.5, rate, len, dmg, "#5fe8ff");
+      const n = 18;
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, e.rot * 2 + (i / n) * TAU, 165, 9, "#7fe8ff", 6);
+      audio.bolt(); shake(4, 0.16);
+      e.state = "move"; e.cd = 1.5 * cdm;
     }
   } else if (e.state === "sweep") {
     e.vx *= 0.9; e.vy *= 0.9;
@@ -7487,9 +7708,10 @@ function updateBossJuggernaut(e, dt, d) {
     audio.heatClunk();
     toast(e.plates > 0 ? "ARMOR BREAKS — 装甲碎裂!" : "CORE EXPOSED — 核心暴露!", "#ffcc88");
   }
+  const ph = bossPhaseTick(e, dt);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.5;
-  const phase3 = e.hp < e.maxHp * 0.25;
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;
   const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.86 : 1) * (phase3 ? 0.76 : 1) * (e.enraged ? 0.55 : 1);
   e.rot += dt * 0.6;
   e.cd = Math.max(0, e.cd - dt);
@@ -7499,11 +7721,40 @@ function updateBossJuggernaut(e, dt, d) {
     e.vy = lerp(e.vy, v.y * e.speed, 3 * dt);
     enemyContact(e, 18, dt);   // BUFF: contact 15 -> 18
     if (e.cd <= 0) {
-      e.atk = (e.atk + 1) % 3;
-      e.sub = 0;
+      // PHASE-DISTINCT SETS:
+      //  P1: charge-dash + ground-pound + debris hurl (3 moves) — armored bruiser.
+      //  P2: faster, denser pound rings + wider debris (armor mostly shed).
+      //  P3: + "seismic eruption" signature — fissures (delayed mortars) + double shockwave (4 moves).
+      e.atk = (e.atk + 1) % (phase3 ? 4 : 3); e.sub = 0;
       if (e.atk === 0) { e.state = "wind"; e.t = 0.54; }      // charge-dash wind-up (telegraph line)
       else if (e.atk === 1) { e.state = "slam"; e.t = 0.78; } // ground-pound
-      else { e.state = "hurl"; e.t = 0.65; }                  // debris toss
+      else if (e.atk === 2) { e.state = "hurl"; e.t = 0.65; } // debris toss
+      else { e.state = "erupt"; e.t = 0.8; audio.bossRoar("juggernaut"); } // P3 signature
+    }
+  } else if (e.state === "erupt") {
+    // P3 SIGNATURE SEISMIC ERUPTION: fissures crack open around the player (telegraphed mortars)
+    // and the JUGGERNAUT slams out a double expanding shockwave. Heavy but readable.
+    e.vx *= 0.88; e.vy *= 0.88;
+    e.t -= dt;
+    if (e.t <= 0) {
+      for (const tp of players) {
+        if (tp.downed || tp.hp <= 0) continue;
+        for (let i = 0; i < 4; i++) {
+          const a = rand(0, TAU), rr = rand(40, 180);
+          const tt = 1.0 + i * 0.14;
+          mortars.push({
+            x: clamp(tp.x + Math.cos(a) * rr, 50, CONFIG.arenaW - 50),
+            y: clamp(tp.y + Math.sin(a) * rr, 50, CONFIG.arenaH - 50),
+            r: 76, t: tt, tm: tt, dmg: 28, col: "#ffbb66",
+          });
+        }
+      }
+      const n = 20 + e.tier * 2;
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU + e.rot, 230, 9, "#ffcc88", 7);
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, (i / n) * TAU - e.rot + Math.PI / n, 160, 8, "#ffe0b0", 6);
+      ffx.ring(e.x, e.y, 150 + e.r, "#ffcc88", 0.5, 6);
+      audio.bolt(); shake(7, 0.3);
+      e.state = "move"; e.cd = rand(1.6, 2.1) * cdm;
     }
   } else if (e.state === "wind") {
     e.vx *= 0.86; e.vy *= 0.86;
@@ -7566,11 +7817,12 @@ function updateBossJuggernaut(e, dt, d) {
    system), fires homing hex-orbs, raises temporary barriers + adds. Punishes standing
    still: rune-zones drop where the player is. Phase 2 lays overlapping rune patterns. --- */
 function updateBossHexweaver(e, dt, d) {
+  const ph = bossPhaseTick(e, dt);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.5;
-  const phase3 = e.hp < e.maxHp * 0.25;
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;
   const cdm = (e.hard ? 0.62 : 1) * (phase2 ? 0.74 : 1) * (phase3 ? 0.78 : 1) * (e.enraged ? 0.55 : 1);
-  e.rot += dt * 1.8;
+  e.rot += dt * (1.8 + (phase3 ? 1.0 : 0));
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
     // keep distance, weaving — never sits still
@@ -7580,12 +7832,38 @@ function updateBossHexweaver(e, dt, d) {
     e.vy = lerp(e.vy, (v.y * want + v.x * 0.7 * e.strafe) * e.speed, 3 * dt);
     if (Math.random() < dt * 0.4) e.strafe *= -1;
     if (e.cd <= 0) {
-      e.atk = (e.atk + 1) % 3;
-      e.sub = 0;
+      // PHASE-DISTINCT SETS:
+      //  P1: rune-zones + homing hex-orbs + ward (barriers+adds) (3 moves).
+      //  P2: overlapping rune ring, denser orb fans, more adds/barriers.
+      //  P3: + "hex storm" signature — a sustained spiral of homing orbs (4 moves) — enraged.
+      e.atk = (e.atk + 1) % (phase3 ? 4 : 3); e.sub = 0;
       if (e.atk === 0) { e.state = "runes"; e.t = 0.55; audio.bossRoar("hexweaver"); }
       else if (e.atk === 1) { e.state = "hex"; e.t = 0.7; }
-      else { e.state = "ward"; e.t = 0.8; }
+      else if (e.atk === 2) { e.state = "ward"; e.t = 0.8; }
+      else { e.state = "storm"; e.t = 0.6; e.stormRing = false; audio.bossRoar("hexweaver"); } // P3 signature
     }
+  } else if (e.state === "storm") {
+    // P3 SIGNATURE HEX STORM: a rotating spiral of slow homing orbs over a short window, plus a
+    // rune-ring around the player. Orbs are slow & telegraphed — keep moving and weave the spiral.
+    e.vx *= 0.93; e.vy *= 0.93;
+    e.t -= dt;
+    if (!e.stormRing) { // a one-time rune ring around the player at the storm's start
+      e.stormRing = true;
+      for (let i = 0; i < 6; i++) {
+        const aa = (i / 6) * TAU;
+        mortars.push({ x: clamp(p.x + Math.cos(aa) * 90, 50, CONFIG.arenaW - 50), y: clamp(p.y + Math.sin(aa) * 90, 50, CONFIG.arenaH - 50), r: 58, t: 1.1, tm: 1.1, dmg: 18, col: e.col });
+      }
+    }
+    if ((e.subTick = (e.subTick || 0) - dt) <= 0) {
+      e.subTick = 0.12;
+      const a = e.rot * 3;
+      fireHexOrb(e.x, e.y, a, 155, 11, "#dd88ff", 7, 1.3);
+      fireHexOrb(e.x, e.y, a + TAU / 3, 155, 11, "#dd88ff", 7, 1.3);
+      fireHexOrb(e.x, e.y, a + 2 * TAU / 3, 155, 11, "#dd88ff", 7, 1.3);
+      audio.bolt();
+    }
+    e.sub += dt;
+    if (e.sub >= 1.6) { e.state = "move"; e.cd = rand(1.2, 1.6) * cdm; }
   } else if (e.state === "runes") {
     e.vx *= 0.9; e.vy *= 0.9;
     e.t -= dt;
@@ -7672,11 +7950,12 @@ function updateBossHexweaver(e, dt, d) {
    Three HP phases progressively add attacks + cadence so the fight escalates. Every strike
    is telegraphed (rings glow, sweeps warn, orbs are slow). On death → run clear (通关). --- */
 function updateBossFinal(e, dt, d) {
+  const ph = bossPhaseTick(e, dt);
   const p = e._tgt || targetFor(e) || player;
-  const phase2 = e.hp < e.maxHp * 0.66;
-  const phase3 = e.hp < e.maxHp * 0.33;
+  const phase2 = ph >= 2;
+  const phase3 = ph >= 3;
   // BUFF #3: more aggressive phase-driven cadence so the climax escalates relentlessly.
-  const cdm = (phase3 ? 0.62 : phase2 ? 0.78 : 1) * (e.enraged ? 0.62 : 1);
+  const cdm = (phase3 ? 0.6 : phase2 ? 0.78 : 1) * (e.enraged ? 0.62 : 1);
   e.rot += dt * (e.state === "nova" ? 4 : 1.0);
   e.cd = Math.max(0, e.cd - dt);
   if (e.state === "move") {
@@ -7686,14 +7965,48 @@ function updateBossFinal(e, dt, d) {
     e.vy = lerp(e.vy, (v.y * want + v.x * 0.4 * e.strafe) * e.speed, 3 * dt);
     if (Math.random() < dt * 0.3) e.strafe *= -1;
     if (e.cd <= 0) {
-      // attack roster widens with phase: 3 attacks in P1, 4 in P2, 5 in P3
-      const nAtk = phase3 ? 5 : phase2 ? 4 : 3;
+      // ABYSS CORE roster WIDENS each phase (each phase a major escalation):
+      //  P1 (3): nova bloom, laser beams, void-orb fan — learn the climax vocabulary.
+      //  P2 (5): + add-swarm PURGE + a telegraphed dash — denser, more axes.
+      //  P3 (6): + "SINGULARITY" desperation finisher fusing every pattern — a true gauntlet.
+      const nAtk = phase3 ? 6 : phase2 ? 5 : 3;
       e.atk = (e.atk + 1) % nAtk; e.sub = 0;
       if (e.atk === 0) { e.state = "nova"; e.t = 0.6; }
       else if (e.atk === 1) { e.state = "beam"; e.t = 0.5; audio.bossSting("abyss", false); }
       else if (e.atk === 2) { e.state = "orbs"; e.t = 0.6; }
-      else if (e.atk === 3) { e.state = "purge"; e.t = 0.7; audio.roar(); }   // add-swarm
-      else { e.state = "rage"; e.t = 0.55; }                                   // phase3 dash
+      else if (e.atk === 3) { e.state = "purge"; e.t = 0.7; audio.roar(); }   // add-swarm (P2+)
+      else if (e.atk === 4) { e.state = "rage"; e.t = 0.55; }                 // dash (P2+)
+      else { e.state = "singularity"; e.t = 0.8; audio.roar(); }              // P3 desperation finisher
+    }
+  } else if (e.state === "singularity") {
+    // P3 DESPERATION FINISHER: the core implodes then erupts — a converging ring collapses on
+    // the player WHILE a quad laser-cross sweeps and void-orbs seed. Heavy, but every component
+    // is telegraphed (the long wind-up, the slow converge, the warning beams). Dash a gap to live.
+    e.vx *= 0.9; e.vy *= 0.9;
+    e.t -= dt;
+    if (!e.singSeeded) {
+      e.singSeeded = true;
+      // converging ring around the player
+      const cx = p.x, cy = p.y, m = 22;
+      for (let i = 0; i < m; i++) {
+        const a = (i / m) * TAU;
+        const sx = clamp(cx + Math.cos(a) * 320, 50, CONFIG.arenaW - 50);
+        const sy = clamp(cy + Math.sin(a) * 320, 50, CONFIG.arenaH - 50);
+        fireEbolt(sx, sy, a + Math.PI, 215, 10, "#ff8fe0", 6);
+      }
+      ffx.ring(cx, cy, 320, "#ff4fd0", 0.6, 7);
+    }
+    if (e.t <= 0) {
+      // erupt: a dense outward bloom + a quad laser-cross + a void-orb fan
+      const n = 30;
+      for (let i = 0; i < n; i++) fireEbolt(e.x, e.y, e.rot + (i / n) * TAU, 195, 11, e.col, 6);
+      const len = 780, dmg = 18, base = e.rot, rate = 1.4 * (Math.random() < 0.5 ? 1 : -1);
+      for (let q = 0; q < 4; q++) addSweep(e.x, e.y, base + q * (Math.PI / 2) - rate * 0.5, rate, len, dmg, "#ff4fd0");
+      const a0 = angTo(e.x, e.y, p.x, p.y);
+      for (let i = 0; i < 5; i++) fireHexOrb(e.x, e.y, a0 + (i - 2) * 0.3, 155, 12, "#ff4fd0", 8, 1.6);
+      audio.bolt(); shake(8, 0.3);
+      e.singSeeded = false;
+      e.state = "move"; e.cd = 1.7 * cdm;
     }
   } else if (e.state === "nova") {
     // expanding multi-ring bullet bloom
@@ -9206,6 +9519,30 @@ function drawBossBody(e, fl, col, dark, detail) {
   const aimP = e._tgt ? angTo(e.x, e.y, e._tgt.x, e._tgt.y) : (player ? angTo(e.x, e.y, player.x, player.y) : 0);
   ctx.save();
   ctx.translate(e.x, e.y);
+  // P3 ENRAGE AURA: a pulsing red corona so the player reads "powered up / desperate phase".
+  if (e.bossRage) {
+    const pulse = 1 + 0.12 * Math.sin(timeNow * 9);
+    ctx.save();
+    glow("#ff3366", 22);
+    ctx.globalAlpha = 0.5 + 0.2 * Math.sin(timeNow * 7);
+    ctx.strokeStyle = "#ff3366"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, (e.r + 12) * pulse, 0, TAU); ctx.stroke();
+    ctx.globalAlpha = 0.10;
+    ctx.fillStyle = "#ff3366";
+    ctx.beginPath(); ctx.arc(0, 0, (e.r + 12) * pulse, 0, TAU); ctx.fill();
+    ctx.restore();
+    noglow();
+  }
+  // PHASE-CHANGE INVULN shimmer: a bright shield ring during the brief transition beat.
+  if ((e.phaseInvT || 0) > 0) {
+    ctx.save();
+    glow("#aaf0ff", 16);
+    ctx.globalAlpha = 0.6 * clamp(e.phaseInvT / 0.5, 0, 1);
+    ctx.strokeStyle = "#aaf0ff"; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(0, 0, e.r + 8 + Math.sin(timeNow * 20) * 3, 0, TAU); ctx.stroke();
+    ctx.restore();
+    noglow();
+  }
   if (e.kind === "summoner") {
     // VOIDCALLER — floating eye ringed by orbiting shards; the eye flares wide and
     // the shards splay out when it teleports or summons.
@@ -11559,19 +11896,36 @@ function drawHUD() {
     ctx.textAlign = "right";
   }
   // boss bar (sums all boss-type entities, e.g. splitter fragments)
-  let bossHpSum = 0, bossCol = "#ff3366", bossAlive = false;
+  let bossHpSum = 0, bossCol = "#ff3366", bossAlive = false, bossRef = null;
   for (const e of enemies) {
-    if (e.type === "boss" && e.hp > 0) { bossHpSum += e.hp; bossCol = e.col; bossAlive = true; }
+    if (e.type === "boss" && e.hp > 0) { bossHpSum += e.hp; bossCol = e.col; bossAlive = true; if (!bossRef) bossRef = e; }
   }
   if (bossAlive && bossBarMax > 0) {
     const w = Math.min(520, cw * 0.6);
     const x = (cw - w) / 2, y = 18 * u;
+    const phase = bossRef ? (bossRef.bphase || 1) : 1;
+    // P3 = an enraged red bar tint; the fill flashes briefly during a phase-change invuln beat.
+    let barCol = phase >= 3 ? "#ff3366" : bossCol;
+    if (bossRef && (bossRef.phaseInvT || 0) > 0 && Math.floor(timeNow * 18) % 2 === 0) barCol = "#ffffff";
     ctx.fillStyle = "rgba(0,0,0,0.6)";
     rrect(x - 2, y - 2, w + 4, 14 * u + 4, 4); ctx.fill();
-    glow(bossCol, 10);
-    ctx.fillStyle = bossCol;
+    glow(barCol, 10);
+    ctx.fillStyle = barCol;
     rrect(x, y, w * clamp(bossHpSum / bossBarMax, 0, 1), 14 * u, 3); ctx.fill();
     noglow();
+    // PHASE PIPS: threshold ticks on the bar (the player reads the two phase gates at a glance).
+    if (bossRef) {
+      const th = bossPhaseThresholds(bossRef);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      for (const tk of [th.t2, th.t3]) {
+        ctx.fillRect(x + w * tk - 1, y, 2, 14 * u);
+      }
+      // a small "P1/P2/P3" tag above the bar
+      ctx.fillStyle = phase >= 3 ? "#ff7088" : "rgba(255,255,255,0.85)";
+      ctx.textAlign = "left";
+      ctx.font = "bold " + 9 * u + "px 'Courier New', monospace";
+      ctx.fillText("PHASE " + phase + (phase >= 3 ? " · 狂暴" : ""), x, y - 4 * u);
+    }
     ctx.fillStyle = "#ffffff";
     ctx.textAlign = "center";
     ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
