@@ -162,6 +162,11 @@ const CONFIG = Object.freeze({
   shockStun: 0.7,               // shock stun (s), reduced on bosses
   poisonDur: 6,                 // poison DoT duration (s) — lingers longer than burn; reduced on bosses
   poisonMaxStacks: 6,           // poison stack cap (ramps with stacks, then clamps)
+  // ---- SHIELD (护盾) layer: a depletable barrier that eats HP damage until broken ----
+  breakDecay: 6,                // break/poise meter passive decay per sec when not being struck
+  breakWindowElite: 2.6,        // BROKEN stagger window (s) for elites/tougher trash
+  breakWindowBoss: 2.2,         // BROKEN stagger window (s) for bosses
+  brokenVuln: 1.6,              // bonus damage multiplier vs a BROKEN target (×1.6)
 });
 
 /* ---------------- §C UTIL ---------------- */
@@ -872,6 +877,27 @@ class AudioEngine {
     const t = this.ctx.currentTime;
     this.tone("square", 320, 250, t, 0.08, 0.1, false);
     this.noise(t, 0.09, 0.13, "bandpass", 2200, 900);
+  }
+  shieldHit() { // glassy tap on a struck shield layer
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sine", 880, 1180, t, 0.07, 0.05, true);
+    this.noise(t, 0.06, 0.06, "highpass", 3200, 6000);
+  }
+  shieldBreak() { // shimmering glass-burst when a shield is depleted
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.18, 0.16, "highpass", 2600, 7000);
+    this.tone("triangle", 1320, 320, t, 0.12, 0.09, true);
+    this.tone("sine", 2400, 700, t, 0.14, 0.06, true);
+  }
+  breakStagger() { // heavy posture-break thud + metallic ring (破防)
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 160, 60, t, 0.3, 0.2, true);
+    this.tone("square", 520, 200, t, 0.12, 0.12, true);
+    this.noise(t, 0.22, 0.18, "lowpass", 1800, 200);
+    this.tone("sine", 1100, 1650, t + 0.05, 0.2, 0.05, true);
   }
   phantomCue() {
     if (!this.ok()) return;
@@ -2823,6 +2849,7 @@ function spawnEnemy(type, x, y) {
     e.hp *= 3.1; e.maxHp *= 3.1;   // BUFF: elite HP x2.6 -> x3.1 (tougher mini-bosses)
     e.speed *= 1.12;               // BUFF: elite speed x1.08 -> x1.12
   }
+  initCombatLayers(e); // SHIELD (护盾) layer + BREAK (破防) meter, scaled after elite/hp ramp
   enemies.push(e);
   burst(x, y, d.col, e.elite ? 18 : 10, 160, 0.4, 2.5);
   if (e.elite) toast("ELITE — 精英出现", "#ffcc44");
@@ -2899,6 +2926,7 @@ function spawnBoss(forceKind) {
   };
   // JUGGERNAUT: armored plates that break off as HP drops, exposing the weak core
   if (def.kind === "juggernaut") boss.plates = 4;
+  initBossCombatLayers(boss); // BREAK (破防) meter (rising resistance) + phase-shield (护盾) scaffold
   bossName = def.name; bossBarMax = hp;
   // the boss holds inert through the ENTRANCE cutscene (spawnT keeps its AI/contact gated)
   boss.spawnT = BOSS_ENTRANCE_DUR;
@@ -2986,6 +3014,7 @@ function splitBoss(e) {
       poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
       bphase: 1, phaseInvT: 0, bossRage: false, phaseSpeedBumped: false,
     });
+    initBossCombatLayers(enemies[enemies.length - 1]); // fragments get their own break/shield layers
   }
   burst(e.x, e.y, e.col, 36, 320, 0.8, 4);
   audio.bossRoar("splitter");
@@ -3005,7 +3034,191 @@ function nearestEnemy(x, y, maxD) {
   return bestE;
 }
 
-function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
+/* ===================== §K0 SHIELD (护盾) + BREAK / POISE (破防) =====================
+   Two interlocking layers on tougher foes, integrated through the single hitEnemy /
+   statusDamage damage entry points so every weapon class, status & combo feeds them.
+
+   SHIELD — a depletable barrier (e.shieldHp / e.shieldMax). Damage to a shielded foe is
+   absorbed by the shield (scaled by source effectiveness) BEFORE any HP is lost; once the
+   shield breaks it bursts and damage flows to HP again. A FRONTAL shield (e.shield360 false,
+   like Shieldbearer/Bulwark) only blocks hits arriving from its facing arc — flank/rear hits
+   bypass it and hit HP directly. A 360° shield (some boss phases) blocks from every angle.
+   COUNTERS: heavy weapons (MAUL/GRAVITON/RAILGUN/MAUL-class), CRITs, charged shots, and
+   FREEZE/SHATTER chew shields far faster; a frozen foe's shield is bypassed entirely (shatter).
+   Boss phase shields REGEN after a lull but are sized so they're a burn-through, not a sponge.
+
+   BREAK / POISE — a posture meter (e.breakVal / e.breakMax) on bosses & elites/tougher trash.
+   Hits build it (heavy/charged/crit/SHATTER build MUCH more; chip builds little); it decays when
+   idle. At full the foe is BROKEN: a staggered stun window (e.brokenT) during which it can't act
+   and takes brokenVuln bonus damage — the payoff for aggression. After the window it recovers and
+   the meter resets, with RISING resistance on bosses (each break needs more & refills slower) so it
+   can't be perma-chain-stunned. Break NEVER fires during a boss phase-change invuln beat.
+   Co-op: both players hit the same e, so shield/break are inherently per-target & shared. */
+
+// Per-type SHIELD/BREAK profiles. shield: {hp, f360?} base shield-layer (scaled by hpMul).
+// brk: base break-meter size (scaled per-type). Trash without an entry can't be broken/shielded.
+const COMBAT_PROFILE = {
+  // frontal-shield sentinels keep their facing block but it's now a depletable layer
+  shield:  { shield: { hp: 70 }, brk: 70 },
+  bulwark: { shield: { hp: 85 }, brk: 90 },
+  // tougher trash get a break meter (no shield) so aggression staggers them
+  tank:    { brk: 110 },
+};
+function eliteBreakBase(e) { return 130; } // elites (any type) get a solid break meter
+
+/* set up shield + break on a freshly spawned enemy (after elite/hp scaling). */
+function initCombatLayers(e) {
+  const prof = COMBAT_PROFILE[e.type];
+  e.shieldHp = 0; e.shieldMax = 0; e.shield360 = false; e.shieldFlash = 0; e.shieldRegen = 0; e.shieldRegenT = 0;
+  e.breakVal = 0; e.breakMax = 0; e.broken = false; e.brokenT = 0; e.breakResist = 0; e.breakCD = 0; e.breakFlash = 0;
+  if (prof && prof.shield) {
+    const m = hpMul() * (e.elite ? 1.6 : 1);
+    e.shieldMax = Math.round(prof.shield.hp * m);
+    e.shieldHp = e.shieldMax;
+    e.shield360 = !!prof.shield.f360;
+  }
+  let brk = prof ? prof.brk : 0;
+  if (e.elite) brk = Math.max(brk, eliteBreakBase(e)) * 1.35;
+  if (brk > 0) { e.breakMax = brk * (1 + (depth - 1) * 0.08); e.breakVal = 0; }
+}
+
+/* set up boss shield/break. Bosses always have a (rising-resistance) break meter; some phases
+   raise a regenerating 360° shield the player must burn through. */
+function initBossCombatLayers(e) {
+  e.shieldHp = 0; e.shieldMax = 0; e.shield360 = true; e.shieldFlash = 0; e.shieldRegen = 0; e.shieldRegenT = 0;
+  // break meter scaled to the boss's HP pool so it's a meaningful chunk to fill (bosses break less easily)
+  const base = Math.max(180, e.maxHp * 0.16);
+  e.breakMax = base; e.breakBase = base; e.breakVal = 0;
+  e.broken = false; e.brokenT = 0; e.breakResist = 0; e.breakCount = 0; e.breakCD = 0; e.breakFlash = 0;
+}
+
+/* is the shield currently up & able to absorb? statuses (freeze/shock/expose) drop it. */
+function shieldActive(e) {
+  return (e.shieldHp || 0) > 0 && e.hp > 0 && e.frozenT <= 0 && (e.shockT || 0) <= 0 &&
+    (e.exposeT || 0) <= 0 && (e.spawnT || 0) <= 0;
+}
+/* does a frontal shield cover a hit arriving from (fromX,fromY)? 360° shields always do. */
+function shieldCovers(e, fromX, fromY) {
+  if (!shieldActive(e)) return false;
+  if (e.shield360) return true;
+  return Math.abs(angDiff(e.shieldA, angTo(e.x, e.y, fromX, fromY))) < 1.05;
+}
+
+/* how effective is a damage source at chewing a SHIELD (multiplier on shield damage).
+   Heavy weapons, crits & charged shots break shields faster; chip is normal. */
+function shieldBreakMul(e, isCrit, srcTag) {
+  let m = 1;
+  const sp = ctxP || player;
+  const wid = sp ? sp.weapon : null;
+  if (wid === "maul" || wid === "grav" || wid === "rail") m += 1.0; // heavy hitters
+  if (isCrit) m += 0.6;
+  if (srcTag === "charged" || srcTag === "heavy") m += 1.2;
+  if (srcTag === "bolt") m += 0.2;
+  return m;
+}
+/* how much a hit BUILDS the break meter (before per-target scaling). Heavy/charged/crit build
+   far more; chip builds little. Returns a flat poise value derived from the damage dealt. */
+function breakBuild(e, dmg, isCrit, melee, srcTag) {
+  let b = dmg * 0.5; // baseline: half the raw damage as poise
+  const sp = ctxP || player;
+  const wid = sp ? sp.weapon : null;
+  if (melee) b *= 1.15;
+  if (wid === "maul" || wid === "grav") b *= 1.7;          // heavy melee build big poise
+  if (wid === "rail" || wid === "lbow") b *= 1.5;          // heavy ranged
+  if (wid === "scatter" || wid === "whip") b *= 1.2;
+  if (isCrit) b *= 1.5;
+  if (srcTag === "charged" || srcTag === "heavy") b *= 1.8;
+  // STYLE meter rewards aggression: higher rank => more poise damage
+  if (typeof styleN === "number") b *= 1 + Math.min(0.4, styleN * 0.012);
+  return b;
+}
+
+/* add poise/break to a target; trigger BROKEN at full. Safe vs phase-invuln & already-broken. */
+function addBreak(e, amt) {
+  if (!e || e.hp <= 0 || (e.breakMax || 0) <= 0 || !(amt > 0)) return;
+  if (e.broken || (e.brokenT || 0) > 0) return;          // already staggered
+  if ((e.breakCD || 0) > 0) return;                      // post-recover lockout (diminishing returns)
+  if (e.type === "boss" && (e.phaseInvT || 0) > 0) return; // never build during phase-change invuln
+  e.breakVal = (e.breakVal || 0) + amt;
+  if (e.breakVal >= e.breakMax) triggerBreak(e);
+}
+
+/* the BROKEN / 破防 tell: stagger window, vulnerability, flash/shake/sound + visible stagger. */
+function triggerBreak(e) {
+  if (e.type === "boss" && (e.phaseInvT || 0) > 0) return;
+  e.broken = true;
+  e.breakVal = e.breakMax;
+  const boss = e.type === "boss";
+  // bosses break less long & with rising resistance; elites/trash a touch longer
+  e.brokenT = boss ? CONFIG.breakWindowBoss : CONFIG.breakWindowElite;
+  e.breakFlash = 0.4;
+  // interrupt the foe's current action so it visibly stops attacking
+  if (e.state !== "stagger") e._preState = e.state;
+  e.state = "stagger"; e.vx *= 0.2; e.vy *= 0.2; e.sub = 0; e.t = 0;
+  dnum(e.x, e.y - e.r - 18, "BROKEN 破防", "#ffcf3a", true);
+  toast("BROKEN — 破防!", "#ffcf3a");
+  burst(e.x, e.y, "#ffcf3a", boss ? 30 : 18, 300, 0.6, 4);
+  ffx.ring(e.x, e.y, e.r + (boss ? 50 : 28), "#ffe07a", 0.5, 6);
+  ffx.spawnLight(e.x, e.y, boss ? 130 : 70, "#ffd24a", 0.8);
+  ffx.pulse(e.x, e.y, boss ? 7 : 4);
+  shake(boss ? 9 : 5, boss ? 0.4 : 0.22);
+  audio.breakStagger();
+  if (boss) {
+    e.breakCount = (e.breakCount || 0) + 1;
+    // RISING RESISTANCE / diminishing returns: each break needs more poise & refills slower,
+    // so a boss can't be permanently chain-broken. Capped so it never becomes unbreakable.
+    e.breakResist = Math.min(2.2, (e.breakResist || 0) + 0.5);
+  }
+}
+
+/* tick shield-regen + break decay/recovery for one enemy/boss (called from updateEnemy). */
+function tickCombatLayers(e, dt) {
+  if ((e.shieldFlash || 0) > 0) e.shieldFlash = Math.max(0, e.shieldFlash - dt);
+  if ((e.breakFlash || 0) > 0) e.breakFlash = Math.max(0, e.breakFlash - dt);
+  // boss phase shield regen: after a lull, the 360° shield ticks back up (a burn-through, not a wall)
+  if ((e.shieldRegen || 0) > 0 && e.shieldHp < e.shieldMax && e.hp > 0) {
+    e.shieldRegenT = Math.max(0, (e.shieldRegenT || 0) - dt);
+    if (e.shieldRegenT <= 0) e.shieldHp = Math.min(e.shieldMax, e.shieldHp + e.shieldRegen * dt);
+  }
+  // BROKEN window: count down, then recover with a post-stagger lockout (diminishing returns)
+  if (e.broken) {
+    e.brokenT = Math.max(0, (e.brokenT || 0) - dt);
+    if (e.brokenT <= 0) {
+      e.broken = false;
+      e.breakVal = 0;
+      // bosses: rising resistance grows the meter & adds a refill lockout each successive break
+      if (e.type === "boss") {
+        e.breakMax = (e.breakBase || e.breakMax) * (1 + (e.breakResist || 0));
+        e.breakCD = 1.0 + (e.breakResist || 0) * 1.2;
+      } else {
+        e.breakCD = 0.6;
+      }
+      // recover from the stagger state back into a type-appropriate idle AI state
+      if (e.state === "stagger") { e.state = recoverState(e); e.cd = 0.4; }
+    }
+    return; // no decay while broken
+  }
+  if ((e.breakCD || 0) > 0) e.breakCD = Math.max(0, e.breakCD - dt);
+  // passive poise decay when not under fire (so a fleeing foe re-armors)
+  if ((e.breakVal || 0) > 0 && (e.breakMax || 0) > 0) {
+    e.breakVal = Math.max(0, e.breakVal - CONFIG.breakDecay * (e.type === "boss" ? 0.7 : 1) * dt);
+  }
+}
+
+/* a foe stuck in the BROKEN stagger state holds still (handled in updateEnemy fast-out). */
+function isStaggered(e) { return e.broken && e.state === "stagger"; }
+/* the safe idle state to drop a recovered foe back into (per type AI). */
+function recoverState(e) {
+  if (e.type === "boss") return "move";
+  switch (e.type) {
+    case "bulwark": return "advance";
+    case "blinker": case "phantom": return "stalk";
+    case "totem": return "idle";
+    default: return "seek";
+  }
+}
+
+function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag) {
   if (e.hp <= 0) return;
   // PHASE-CHANGE INVULN: during a boss's brief phase-transition beat it shrugs off hits
   // (a fair, telegraphed window — the boss flashes/pulses). Shows a small block cue.
@@ -3038,7 +3251,59 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
     burst(e.x, e.y, "#cfeeff", 10, 230, 0.45, 3);
     audio.shatter();
   }
-  const final = Math.round(dmg * mul);
+  // BROKEN / 破防 vulnerability: a staggered foe takes bonus damage — the aggression payoff.
+  if (e.broken) mul *= CONFIG.brokenVuln;
+  let final = Math.round(dmg * mul);
+
+  // SHIELD (护盾) layer: a covering shield soaks the hit before HP. A FRONTAL shield only covers
+  // its facing arc (kx/ky encodes the inbound knockback dir; the inbound origin ≈ e - kb). Flank/
+  // rear hits bypass it and land on HP. A frozen foe's shield is bypassed entirely (shatter setup).
+  if (shieldActive(e) && e.frozenT <= 0 && srcTag !== "pierce") {
+    // resolve the inbound origin from the knockback vector; if a hit carries no direction (kx=ky=0)
+    // a FRONTAL shield conservatively absorbs it (so 0-kb projectiles/zaps still feed the layer).
+    const noDir = !(kx || ky);
+    const fromX = e.x - (kx || 0) * 0.05, fromY = e.y - (ky || 0) * 0.05;
+    if ((noDir && !e.shield360) || shieldCovers(e, fromX, fromY)) {
+      const sm = shieldBreakMul(e, isCrit, srcTag);
+      const sDmg = final * sm;
+      e.shieldFlash = 0.18;
+      if (sDmg >= e.shieldHp) {
+        // shield depleted -> burst, then spill the leftover (in shield-points, de-scaled) into HP
+        const leftover = Math.max(0, Math.round((sDmg - e.shieldHp) / sm));
+        e.shieldHp = 0;
+        e.shieldRegenT = 2.2; // delay any boss regen after a break
+        dnum(e.x, e.y - e.r - 8, "SHIELD BREAK 护盾击破", "#9fd8ff", true);
+        burst(e.x, e.y, "#aaccff", 22, 300, 0.55, 3.5);
+        ffx.ring(e.x, e.y, e.r + 18, "#cfe6ff", 0.45, 5);
+        ffx.spawnLight(e.x, e.y, 80, "#aaccff", 0.6);
+        shake(4, 0.16);
+        audio.shieldBreak();
+        // breaking a shield also dumps a chunk of poise (a clear aggression payoff)
+        addBreak(e, (e.breakMax || 0) * 0.25);
+        final = leftover;
+        if (final <= 0) {
+          dnum(e.x, e.y - e.r, "0", "#9fd8ff", false);
+          if (e.hp <= 0) killEnemy(e);
+          return;
+        }
+      } else {
+        e.shieldHp -= sDmg;
+        e.flash = Math.max(e.flash, 0.06);
+        dnum(e.x, e.y - e.r, "0", "#9fd8ff", false);
+        audio.shieldHit();
+        ffx.spawnLight(e.x, e.y, 26, "#aaccff", 0.25);
+        addBreak(e, breakBuild(e, dmg, isCrit, melee, srcTag) * 0.4); // chip poise through the shield
+        return; // shield ate the whole hit; HP untouched
+      }
+    }
+  }
+
+  // BREAK / POISE build from the landed hit (heavy/charged/crit/shatter build more).
+  if ((e.breakMax || 0) > 0 && !e.broken) {
+    let bb = breakBuild(e, dmg, isCrit, melee, srcTag);
+    if (e.frozenT > 0) bb *= 2.2; // SHATTER on a frozen foe adds BIG break
+    addBreak(e, bb);
+  }
   e.hp -= final;
   e.flash = 0.12;
   // DUO SANGUINE EDGE (CRIT+LIFESTEAL): critical hits heal you (respecting the per-sec steal cap)
@@ -3099,7 +3364,20 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee) {
 function statusDamage(e, dmg, col) {
   if (e.hp <= 0) return;
   if (e.type === "boss" && (e.phaseInvT || 0) > 0) return; // DoTs paused during phase-change beat
-  const final = Math.max(1, Math.round(dmg));
+  let final = Math.max(1, Math.round(dmg));
+  if (e.broken) final = Math.round(final * CONFIG.brokenVuln); // BROKEN takes bonus DoT/AoE too
+  // SHIELD: DoTs/AoEs chip a 360° shield (or a frontal one from the centre); frozen bypasses.
+  if (shieldActive(e) && e.frozenT <= 0 && e.shield360) {
+    e.shieldFlash = Math.max(e.shieldFlash || 0, 0.12);
+    if (final >= e.shieldHp) {
+      final = Math.round(final - e.shieldHp); e.shieldHp = 0; e.shieldRegenT = 2.2;
+      burst(e.x, e.y, "#aaccff", 14, 240, 0.45, 3); audio.shieldBreak();
+      dnum(e.x, e.y - e.r - 8, "SHIELD BREAK 护盾击破", "#9fd8ff", true);
+      if (final <= 0) return;
+    } else { e.shieldHp -= final; return; }
+  }
+  // status/AoE builds a little poise (chip — not the aggression payoff)
+  if ((e.breakMax || 0) > 0 && !e.broken) addBreak(e, final * 0.18);
   e.hp -= final;
   e.flash = Math.max(e.flash, 0.05);
   dnum(e.x, e.y - e.r, String(final), col, false);
@@ -3232,12 +3510,13 @@ function thermalSnap(e) {
   }
 }
 
-/* shieldbearer: blocks bolts/slashes arriving from the shield-facing side */
+/* shieldbearer/bulwark: is a hit from (fromX,fromY) covered by the still-up frontal shield?
+   The shield is now a DEPLETABLE LAYER (see hitEnemy) — this just answers whether the inbound
+   hit lands on the shield arc (so projectiles get consumed against it & melee clanks) versus
+   flanking it to the body. Returns false once the shield HP is gone, so a depleted shield no
+   longer deflects (the foe is then open from the front too). */
 function shieldBlocks(e, fromX, fromY) {
-  // SHIELDBEARER and the NEW BULWARK both raise a frontal energy shield that eats hits
-  // arriving from the shield-facing arc (unless frozen/shocked/exposed).
-  return (e.type === "shield" || e.type === "bulwark") && e.hp > 0 && e.frozenT <= 0 && (e.shockT || 0) <= 0 &&
-    (e.exposeT || 0) <= 0 && e.spawnT <= 0 &&
+  return (e.shieldHp || 0) > 0 && shieldActive(e) && !e.shield360 &&
     Math.abs(angDiff(e.shieldA, angTo(e.x, e.y, fromX, fromY))) < 1.05;
 }
 
@@ -4680,8 +4959,7 @@ function trySlash(p) {
       if (d > range + e.r) continue;
       const a = angTo(p.x, p.y, e.x, e.y);
       if (Math.abs(angDiff(p.slashAng, a)) > arc / 2 + Math.atan2(e.r, Math.max(1, d))) continue;
-      if (shieldBlocks(e, p.x, p.y)) { e.exposeT = 1.1; e.kbx += Math.cos(a) * 200; audio.clank(); continue; }
-      hitEnemy(e, dmg * 0.5, Math.cos(a) * 120, Math.sin(a) * 120, critRoll(), true);
+      hitEnemy(e, dmg * 0.5, Math.cos(a) * 120, Math.sin(a) * 120, critRoll(), true); // shield depleted via hitEnemy
       if (boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
     }
     // barrels too
@@ -4705,14 +4983,9 @@ function trySlash(p) {
       if (d > range + e.r) continue;
       const a = angTo(p.x, p.y, e.x, e.y);
       if (Math.abs(angDiff(sAng, a)) > arc / 2 + Math.atan2(e.r, Math.max(1, d))) continue;
-      if (!lunge && shieldBlocks(e, p.x, p.y)) { // the lance lunge punches through shields
-        e.kbx += Math.cos(a) * 340; e.kby += Math.sin(a) * 340;
-        e.exposeT = 1.1;
-        burst(e.x + Math.cos(e.shieldA) * (e.r + 6), e.y + Math.sin(e.shieldA) * (e.r + 6), "#88aaff", 8, 180, 0.3, 2.5);
-        audio.clank();
-        hitAny = true;
-        continue;
-      }
+      // SHIELD ARC: a covered melee hit deplets the frontal shield layer (handled in hitEnemy).
+      // The LANCE LUNGE punches THROUGH the shield (treated as a flank) — tagged so it bypasses.
+      const lungePierce = lunge && shieldBlocks(e, p.x, p.y);
       // PHALANX: lance crits far more often at the tip of its reach
       let crit = critRoll();
       if (!crit && boonLv("phalanx") && d > range * 0.66) crit = Math.random() < 0.25 * boonPow("phalanx");
@@ -4724,7 +4997,7 @@ function trySlash(p) {
         hitDmg *= 1 + 0.4 * boonPow("execorder");
       }
       const wasAlive = e.hp;
-      hitEnemy(e, hitDmg, Math.cos(a) * kb, Math.sin(a) * kb, crit, true);
+      hitEnemy(e, hitDmg, Math.cos(a) * kb, Math.sin(a) * kb, crit, true, lungePierce ? "pierce" : undefined);
       // BLADE RIPOSTE: post-dash strike also stuns
       if (riposte && e.hp > 0) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.3 : 0.7);
       // BLADE CLEAVE: slashes make foes bleed
@@ -5003,10 +5276,11 @@ function arcTetherStrike(p, W) {
   beams.push({ x1: p.x, y1: p.y, x2: tgt.x, y2: tgt.y, t: 0.18, col: W.col });
   sparkLine(p.x, p.y, tgt.x, tgt.y, W.col, 8);
   ffx.spawnLight(tgt.x, tgt.y, 50, W.col, 0.5);
-  if (shieldBlocks(tgt, p.x, p.y)) { tgt.exposeT = 1.1; audio.clank(); }
-  else {
-    hitEnemy(tgt, dmg, 0, 0, critRoll(), false);
-    if (tgt.hp > 0) {
+  {
+    // route through hitEnemy with the inbound direction so a frontal shield depletes/flanks correctly
+    const za = angTo(p.x, p.y, tgt.x, tgt.y);
+    hitEnemy(tgt, dmg, Math.cos(za) * 40, Math.sin(za) * 40, critRoll(), false);
+    if (tgt.hp > 0 && !shieldBlocks(tgt, p.x, p.y)) {
       if (boonLv("conduct")) applyShock(tgt, 4 * dmgMul(), 0);                 // CONDUCTOR
       if (boonLv("supercond")) applyShock(tgt, 4 * boonPow("supercond") * dmgMul(), 1); // SUPERCONDUCT
       else applyShock(tgt, 3 * dmgMul(), 0); // tether always shocks (its signature)
@@ -5527,9 +5801,7 @@ function updateSpells(dt) {
       for (const e of enemies) {
         if (e.hp <= 0 || s.hitSet.includes(e)) continue;
         if (dist(s.x, s.y, e.x, e.y) >= s.r + e.r) continue;
-        if (shieldBlocks(e, s.x - s.vx * 0.02, s.y - s.vy * 0.02)) {
-          burst(s.x, s.y, "#88aaff", 6, 140, 0.25, 2); audio.clank(); detonate = true; break;
-        }
+        // FROST bypasses shields (chill/freeze sets them inactive — the cold counter to shields)
         frostHitEnemy(s, e);
         s.hitSet.push(e);
         if (s.pierce > 0) s.pierce--; else { detonate = true; break; }
@@ -5807,6 +6079,7 @@ function fireRail(p, W, a, base) {
   }
   // single big hit; RAPID RAIL trades per-shot weight (×0.42 dmg ≈ matches the ×0.42 faster cadence)
   const dmg = base * 2.3 * (rapid ? 0.42 : 1) * (over ? 1.15 : 1) * capMul;
+  const railTag = (over || capMul > 1.2) ? "charged" : undefined; // charged/overcharged rails shred shields & poise
   const ex = clamp(p.x + Math.cos(a) * len, CONFIG.wall, CONFIG.arenaW - CONFIG.wall);
   const ey = clamp(p.y + Math.sin(a) * len, CONFIG.wall, CONFIG.arenaH - CONFIG.wall);
   // visual rail beam + sparks
@@ -5826,9 +6099,9 @@ function fireRail(p, W, a, base) {
     t = clamp(t, 0, 1);
     const px = p.x + dx * t, py = p.y + dy * t;
     if (dist(px, py, e.x, e.y) > bandW + e.r) continue;
-    if (shieldBlocks(e, p.x, p.y)) { e.exposeT = 1.1; e.kbx += Math.cos(a) * 200; audio.clank(); continue; }
     let crit = critRoll() || over;       // OVERCHARGE: full-charge shots always crit
-    hitEnemy(e, dmg, Math.cos(a) * 160, Math.sin(a) * 160, crit, false);
+    // RAILGUN pierces & shreds shields (handled via hitEnemy: heavy weapon + charged tag)
+    hitEnemy(e, dmg, Math.cos(a) * 160, Math.sin(a) * 160, crit, false, railTag);
     if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
     if (e.hp > 0) applyWeaponEnchants(e, p); // 元素附魔: enchants fire on railgun hits too
   }
@@ -5930,11 +6203,10 @@ function updateBullets(dt) {
     for (const e of enemies) {
       if (e.hp <= 0 || b.hitSet.includes(e)) continue;
       if (dist(b.x, b.y, e.x, e.y) >= b.r + e.r) continue;
-      if (shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02)) {
-        burst(b.x, b.y, "#88aaff", 5, 130, 0.22, 2); audio.clank(); dead = true; break;
-      }
-      bulletHitEnemy(b, e);
+      const onShield = shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02);
+      bulletHitEnemy(b, e); // routes through hitEnemy -> shield depletes if the arc is covered
       b.hitSet.push(e);
+      if (onShield && (e.shieldHp || 0) > 0) { burst(b.x, b.y, "#88aaff", 4, 120, 0.2, 2); dead = true; break; } // round spent on the shield
       // RICOCHET ROUNDS: a rifle round can redirect toward a nearby unhit foe instead of stopping
       if (b.bounces > 0 && b.kind === "rifle") {
         let tgt = null, bd = 200;
@@ -6176,7 +6448,9 @@ function arrowHitEnemy(a, e) {
     else { p.seekTgt = e; p.seekN = 0; }
     if (!crit && Math.random() < 0.10 * boonPow("heartseek") * p.seekN) crit = true;
   }
-  hitEnemy(e, dmg, Math.cos(a.ang) * a.kb, Math.sin(a.ang) * a.kb, crit, false);
+  // a full-draw LONGBOW arrow is a heavy charged shot — shreds shields & poise
+  const aTag = (a.charge || 0) >= 0.85 ? "charged" : undefined;
+  hitEnemy(e, dmg, Math.cos(a.ang) * a.kb, Math.sin(a.ang) * a.kb, crit, false, aTag);
   if (e.hp <= 0) return;
   // GALEFORCE knockback already folded into kb; STATIC ARROWS apply SHOCK (chains + shatters frozen)
   if (a.shock > 0) applyShock(e, (4 + depth * 0.4) * a.shock * dmgMul(), 1);
@@ -6219,12 +6493,11 @@ function updateArrows(dt) {
     for (const e of enemies) {
       if (e.hp <= 0 || a.hitSet.includes(e)) continue;
       if (dist(a.x, a.y, e.x, e.y) >= a.r + e.r) continue;
-      if (shieldBlocks(e, a.x - a.vx * 0.02, a.y - a.vy * 0.02)) {
-        burst(a.x, a.y, "#88aaff", 5, 130, 0.2, 2); audio.clank(); dead = true; break;
-      }
+      const onShield = shieldBlocks(e, a.x - a.vx * 0.02, a.y - a.vy * 0.02);
       const ex = a.x, ey = a.y;
-      arrowHitEnemy(a, e);
+      arrowHitEnemy(a, e); // routes through hitEnemy -> shield depletes if the arc is covered
       a.hitSet.push(e);
+      if (onShield && (e.shieldHp || 0) > 0) { burst(a.x, a.y, "#88aaff", 4, 120, 0.2, 2); dead = true; break; } // arrow spent on the shield
       // SPLIT ARROW: spawn shard arrows fanning off the impact (QUICK BOW)
       if (a.split > 0) {
         const shards = a.split; a.split = 0;
@@ -6702,8 +6975,17 @@ function enemyContact(e, dmg, dt) {
 
 function updateEnemy(e, dt) {
   e.flash = Math.max(0, e.flash - dt);
+  tickCombatLayers(e, dt); // SHIELD regen + BREAK decay/recovery (ticks through every state)
   e.spawnT = Math.max(0, e.spawnT - dt);
   if (e.spawnT > 0) return;
+  // BROKEN / 破防 stagger: a staggered foe holds still & can't act for the window (then recovers)
+  if (isStaggered(e)) {
+    e.vx *= Math.pow(0.02, dt); e.vy *= Math.pow(0.02, dt);
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    if (Math.random() < dt * 8) addPart({ x: e.x + rand(-e.r, e.r), y: e.y + rand(-e.r, e.r), vx: rand(-20, 20), vy: -rand(10, 40), t: 0.4, tm: 0.4, col: "#ffd24a", r: rand(1.5, 3), drag: 1 });
+    collideArena(e);
+    return;
+  }
   if ((e.sdCD || 0) > 0) e.sdCD -= dt;
   if ((e.orbitCD || 0) > 0) e.orbitCD -= dt; // GLAIVE ORBIT BLADE grind throttle
   if ((e.ewCD || 0) > 0) e.ewCD -= dt;   // DUO ELEMENTAL WAKE trail tick cooldown
@@ -7183,17 +7465,29 @@ function bossPhaseTransition(e, phase) {
     // ENRAGE look: visibly powered up + a small permanent speed bump (separate from heat enrage)
     e.bossRage = true;
     if (!e.phaseSpeedBumped) { e.speed *= 1.12; e.phaseSpeedBumped = true; }
+    // drop the Phase-2 shield going into the desperate phase (no lingering wall in the final third)
+    e.shieldHp = 0; e.shieldMax = 0; e.shieldRegen = 0;
     toast("PHASE 3 — 终焉狂暴!", "#ff3366");
     audio.roar();
     shake(11, 0.5);
     burst(e.x, e.y, "#ff3366", 32, 340, 0.7, 4);
     ffx.ring(e.x, e.y, e.r + 50, "#ff5577", 0.6, 7);
   } else {
-    toast("PHASE 2 — 强化!", e.col);
+    toast("PHASE 2 — 强化! 护盾", e.col);
     audio.bossRoar(e.kind);
     shake(8, 0.4);
     burst(e.x, e.y, e.col, 24, 300, 0.6, 4);
     ffx.ring(e.x, e.y, e.r + 40, e.col, 0.5, 6);
+    // PHASE 2 raises a temporary REGENERATING 360° SHIELD the player must burn through. Sized as a
+    // burn-through (≈12% of max HP) with a slow regen after a lull — fair, never a damage sponge.
+    e.shieldMax = Math.max(120, Math.round(e.maxHp * 0.12));
+    e.shieldHp = e.shieldMax;
+    e.shield360 = true;
+    e.shieldRegen = e.shieldMax / 14; // full regen in ~14s of uninterrupted lull
+    e.shieldRegenT = 0;
+    audio.shieldHit();
+    ffx.ring(e.x, e.y, e.r + 18, "#aaccff", 0.5, 6);
+    dnum(e.x, e.y - e.r - 20, "SHIELD UP 护盾", "#9fd8ff", true);
   }
   ffx.pulse(e.x, e.y, 8);
   ffx.spawnLight(e.x, e.y, 150, phase >= 3 ? "#ff3366" : e.col, 0.9);
@@ -8255,18 +8549,14 @@ function step(dt) {
     for (const e of enemies) {
       if (e.hp <= 0 || b.hitSet.includes(e)) continue;
       if (dist(b.x, b.y, e.x, e.y) < b.r + e.r) {
-        if (shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02)) {
-          // frontal energy shield eats the bolt
-          burst(b.x, b.y, "#88aaff", 6, 140, 0.25, 2);
-          audio.clank();
-          b.t = -1;
-          break;
-        }
+        const onShield = shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02);
         const crit = critRoll();
         const a = Math.atan2(b.vy, b.vx);
-        hitEnemy(e, boltDamage(), Math.cos(a) * 130, Math.sin(a) * 130, crit, false);
+        // BOLT chips shields a bit (srcTag "bolt"); a covered bolt deposits into the layer & is spent
+        hitEnemy(e, boltDamage(), Math.cos(a) * 130, Math.sin(a) * 130, crit, false, "bolt");
         if (crit && boonLv("volt")) applyShock(e, 7 * boonPow("volt") * dmgMul(), 1); // VOLT ROUNDS
         b.hitSet.push(e);
+        if (onShield && (e.shieldHp || 0) > 0) { burst(b.x, b.y, "#88aaff", 5, 130, 0.22, 2); b.t = -1; break; }
         if (b.pierce > 0) b.pierce--;
         else { b.t = -1; burst(b.x, b.y, "#ff66ee", 6, 140, 0.25, 2); break; }
       }
@@ -10211,11 +10501,14 @@ function drawEnemy(e) {
     ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.35, 0, TAU); ctx.fill();
     ctx.fillStyle = fl ? "#ffffff" : "#cfe0ff";
     ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.15, 0, TAU); ctx.fill();
-    // the big energy shield — bright & layered when active, fractured-dim when down
-    const active = e.frozenT <= 0 && (e.shockT || 0) <= 0 && (e.exposeT || 0) <= 0;
-    glow("#aaccff", active ? 16 : 4);
-    ctx.strokeStyle = active ? "rgba(170,204,255,0.95)" : "rgba(120,140,200,0.32)";
-    ctx.lineWidth = active ? 5 : 3;
+    // the big energy shield — a DEPLETABLE LAYER: brightness tracks remaining shield HP, a white
+    // hit-flash on a struck shield, fractured-dim when down (frozen/shocked/depleted).
+    const active = shieldActive(e);
+    const sFrac = e.shieldMax > 0 ? clamp(e.shieldHp / e.shieldMax, 0, 1) : 0;
+    const sHit = (e.shieldFlash || 0) > 0;
+    glow(sHit ? "#ffffff" : "#aaccff", active ? 10 + sFrac * 10 : 4);
+    ctx.strokeStyle = sHit ? "#ffffff" : (active ? "rgba(170,204,255," + (0.4 + sFrac * 0.55) + ")" : "rgba(120,140,200,0.32)");
+    ctx.lineWidth = active ? 3 + sFrac * 3 : 3;
     ctx.beginPath(); ctx.arc(0, 0, e.r + 8, -1.2, 1.2); ctx.stroke();
     if (active) {
       ctx.strokeStyle = "rgba(200,225,255,0.4)";
@@ -10345,10 +10638,12 @@ function drawEnemy(e) {
     ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.32, 0, TAU); ctx.fill();
     ctx.fillStyle = fl ? "#ffffff" : "#cfe0ff";
     ctx.beginPath(); ctx.arc(-e.r * 0.05, 0, e.r * 0.14, 0, TAU); ctx.fill();
-    const active = e.frozenT <= 0 && (e.shockT || 0) <= 0 && (e.exposeT || 0) <= 0;
-    glow("#9ab8ff", active ? 16 : 4);
-    ctx.strokeStyle = active ? "rgba(150,180,255,0.95)" : "rgba(110,130,190,0.32)";
-    ctx.lineWidth = active ? 6 : 3;
+    const active = shieldActive(e);
+    const sFrac = e.shieldMax > 0 ? clamp(e.shieldHp / e.shieldMax, 0, 1) : 0;
+    const sHit = (e.shieldFlash || 0) > 0;
+    glow(sHit ? "#ffffff" : "#9ab8ff", active ? 10 + sFrac * 10 : 4);
+    ctx.strokeStyle = sHit ? "#ffffff" : (active ? "rgba(150,180,255," + (0.4 + sFrac * 0.55) + ")" : "rgba(110,130,190,0.32)");
+    ctx.lineWidth = active ? 3 + sFrac * 3 : 3;
     ctx.beginPath(); ctx.arc(0, 0, e.r + 10, -1.0, 1.0); ctx.stroke();
     noglow();
     ctx.restore();
@@ -10509,6 +10804,24 @@ function drawEnemy(e) {
     ctx.restore();
   }
 
+  // 360° SHIELD (护盾) bubble — bosses & any 360-shielded foe. Brightness tracks shield HP; a
+  // white hit-flash pulses on a struck shield (the frontal shieldbearer/bulwark draw their own arc).
+  if (e.shield360 && shieldActive(e)) {
+    const sFrac = e.shieldMax > 0 ? clamp(e.shieldHp / e.shieldMax, 0, 1) : 0;
+    const sHit = (e.shieldFlash || 0) > 0;
+    ctx.save();
+    glow(sHit ? "#ffffff" : "#aaccff", 8 + sFrac * 10);
+    ctx.strokeStyle = sHit ? "#ffffff" : "rgba(170,204,255," + (0.35 + sFrac * 0.5) + ")";
+    ctx.lineWidth = 2 + sFrac * 3;
+    ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 12, 0, TAU); ctx.stroke();
+    if (sFrac > 0 && detail) { // faint inner shimmer
+      ctx.strokeStyle = "rgba(210,230,255," + (0.18 * sFrac) + ")"; ctx.lineWidth = 6;
+      ctx.beginPath(); ctx.arc(e.x, e.y, e.r + 12, timeNow * 1.5, timeNow * 1.5 + 2.4); ctx.stroke();
+    }
+    noglow();
+    ctx.restore();
+  }
+
   // small hp bar (not boss; boss has top bar)
   if (e.type !== "boss" && e.hp < e.maxHp) {
     const w = e.r * 2;
@@ -10516,6 +10829,19 @@ function drawEnemy(e) {
     ctx.fillRect(e.x - w / 2, e.y - e.r - 9, w, 3.5);
     ctx.fillStyle = e.col;
     ctx.fillRect(e.x - w / 2, e.y - e.r - 9, w * clamp(e.hp / e.maxHp, 0, 1), 3.5);
+  }
+  // BREAK / POISE (破防) meter — a thin amber bar under non-boss breakable foes; flashes when BROKEN.
+  if (e.type !== "boss" && (e.breakMax || 0) > 0 && ((e.breakVal || 0) > 0 || e.broken)) {
+    const w = e.r * 2, by = e.y - e.r - 5.5;
+    ctx.fillStyle = "rgba(0,0,0,0.5)";
+    ctx.fillRect(e.x - w / 2, by, w, 2.6);
+    if (e.broken) {
+      ctx.fillStyle = Math.floor(timeNow * 16) % 2 ? "#fff2b0" : "#ffcf3a";
+      ctx.fillRect(e.x - w / 2, by, w, 2.6);
+    } else {
+      ctx.fillStyle = "#ffb020";
+      ctx.fillRect(e.x - w / 2, by, w * clamp(e.breakVal / e.breakMax, 0, 1), 2.6);
+    }
   }
   // tiny status icons above afflicted enemies
   if (frozen || (e.burnT || 0) > 0 || (e.shockT || 0) > 0 || (e.poisonT || 0) > 0) {
@@ -11930,6 +12256,50 @@ function drawHUD() {
     ctx.textAlign = "center";
     ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
     ctx.fillText(bossName + " — DEPTH " + depth, cw / 2, y + 7 * u);
+
+    // BREAK / POISE (破防) bar — a thin AMBER bar directly under the boss HP bar (distinct color).
+    // Fills as the boss is staggered; on BROKEN it flashes & labels "BROKEN 破防" (the burst window).
+    if (bossRef && (bossRef.breakMax || 0) > 0) {
+      const by = y + 14 * u + 3, bh = 4 * u;
+      let bSum = 0, bMax = 0, anyBroken = false;
+      for (const e of enemies) {
+        if (e.type === "boss" && e.hp > 0 && (e.breakMax || 0) > 0) { bSum += (e.broken ? e.breakMax : e.breakVal) || 0; bMax += e.breakMax; if (e.broken) anyBroken = true; }
+      }
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      rrect(x - 2, by - 1, w + 4, bh + 2, 3); ctx.fill();
+      const bf = bMax > 0 ? clamp(bSum / bMax, 0, 1) : 0;
+      const bc = anyBroken ? (Math.floor(timeNow * 16) % 2 ? "#fff2b0" : "#ffcf3a") : "#ffb020";
+      glow(bc, anyBroken ? 12 : 5);
+      ctx.fillStyle = bc;
+      rrect(x, by, w * (anyBroken ? 1 : bf), bh, 2); ctx.fill();
+      noglow();
+      ctx.fillStyle = anyBroken ? "#fff2b0" : "rgba(255,176,32,0.9)";
+      ctx.textAlign = "right";
+      ctx.font = "bold " + 8 * u + "px 'Courier New', monospace";
+      ctx.fillText(anyBroken ? "BROKEN 破防!" : "破防 BREAK", x + w, by + bh + 8 * u);
+      ctx.textAlign = "center";
+    }
+    // SHIELD (护盾) bar — shown only while a boss phase shield is up, as a cyan strip above the HP bar.
+    {
+      let shSum = 0, shMax = 0;
+      for (const e of enemies) {
+        if (e.type === "boss" && e.hp > 0 && shieldActive(e)) { shSum += e.shieldHp; shMax += e.shieldMax; }
+      }
+      if (shMax > 0 && shSum > 0) {
+        const sh = 4 * u, sy2 = y - sh - 14 * u;
+        ctx.fillStyle = "rgba(0,0,0,0.6)";
+        rrect(x - 2, sy2 - 1, w + 4, sh + 2, 3); ctx.fill();
+        glow("#9fd8ff", 8);
+        ctx.fillStyle = "#9fd8ff";
+        rrect(x, sy2, w * clamp(shSum / shMax, 0, 1), sh, 2); ctx.fill();
+        noglow();
+        ctx.fillStyle = "rgba(159,216,255,0.95)";
+        ctx.textAlign = "left";
+        ctx.font = "bold " + 8 * u + "px 'Courier New', monospace";
+        ctx.fillText("护盾 SHIELD", x, sy2 - 2 * u);
+        ctx.textAlign = "center";
+      }
+    }
   }
   if (bossWarnT > 0 && Math.floor(timeNow * 4) % 2 === 0) {
     ctx.fillStyle = "#ff3366";
@@ -12050,6 +12420,8 @@ function drawTitle() {
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
     "武器架 BOLT 键切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
+    "护盾(蓝)需先击破才能伤血：重武器/暴击/蓄力/冰冻更快破盾 — SHIELD (护盾, blue) soaks HP dmg till broken; heavy/crit/charged/FREEZE shred it",
+    "猛攻积攒破防(黄条)：满则破防硬直+承伤暴增；强敌/BOSS更难破 — aggression fills BREAK (破防, amber); full = stagger + bonus dmg; bosses resist",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -12064,6 +12436,8 @@ function drawTitle() {
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
     "武器架按 BOLT 切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
+    "护盾(蓝)需先击破才能伤血：重武器/暴击/蓄力/冰冻更快破盾 — SHIELD (护盾, blue) soaks HP dmg till broken; heavy/crit/charged/FREEZE shred it",
+    "猛攻积攒破防(黄条)：满则破防硬直+承伤暴增；强敌/BOSS更难破 — aggression fills BREAK (破防, amber); full = stagger + bonus dmg; bosses resist",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
