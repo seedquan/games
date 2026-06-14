@@ -68,9 +68,13 @@
              progress; each player has own HP/energy/dash/weapon and picks
              their own boon.  HP=0 = DOWNED; a partner revives by standing
              close ~3s; both down = game over.  Style meter shared.
-   Hub ARMORY rack: 9 weapon forms (BLADE / LANCE / MAUL /
+   Hub ARMORY rack: 12 weapon forms (BLADE / LANCE / MAUL /
              TWIN FANG / ARC CASTER / GRAVITON MACE /
-             GLAIVE / CHAIN WHIP / PRISM SABER).
+             GLAIVE / CHAIN WHIP / PRISM SABER /
+             EMBER STAFF / FROST WAND / STORM STAFF).
+             The last three are MAGIC WAND/STAFF casters: the slash
+             key/button CASTS a ranged/area spell (own cast cadence)
+             instead of a melee swing.
    Pause menu: EFFECTS toggle (F while paused) cycles bloom/scanlines/shake
              intensity (full / reduced / off), persisted; plus FULLSCREEN and
              AUTO-FULLSCREEN items (gamepad d-pad navigates, × confirms).
@@ -440,6 +444,34 @@ class AudioEngine {
     this.tone("sine", 220, 60, t, 0.28, 0.14, true);
     this.noise(t, 0.24, 0.1, "lowpass", 900, 200);
   }
+  emberCast(big) { // EMBER STAFF fireball launch — airy whoosh + low fwoomp
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, big ? 0.2 : 0.14, 0.12, "bandpass", 900, 240);
+    this.tone("sawtooth", big ? 200 : 260, big ? 90 : 120, t, 0.16, 0.08, true);
+    if (big) this.tone("sine", 140, 60, t, 0.22, 0.1, true);
+  }
+  emberBlast(big) { // EMBER fireball impact — bursting boom
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, big ? 0.4 : 0.26, big ? 0.24 : 0.18, "lowpass", 2600, 110);
+    this.tone("sawtooth", big ? 150 : 200, 45, t, big ? 0.32 : 0.22, 0.14, true);
+    this.noise(t, 0.1, 0.12, "bandpass", 1800, 600);
+  }
+  frostCast() { // FROST WAND icebolt — sharp glassy zip
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("triangle", 1400, 2200, t, 0.1, 0.06, true);
+    this.tone("sine", 2100, 2600, t, 0.07, 0.04, true);
+    this.noise(t, 0.07, 0.07, "highpass", 4000, 8000);
+  }
+  stormCast() { // STORM STAFF lightning — bright crackling discharge
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("sawtooth", 1700, 420, t, 0.11, 0.07, true);
+    this.tone("square", 1100, 2000, t + 0.02, 0.08, 0.05, false);
+    this.noise(t, 0.12, 0.09, "highpass", 3800, 7500);
+  }
   gravImplode() { // singularity collapse — sub thump + inrush
     if (!this.ok()) return;
     const t = this.ctx.currentTime;
@@ -780,6 +812,15 @@ const WEAPONS = [
   { id: "whip",  name: "CHAIN WHIP",    zh: "锁链鞭", col: "#ffcf5e", glyph: "⌇", rangeMul: 2.1,  arcMul: 0.42, dmgMul: 0.82, cdMul: 1.15, durMul: 1.0,  critBase: 0 },
   // PRISM SABER: short slash plus a forward piercing energy beam tick; strong ahead, weak to the sides
   { id: "prism", name: "PRISM SABER",   zh: "棱光刃", col: "#9d7bff", glyph: "↟", rangeMul: 0.88, arcMul: 0.78, dmgMul: 0.9,  cdMul: 0.95, durMul: 0.95, critBase: 0.05 },
+  /* ---- MAGIC WAND / STAFF class: the slash button CASTS a spell in the aim direction
+     (ranged/area magic) instead of a melee swing. Casters trade melee reach for range,
+     each gated by its own castCD cadence so they sit at a comparable power budget. ---- */
+  // EMBER STAFF: lobs a fireball that bursts in an AoE on impact + leaves a burning patch; applies BURN. Area denial + DoT.
+  { id: "ember", name: "EMBER STAFF", zh: "火焰法杖", col: "#ff7a3c", glyph: "🜂", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isCaster: true, castCD: 0.62 },
+  // FROST WAND: fires a fast piercing icebolt that slows and builds FREEZE stacks; shatter setups. Control.
+  { id: "frost", name: "FROST WAND",  zh: "冰霜法杖", col: "#7fd8ff", glyph: "❅", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0.04, isCaster: true, castCD: 0.42 },
+  // STORM STAFF: emits a chaining lightning bolt that arcs to several nearby foes, applying SHOCK. Multi-target chain.
+  { id: "storm", name: "STORM STAFF", zh: "闪电法杖", col: "#ffe24a", glyph: "⚡", rangeMul: 1, arcMul: 1, dmgMul: 1, cdMul: 1, durMul: 1, critBase: 0, isCaster: true, castCD: 0.5 },
 ];
 let curWeapon = store.get("weapon") || "blade";
 if (!WEAPONS.some((w) => w.id === curWeapon)) curWeapon = "blade";
@@ -867,6 +908,13 @@ const BOONS = [
   { id: "flechette",name: "FLECHETTE", desc: "Whip tip emits a shockwave at max reach", col: "#ffe09a", glyph: "✺", max: 2, weapon: "whip" },
   { id: "refract",name: "REFRACTION", desc: "Prism beam splits into a forward V", col: "#9d7bff", glyph: "ψ", max: 2, weapon: "prism" },
   { id: "ocharge",name: "OVERCHARGE+", desc: "Consecutive prism hits charge a bigger beam", col: "#bda6ff", glyph: "⇑", max: 2, weapon: "prism" },
+  /* ---- caster-class exclusive boons (only in the pool while that staff/wand is wielded) ---- */
+  { id: "conflag",name: "CONFLAGRATION", desc: "Ember blast bigger; burn spreads between close foes", col: "#ff7a3c", glyph: "🔥", max: 2, weapon: "ember" },
+  { id: "meteor", name: "METEOR",       desc: "Occasional empowered fireball that stuns on impact", col: "#ffaa55", glyph: "☄", max: 2, weapon: "ember" },
+  { id: "permaf", name: "PERMAFROST",   desc: "Frost hits build freeze faster and it lasts longer", col: "#7fd8ff", glyph: "❆", max: 2, weapon: "frost" },
+  { id: "icelance",name: "ICE LANCE",   desc: "Frost shots pierce all and shatter frozen foes for big damage", col: "#bfeeff", glyph: "➶", max: 2, weapon: "frost" },
+  { id: "tempest",name: "TEMPEST",      desc: "Storm chains to +2 foes with reduced damage falloff", col: "#ffe24a", glyph: "↯", max: 2, weapon: "storm" },
+  { id: "overvolt",name: "OVERVOLT",    desc: "Shocked foes hit again take bonus; storm chain can crit", col: "#fff39a", glyph: "⌁", max: 2, weapon: "storm" },
 ];
 const boonById = (id) => BOONS.find((b) => b.id === id);
 
@@ -924,6 +972,7 @@ let bossWarnT = 0;
 let hazards = [], barrels = [], quakes = [], slashGhosts = [];
 let singularities = [];                // graviton mace mini black holes
 let glaives = [], glaivePool = [];     // GLAIVE thrown blades (live) + free-list pool
+let spells = [], spellPool = [];       // STAFF/WAND spell projectiles (live) + free-list pool
 let lights = [];                       // dynamic point lights (rebuilt each frame)
 let motes = [];                        // drifting ambient dust/ember particles
 let slowmoT = 0;                       // execution slow-mo pulse (decays in REAL time)
@@ -1408,6 +1457,7 @@ function newPlayer(idx) {
     glaiveOut: false, glaiveSpeed: 0,  // GLAIVE: true while a thrown blade is in flight (melee locked)
     prismN: 0, prismT: 0,              // PRISM SABER OVERCHARGE+ consecutive-hit charge
     velBuffT: 0,                       // RETURN VELOCITY catch speed buff timer
+    castCD: 0, castN: 0,               // STAFF/WAND cast cadence + cast counter (METEOR cadence)
     boltCD: 0,
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
@@ -1428,6 +1478,9 @@ function boonPow(id) { const p = ctxP || player; return (p && p.boonPow && p.boo
 function dmgMul() { return 1 + meta.dmg * 0.10; }
 function dashRegenMul() { return 1 + 0.05 * Math.max(0, (meta.dash || 0) - 4); }
 function meleeDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weaponDefP(p).dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * p.meleeMul; }
+/* base spell-cast damage for STAFF/WAND casters. Scales with the same global/meta/run mods
+   as melee (HEAVY EDGE applies, slash button drives both) so casters share the power budget. */
+function spellDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weaponDefP(p).dmgMul * dmgMul() * (1 + boonPow("blade") * 0.35) * p.meleeMul; }
 function boltDamage() {
   const p = ctxP || player;
   const splitX = Math.max(0, boonPow("split") - boonLv("split")); // tri-cannon rarity bonus
@@ -2165,10 +2218,17 @@ function clearGlaives() {
   for (const p of players) if (p) { p.glaiveOut = false; }
 }
 
+/* recycle any live spell projectiles back to the pool (room/run reset) */
+function clearSpells() {
+  for (const s of spells) { s.hitSet.length = 0; s.owner = null; if (spellPool.length < 40) spellPool.push(s); }
+  spells.length = 0;
+}
+
 function genRoom() {
   enemies = []; pbolts = []; ebolts = []; doors = []; spawnQ = []; zones = []; beams = [];
   pickups = []; mortars = []; novas = []; pedestals = []; boss = null;
   clearGlaives();
+  clearSpells();
   hazards = []; barrels = []; quakes = []; slashGhosts = [];
   styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
@@ -2464,6 +2524,7 @@ function enterHub() {
   hazards = []; barrels = []; quakes = []; slashGhosts = []; runTrack = [];
   singularities = []; lights = []; motes = []; ffx.rings = []; ffx.shocks = []; ffx.traumaV = 0;
   clearGlaives();
+  clearSpells();
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
@@ -2600,9 +2661,17 @@ function trySlash(p) {
     const pd = pedestalUnder(p);
     if (pd) { tryBuyPedestal(pd, p); return; }
   }
-  if (p.slashCD > 0 || p.dashT > 0) return;
-  if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p); // keyboard-only: snap aim to nearest enemy
+  if (p.dashT > 0) return;
   const W = weaponDefP(p);
+  // STAFF/WAND casters: the slash button CASTS a spell in the aim direction (own cast cadence).
+  if (W.isCaster) {
+    if (p.castCD > 0) return;
+    if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p);
+    castSpell(p, W);
+    return;
+  }
+  if (p.slashCD > 0) return;
+  if (p.idx === 0 && !touchUI && !p.padBound && mouseIdle()) kbAutoAim(p); // keyboard-only: snap aim to nearest enemy
   // GLAIVE: while a thrown blade is in flight the wielder has no melee — wait for the return
   if (W.id === "glaive") {
     if (p.glaiveOut) return;
@@ -2948,6 +3017,241 @@ function catchGlaive(g) {
   if (glaivePool.length < 24) glaivePool.push(g);
 }
 
+/* ---------------- §L2 STAFF / WAND SPELLCASTING ---------------- */
+/* grab a pooled spell object (no per-cast allocation in the hot path) */
+function getSpell() {
+  let s = spellPool.pop();
+  if (!s) s = { kind: "", x: 0, y: 0, vx: 0, vy: 0, ang: 0, r: 0, t: 0, tm: 0,
+                dmg: 0, col: "#fff", owner: null, hitSet: [], spin: 0,
+                pierce: 0, empowered: false, blastR: 0, slow: 0 };
+  s.hitSet.length = 0; s.empowered = false; s.pierce = 0; s.slow = 0; s.spin = 0;
+  return s;
+}
+function freeSpell(s) {
+  const i = spells.indexOf(s);
+  if (i >= 0) spells.splice(i, 1);
+  s.hitSet.length = 0; s.owner = null;
+  if (spellPool.length < 40) spellPool.push(s);
+}
+
+/* slash-button cast for the three caster forms — distinctly magical, ranged/area. */
+function castSpell(p, W) {
+  ctxP = p;
+  p.castCD = (W.castCD || 0.5);
+  p.castN = (p.castN || 0) + 1;
+  p.slashAng = p.aim;
+  p.recoilT = 0.18;        // cast pose (reuses the weapon-arm recoil window)
+  const a = p.slashAng;
+  const base = spellDamage();
+  if (W.id === "ember") {
+    // EMBER STAFF: lob a fireball; explodes in an AoE on impact + leaves a burning patch.
+    // METEOR: every few casts launch an empowered, stunning fireball.
+    p.castCD = 0.62;
+    const meteor = boonLv("meteor") && (p.castN % 4 === 0);
+    const s = getSpell();
+    s.kind = "fire"; s.x = p.x + Math.cos(a) * 16; s.y = p.y + Math.sin(a) * 16;
+    const spd = 360;
+    s.vx = Math.cos(a) * spd; s.vy = Math.sin(a) * spd; s.ang = a;
+    s.r = meteor ? 9 : 6; s.t = 1.4; s.tm = 1.4;
+    s.dmg = base * (meteor ? 1.5 : 1.0); s.col = W.col; s.owner = p;
+    s.blastR = (70 + 18 * boonPow("conflag")) * (meteor ? 1.35 : 1);
+    s.empowered = meteor;
+    spells.push(s);
+    ffx.spawnLight(s.x, s.y, 50, W.col, 0.5);
+    burst(s.x, s.y, W.col, 6, 150, 0.25, 2.5);
+    audio.emberCast(meteor);
+  } else if (W.id === "frost") {
+    // FROST WAND: fast piercing icebolt; slows + builds FREEZE stacks. ICE LANCE: pierces all & shatters frozen.
+    p.castCD = 0.42;
+    const s = getSpell();
+    s.kind = "ice"; s.x = p.x + Math.cos(a) * 16; s.y = p.y + Math.sin(a) * 16;
+    const spd = 720;
+    s.vx = Math.cos(a) * spd; s.vy = Math.sin(a) * spd; s.ang = a;
+    s.r = 6; s.t = 1.0; s.tm = 1.0;
+    s.dmg = base * 0.85; s.col = W.col; s.owner = p;
+    s.pierce = boonLv("icelance") ? 99 : (1 + Math.round(boonPow("pierce")));
+    s.slow = 0.55;
+    spells.push(s);
+    ffx.spawnLight(s.x, s.y, 44, W.col, 0.45);
+    burst(s.x, s.y, W.col, 5, 160, 0.2, 2.2);
+    audio.frostCast();
+  } else { // storm
+    // STORM STAFF: emit a chaining lightning bolt that arcs to several nearby foes, applying SHOCK.
+    p.castCD = 0.5;
+    castStorm(p, W, a, base);
+  }
+}
+
+/* STORM STAFF: pick the nearest foe in the aim half, then chain a lightning bolt through several. */
+function castStorm(p, W, a, base) {
+  audio.stormCast();
+  p.recoilT = 0.2;
+  const maxChains = 3 + boonLv("tempest") * 2; // base 3 jumps, TEMPEST +2 each
+  const falloff = boonLv("tempest") ? Math.max(0.78, 0.7 + 0.06 * boonPow("tempest")) : 0.7;
+  // first target: nearest enemy within range, biased toward the aim direction
+  let first = null, bestScore = Infinity;
+  const aimRange = 420;
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    const d = dist(p.x, p.y, e.x, e.y);
+    if (d > aimRange) continue;
+    const ad = Math.abs(angDiff(a, angTo(p.x, p.y, e.x, e.y)));
+    const score = d + ad * 120; // prefer near + on-aim
+    if (ad < 1.4 && score < bestScore) { bestScore = score; first = e; }
+  }
+  // visual stub even with no target: a forward zap arc
+  if (!first) {
+    const ex = p.x + Math.cos(a) * 180, ey = p.y + Math.sin(a) * 180;
+    beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.16, col: W.col });
+    sparkLine(p.x, p.y, ex, ey, W.col, 6);
+    ffx.spawnLight(ex, ey, 40, W.col, 0.4);
+    return;
+  }
+  let from = { x: p.x, y: p.y }, used = [], dmg = base * 1.0;
+  let cur = first, jumps = 0;
+  while (cur && jumps <= maxChains) {
+    let crit = critRoll();
+    if (!boonLv("overvolt") && jumps > 0) crit = false; // OVERVOLT lets chain links crit too
+    let d = dmg;
+    if (boonLv("overvolt") && (cur.shockT || 0) > 0) d *= 1 + 0.4 * boonPow("overvolt"); // bonus vs already-shocked
+    beams.push({ x1: from.x, y1: from.y, x2: cur.x, y2: cur.y, t: 0.2, col: W.col });
+    sparkLine(from.x, from.y, cur.x, cur.y, W.col, 6);
+    ffx.spawnLight(cur.x, cur.y, 46, W.col, 0.4);
+    hitEnemy(cur, d, 0, 0, crit, false);
+    if (cur.hp > 0) applyShock(cur, 4 * dmgMul(), 0); // STORM always shocks (interacts w/ freeze->shatter)
+    if (cur.hp > 0 && boonLv("ignite")) applyBurn(cur, 4 * boonPow("ignite") * dmgMul());
+    used.push(cur);
+    from = { x: cur.x, y: cur.y };
+    dmg *= falloff;
+    // next nearest unhit foe
+    let nxt = null, bd = 220;
+    for (const o of enemies) {
+      if (o.hp <= 0 || used.includes(o)) continue;
+      const dd = dist(from.x, from.y, o.x, o.y);
+      if (dd < bd) { bd = dd; nxt = o; }
+    }
+    cur = nxt; jumps++;
+  }
+  shake(2, 0.08);
+}
+
+/* spell projectiles (pooled): fireball (arcs, explodes), icebolt (pierces, slows). */
+function updateSpells(dt) {
+  const A = CONFIG;
+  for (let si = spells.length - 1; si >= 0; si--) {
+    const s = spells[si];
+    ctxP = s.owner || player;
+    s.x += s.vx * dt; s.y += s.vy * dt; s.t -= dt; s.spin += dt * 18;
+    // trail spark (cheap, respects particle cap via addPart)
+    if (Math.random() < 0.6) addPart({ x: s.x, y: s.y, vx: rand(-18, 18), vy: rand(-18, 18),
+      t: 0.22, tm: 0.22, col: s.col, r: rand(1.4, 2.6), drag: 2 });
+    let detonate = false;
+    if (s.x < A.wall || s.x > A.arenaW - A.wall || s.y < A.wall || s.y > A.arenaH - A.wall) detonate = true;
+    else if (pointInPillar(s.x, s.y, s.r)) detonate = true;
+    else if (s.t <= 0) detonate = true;
+    if (s.kind === "fire") {
+      // fireball: impact on first enemy -> AoE blast
+      if (!detonate) {
+        for (const e of enemies) {
+          if (e.hp <= 0) continue;
+          if (dist(s.x, s.y, e.x, e.y) < s.r + e.r) { detonate = true; break; }
+        }
+      }
+      if (detonate) { emberBlast(s); freeSpell(s); continue; }
+    } else if (s.kind === "ice") {
+      // icebolt: pierces; slows + builds freeze; ICE LANCE shatters frozen foes
+      for (const e of enemies) {
+        if (e.hp <= 0 || s.hitSet.includes(e)) continue;
+        if (dist(s.x, s.y, e.x, e.y) >= s.r + e.r) continue;
+        if (shieldBlocks(e, s.x - s.vx * 0.02, s.y - s.vy * 0.02)) {
+          burst(s.x, s.y, "#88aaff", 6, 140, 0.25, 2); audio.clank(); detonate = true; break;
+        }
+        frostHitEnemy(s, e);
+        s.hitSet.push(e);
+        if (s.pierce > 0) s.pierce--; else { detonate = true; break; }
+      }
+      // barrels
+      if (!detonate) for (const bl of barrels) {
+        if (bl.dead || bl.fuse >= 0) continue;
+        if (dist(s.x, s.y, bl.x, bl.y) < s.r + bl.r) { igniteBarrel(bl, 0.06); if (s.pierce > 0) s.pierce--; else detonate = true; break; }
+      }
+      if (detonate) { burst(s.x, s.y, s.col, 6, 150, 0.25, 2.4); freeSpell(s); continue; }
+    }
+  }
+}
+
+/* FROST WAND per-hit: damage, slow, build freeze stacks; PERMAFROST builds faster/longer.
+   ICE LANCE shatters already-frozen foes for a big burst. */
+function frostHitEnemy(s, e) {
+  const crit = critRoll();
+  const a = Math.atan2(s.vy, s.vx);
+  // ICE LANCE: striking a frozen foe shatters it for bonus damage
+  if (boonLv("icelance") && e.frozenT > 0) {
+    e.frozenT = 0;
+    burst(e.x, e.y, "#cfeeff", 18, 280, 0.5, 3.2);
+    dnum(e.x, e.y - e.r - 14, "ICE LANCE", "#bfeeff", true);
+    audio.shatter();
+    statusDamage(e, (24 + depth * 2.2) * dmgMul() * (1 + 0.3 * boonPow("icelance")), "#bfeeff");
+  }
+  hitEnemy(e, s.dmg, Math.cos(a) * 90, Math.sin(a) * 90, crit, false);
+  if (e.hp <= 0) return;
+  e.iceSlow = Math.max(e.iceSlow || 0, s.slow);
+  e.iceSlowT = Math.max(e.iceSlowT || 0, 1.2);
+  // build freeze: stacks accumulate to a full freeze; PERMAFROST builds faster + lasts longer
+  const buildRate = boonLv("permaf") ? 0.5 + 0.18 * boonPow("permaf") : 0.34;
+  e.freezeBuild = (e.freezeBuild || 0) + buildRate;
+  if (e.frozenT <= 0 && e.freezeBuild >= 1) {
+    e.freezeBuild = 0;
+    if ((e.shockT || 0) > 0) { shatterCombo(e); return; } // FREEZE + SHOCK = SHATTER
+    if ((e.burnT || 0) > 0) { thermalSnap(e); return; }   // BURN + FREEZE = THERMAL SNAP
+    const dur = (e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur) * (boonLv("permaf") ? 1 + 0.25 * boonPow("permaf") : 1);
+    e.frozenT = dur; e.vx = 0; e.vy = 0;
+    burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
+  }
+  if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
+}
+
+/* EMBER STAFF fireball detonation: AoE damage + applies BURN, leaves a burning patch (zone).
+   CONFLAGRATION enlarges the blast & spreads burn between close foes; METEOR shots stun. */
+function emberBlast(s) {
+  ctxP = s.owner || player;
+  const R = s.blastR;
+  burst(s.x, s.y, s.col, 22, 320, 0.55, 3.6);
+  burst(s.x, s.y, "#ffe0aa", 10, 240, 0.35, 2.6);
+  novas.push({ x: s.x, y: s.y, t: 0.32, tm: 0.32, maxR: R, col: s.col });
+  ffx.ring(s.x, s.y, R, s.col, 0.4, 5);
+  ffx.spawnLight(s.x, s.y, R + 20, s.col, 0.9);
+  if (s.empowered) { ffx.pulse(s.x, s.y, 7); shake(5, 0.2); } else shake(3, 0.12);
+  audio.emberBlast(s.empowered);
+  const hit = [];
+  for (const e of enemies) {
+    if (e.hp <= 0) continue;
+    if (dist(s.x, s.y, e.x, e.y) >= R + e.r) continue;
+    const a = angTo(s.x, s.y, e.x, e.y);
+    const crit = critRoll();
+    hitEnemy(e, s.dmg, Math.cos(a) * 200, Math.sin(a) * 200, crit, false);
+    if (e.hp > 0) {
+      applyBurn(e, (5 + depth * 0.4) * dmgMul()); // naturally applies BURN
+      if (s.empowered) e.shockT = Math.max(e.shockT || 0, e.type === "boss" ? 0.4 : 0.9); // METEOR stun (reuses shock-stun)
+      hit.push(e);
+    }
+  }
+  // CONFLAGRATION: burn spreads between close foes
+  if (boonLv("conflag")) {
+    for (const e of hit) {
+      for (const o of enemies) {
+        if (o === e || o.hp <= 0 || (o.burnT || 0) > 0) continue;
+        if (dist(e.x, e.y, o.x, o.y) < 64) applyBurn(o, (5 + depth * 0.4) * dmgMul());
+      }
+    }
+  }
+  // leave a brief burning patch (reuses the AFTERBURN zone path but with its own DPS)
+  zones.push({ x: s.x, y: s.y, r: R * 0.6, t: 1.6, tick: 0, ember: true, dps: (4 + depth * 0.6) * dmgMul() });
+  for (const bl of barrels) {
+    if (!bl.dead && bl.fuse < 0 && dist(s.x, s.y, bl.x, bl.y) < R + bl.r) igniteBarrel(bl, 0.06);
+  }
+}
+
 function tryBolt(p) {
   p = p || ctxP || player;
   ctxP = p;
@@ -3075,6 +3379,7 @@ function updatePlayer(p, dt) {
   p.prismT = Math.max(0, p.prismT - dt);
   if (p.prismT <= 0) p.prismN = 0;
   p.velBuffT = Math.max(0, (p.velBuffT || 0) - dt);
+  p.castCD = Math.max(0, (p.castCD || 0) - dt);
   p.boltCD = Math.max(0, p.boltCD - dt);
   p.ifr = Math.max(0, p.ifr - dt);
   p.hurtT = Math.max(0, p.hurtT - dt);
@@ -3094,7 +3399,7 @@ function updatePlayer(p, dt) {
   p.energy = Math.min(p.maxEnergy, p.energy + CONFIG.energyRegen * (1 + boonPow("over") * 0.4) * dt);
 
   // actions
-  if (p.slashBuf > 0) { trySlash(p); if (p.slashT > 0) p.slashBuf = 0; }
+  if (p.slashBuf > 0) { trySlash(p); if (p.slashT > 0 || (weaponDefP(p).isCaster && p.castCD > 0)) p.slashBuf = 0; }
   if (c.bolt && (state === "play" || state === "hub")) tryBolt(p);
   if (p.freezeBuf > 0) tryFreeze(p);
   if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
@@ -3515,6 +3820,7 @@ function updateEnemy(e, dt) {
   }
 
   if ((e.gravSlow || 0) > 0) { e.vx *= 0.45; e.vy *= 0.45; } // EVENT HORIZON: pulled foes are sluggish
+  if ((e.iceSlowT || 0) > 0) { e.iceSlowT -= dt; e.vx *= (1 - (e.iceSlow || 0)); e.vy *= (1 - (e.iceSlow || 0)); } // FROST WAND chill
   e.x += e.vx * dt; e.y += e.vy * dt;
   if (!(e.type === "boss" && e.state === "dash")) collidePillars(e);
   collideArena(e);
@@ -3971,14 +4277,15 @@ function step(dt) {
   }
   ebolts = ebolts.filter((b) => b.t > 0);
 
-  // burn zones
+  // burn zones (dash AFTERBURN trail + EMBER STAFF burning patches)
   for (const z of zones) {
     z.t -= dt; z.tick -= dt;
     if (z.tick <= 0) {
       z.tick = 0.18;
+      const zdps = z.ember ? z.dps : 4 * dmgMul() * boonPow("trail");
       for (const e of enemies) {
         if (e.hp > 0 && dist(z.x, z.y, e.x, e.y) < z.r + e.r) {
-          hitEnemy(e, 4 * dmgMul() * boonPow("trail"), 0, 0, false, false);
+          if (z.ember) statusDamage(e, zdps, "#ffaa44"); else hitEnemy(e, zdps, 0, 0, false, false);
         }
       }
       addPart({ x: z.x + rand(-14, 14), y: z.y + rand(-14, 14), vx: 0, vy: -40, t: 0.4, tm: 0.4, col: "#ffaa44", r: rand(2, 4), drag: 1 });
@@ -4051,6 +4358,9 @@ function step(dt) {
 
   // glaive thrown blades (pooled): fly out & return, hitting on both legs
   updateGlaives(dt);
+
+  // staff/wand spell projectiles (pooled): fireballs & icebolts
+  updateSpells(dt);
 
   // beams
   for (const bm of beams) bm.t -= dt;
@@ -4165,6 +4475,7 @@ function drawLighting() {
     }
   }
   for (const g of glaives) add(g.x, g.y, 50, g.col, 0.34);
+  for (const s of spells) add(s.x, s.y, s.kind === "fire" ? 60 : 44, s.col, s.kind === "fire" ? 0.4 : 0.3);
   for (const b of pbolts) add(b.x, b.y, 46, "#ff66ee", 0.32);
   for (const b of ebolts) add(b.x, b.y, 40, b.col, 0.26);
   for (const z of zones) add(z.x, z.y, 64, "#ffaa44", 0.3);
@@ -5394,6 +5705,40 @@ function drawHeldWeapon(W, hx, hy, recoil, fl) {
     ctx.moveTo(14 + recoil * 6, 0); ctx.lineTo(9 + recoil * 6, -2.5); ctx.lineTo(9 + recoil * 6, 2.5);
     ctx.closePath(); ctx.fill();
     ctx.fillRect(-3, -1.5, 4, 3); // hilt
+  } else if (W.id === "ember") {
+    // EMBER STAFF: a haft with a glowing ember orb cradled at the tip; flares on cast
+    ctx.lineWidth = 2.6; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-4, 1); ctx.lineTo(14 + recoil * 4, -2); ctx.stroke();
+    const tipx = 15 + recoil * 5, tipy = -2;
+    glow("#ff7a3c", 10 + recoil * 12);
+    ctx.fillStyle = recoil > 0.3 ? "#ffe0a0" : "#ff9a4c";
+    ctx.beginPath(); ctx.arc(tipx, tipy, 3.4 + recoil * 2.5, 0, TAU); ctx.fill();
+    ctx.fillStyle = "#fff3d6";
+    ctx.beginPath(); ctx.arc(tipx, tipy, 1.6, 0, TAU); ctx.fill();
+  } else if (W.id === "frost") {
+    // FROST WAND: a slender wand ending in a crystalline shard
+    ctx.lineWidth = 2.2; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(12 + recoil * 5, 0); ctx.stroke();
+    const tx = 14 + recoil * 5;
+    glow("#7fd8ff", 9 + recoil * 10);
+    ctx.fillStyle = recoil > 0.3 ? "#eafcff" : "#bfeeff";
+    ctx.beginPath(); // shard diamond
+    ctx.moveTo(tx + 4, 0); ctx.lineTo(tx, -3); ctx.lineTo(tx - 3, 0); ctx.lineTo(tx, 3);
+    ctx.closePath(); ctx.fill();
+  } else if (W.id === "storm") {
+    // STORM STAFF: a rod topped with a forked tine that crackles on cast
+    ctx.lineWidth = 2.4; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-4, 0); ctx.lineTo(12 + recoil * 4, 0); ctx.stroke();
+    const fx = 12 + recoil * 4;
+    glow("#ffe24a", 9 + recoil * 12);
+    ctx.beginPath(); // two-pronged fork
+    ctx.moveTo(fx, 0); ctx.lineTo(fx + 6, -4);
+    ctx.moveTo(fx, 0); ctx.lineTo(fx + 6, 4);
+    ctx.stroke();
+    if (recoil > 0.2) { // cast arc spark between the prongs
+      ctx.fillStyle = "#fff6a0";
+      ctx.beginPath(); ctx.arc(fx + 6, 0, 1.6 + recoil * 1.5, 0, TAU); ctx.fill();
+    }
   } else { // grav — gravity flail: short haft + orb on a chain
     ctx.lineWidth = 2; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(8, 0); ctx.stroke();
@@ -5724,6 +6069,35 @@ function drawGlaives() {
   }
 }
 
+/* staff/wand spell projectiles: glowing fireball orb / piercing icebolt shard */
+function drawSpells() {
+  const detail = spriteDetail();
+  for (const s of spells) {
+    if (s.kind === "fire") {
+      bloomCircle(s.x, s.y, s.r * 4, s.col, s.empowered ? 0.6 : 0.45);
+      glow(s.col, s.empowered ? 18 : 14);
+      ctx.fillStyle = s.empowered ? "#ffd27a" : "#ffb060";
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, TAU); ctx.fill();
+      ctx.fillStyle = "#fff6e0";
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 0.45, 0, TAU); ctx.fill();
+      noglow();
+    } else { // ice shard
+      bloomCircle(s.x, s.y, s.r * 3.4, s.col, 0.4);
+      ctx.save();
+      ctx.translate(s.x, s.y);
+      ctx.rotate(s.ang);
+      glow(s.col, 13);
+      ctx.fillStyle = "#dff6ff"; ctx.strokeStyle = s.col;
+      ctx.beginPath(); // diamond shard
+      ctx.moveTo(s.r + 4, 0); ctx.lineTo(0, -s.r * 0.8); ctx.lineTo(-s.r, 0); ctx.lineTo(0, s.r * 0.8);
+      ctx.closePath(); ctx.fill();
+      if (detail) { ctx.lineWidth = 1.4; ctx.stroke(); }
+      noglow();
+      ctx.restore();
+    }
+  }
+}
+
 function drawBolts() {
   for (const b of pbolts) {
     bloomCircle(b.x, b.y, b.r * 4, "#ff66ee", 0.4);
@@ -5843,24 +6217,24 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — HEAT CONTRACT" : "PRESS E — HEAT CONTRACT", t.heatX, t.heatY - 48);
   }
-  // ARMORY weapon rack (武器架): cycle weapon forms — 9 forms in a 3x3 grid
+  // ARMORY weapon rack (武器架): cycle weapon forms — 12 forms in a 4x3 grid
   const Wsel = weaponDef();
   glow(Wsel.col, 16);
   ctx.fillStyle = "#121a2c";
-  rrect(t.rackX - 50, t.rackY - 34, 100, 80, 8); ctx.fill();
+  rrect(t.rackX - 60, t.rackY - 34, 120, 80, 8); ctx.fill();
   ctx.strokeStyle = Wsel.col;
   ctx.lineWidth = 2.5;
-  rrect(t.rackX - 50, t.rackY - 34, 100, 80, 8); ctx.stroke();
+  rrect(t.rackX - 60, t.rackY - 34, 120, 80, 8); ctx.stroke();
   noglow();
-  const cols = 3;
+  const cols = 4;
   for (let i = 0; i < WEAPONS.length; i++) { // grid slots, current highlighted
     const w2 = WEAPONS[i];
     const sel = w2.id === curWeapon;
-    const cx = t.rackX + ((i % cols) - 1) * 30;
+    const cx = t.rackX + ((i % cols) - 1.5) * 28;
     const cy = t.rackY - 20 + Math.floor(i / cols) * 21;
     if (sel) glow(w2.col, 12);
     ctx.fillStyle = sel ? w2.col : "rgba(150,170,220,0.4)";
-    ctx.font = "bold " + (sel ? 17 : 12) + "px 'Courier New', monospace";
+    ctx.font = "bold " + (sel ? 16 : 12) + "px 'Courier New', monospace";
     ctx.fillText(w2.glyph, cx, cy);
     noglow();
   }
@@ -6337,8 +6711,9 @@ function drawTitle() {
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
+    "持法杖时挥砍键改为施放法术 — with a STAFF/WAND equipped, slash casts a spell",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
-    "枢纽武器架：9 种武器形态与战绩终端 — hub ARMORY: 9 weapon forms · STATS terminal",
+    "枢纽武器架：12 种武器形态（含 3 法杖）与战绩终端 — hub ARMORY: 12 weapon forms (incl. 3 staves) · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -6347,10 +6722,10 @@ function drawTitle() {
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
     "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
-    "J 近战斩击 · 右Ctrl 发射光弹 — J slash / Right-Ctrl bolt (LMB/RMB too)",
+    "J 近战斩击／法杖施法 · 右Ctrl 发射光弹 — J slash or cast (staves) / Right-Ctrl bolt (LMB/RMB too)",
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
-    "枢纽武器架：9 种武器形态与战绩终端 — hub ARMORY: 9 weapon forms · STATS terminal",
+    "枢纽武器架：12 种武器形态（含 3 法杖）与战绩终端 — hub ARMORY: 12 weapon forms (incl. 3 staves) · STATS terminal",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -6836,6 +7211,7 @@ function render() {
   for (const e of enemies) drawEnemy(e);
   drawPlayer();
   drawGlaives();
+  drawSpells();
   drawBolts();
   drawBeamsParts();
   drawFxRings();
