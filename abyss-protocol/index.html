@@ -3520,6 +3520,33 @@ function isBossDepth(d) { return d > 0 && d % CONFIG.bossEvery === 0; }
 const PILLAR_HUES = ["#223a66", "#2a2a55", "#1d3355"];
 function arenaHue() { return pick(PILLAR_HUES); }
 
+/* deterministic per-object hash → [0,1). Drives the procedural OBSTACLE art so each pillar's
+   look is stable frame-to-frame and needs zero per-frame allocation: just feed (seed, salt). */
+function hash01(seed, salt) {
+  let h = (seed * 374761393 + (salt | 0) * 668265263) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177 | 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return h / 4294967296;
+}
+/* obstacle "kind" catalogue. Each obstacle is tagged at GENERATION time with one of these,
+   biased by biome/depth so deeper sectors get different structures. Rendering dispatches on
+   kind; collision stays the circular p.r (unchanged). */
+const OBSTACLE_KINDS = ["reactor", "crystal", "conduit", "cargo", "machinery", "shard"];
+/* per-biome kind weights (index matches biomeForDepth: 0 surface,1 void,2 forge,3 reactor,4 abyss) */
+const BIOME_OBSTACLES = [
+  ["cargo", "cargo", "machinery", "reactor", "conduit", "shard"],          // surface: station hardware
+  ["crystal", "crystal", "shard", "shard", "conduit", "reactor"],          // void: crystalline + shards
+  ["reactor", "machinery", "machinery", "conduit", "cargo", "shard"],      // forge: heavy machinery
+  ["reactor", "reactor", "conduit", "conduit", "machinery", "crystal"],    // reactor: server/reactor columns
+  ["shard", "crystal", "shard", "reactor", "machinery", "crystal"],        // abyss: shattered + crystal
+];
+/* the biome index this arena's obstacles were authored for (set when the layout is generated). */
+let arenaBiomeIdx = 0;
+function obstacleKindFor(seed) {
+  const list = BIOME_OBSTACLES[clamp(arenaBiomeIdx, 0, BIOME_OBSTACLES.length - 1)];
+  return list[Math.floor(hash01(seed, 7) * list.length)];
+}
+
 /* BIG MAP density scaling: layouts were authored for the legacy ~2000x1280 room. The arena
    is now ~9x that area, so counts/tiling scale by this factor to spread obstacles & cover
    across the WHOLE map (no giant empty deadzones) while keeping per-cell density familiar.
@@ -3541,13 +3568,16 @@ function tryAddPillar(x, y, r, gap) {
   if (!spawnBandsClear(x, y, r)) return false;
   const g = gap === undefined ? 80 : gap;
   for (const p of pillars) if (dist(x, y, p.x, p.y) < r + p.r + g) return false;
-  pillars.push({ x, y, r, hue: arenaHue() });
+  // stable per-object seed (from its spawn position + count) → drives consistent procedural art.
+  const seed = ((Math.round(x) * 73856093) ^ (Math.round(y) * 19349663) ^ (pillars.length * 83492791)) | 0;
+  pillars.push({ x, y, r, hue: arenaHue(), seed, kind: obstacleKindFor(seed), rot: hash01(seed, 3) * TAU });
   return true;
 }
 
 /* original random scatter (also used for boss arenas: few/no pillars). `n` is a LEGACY-room
    count; scaled by area so the big map gets proportionally more scattered cover. */
 function genPillars(n) {
+  arenaBiomeIdx = biomeIdxForDepth(depth); // keep obstacle art tied to the current sector (boss arenas too)
   pillars = [];
   let tries = 0;
   const total = Math.round(n * areaScale());
@@ -3678,6 +3708,7 @@ function arenaNavigable() {
 /* build the combat-room obstacle layout: pick a layout (weighted, depth-scaled),
    generate it, then verify navigability — falling back to a safe scatter if needed. */
 function genArena(d) {
+  arenaBiomeIdx = biomeIdxForDepth(d); // obstacle art varies by sector/depth
   for (let attempt = 0; attempt < 5; attempt++) {
     pillars = [];
     if (attempt >= 3) { genPillars(randi(2, 4)); break; } // guaranteed-safe fallback
@@ -3878,10 +3909,14 @@ function explodeBarrel(b) {
   if (b.dead) return;
   b.dead = true;
   const R = 110;
+  // redesigned blast: layered fireball + white flash core + outward debris + double shockwave ring
   burst(b.x, b.y, "#ffb050", 30, 340, 0.6, 4);
   burst(b.x, b.y, "#ffe6c0", 12, 240, 0.35, 3);
+  burst(b.x, b.y, "#ff7733", 14, 420, 0.5, 3);   // hot ember spray reaching toward the blast edge
+  burst(b.x, b.y, "#ffffff", 8, 180, 0.22, 4);   // bright flash sparks
   shake(7, 0.3);
-  ffx.ring(b.x, b.y, R, "#ffb050", 0.45, 6);
+  ffx.ring(b.x, b.y, R, "#ffb050", 0.45, 6);       // main shock
+  ffx.ring(b.x, b.y, R * 0.62, "#fff0d0", 0.3, 4); // inner flash ring
   ffx.spawnLight(b.x, b.y, R + 30, "#ffb050", 0.9);
   ffx.pulse(b.x, b.y, 8); // barrel chain distortion pulse
   audio.barrelBoom();
@@ -8225,13 +8260,23 @@ const BIOMES = [
   { floor: "#04140f", grid: "rgba(60,180,140,0.12)", light: "rgba(50,180,140,0.10)" }, // 3: REACTOR (teal/green)
   { floor: "#0f0510", grid: "rgba(210,70,110,0.13)", light: "rgba(210,60,110,0.11)" }, // 4: ABYSS (crimson)
 ];
-function biomeForDepth(d) {
-  if (d <= 0) return BIOMES[0];
-  return BIOMES[Math.min(BIOMES.length - 1, Math.floor((d - 1) / 4) + 1)];
+function biomeIdxForDepth(d) {
+  if (d <= 0) return 0;
+  return Math.min(BIOMES.length - 1, Math.floor((d - 1) / 4) + 1);
+}
+function biomeForDepth(d) { return BIOMES[biomeIdxForDepth(d)]; }
+/* deck-plate accents (subtle, biome-tinted): drawn only on cells within the visible window.
+   All values derive from the cell's integer (cx,cy) so the pattern is stable & allocation-free. */
+function floorCellHash(cx, cy) {
+  let h = (cx * 374761393 + cy * 668265263) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177 | 0;
+  return (h >>> 0) / 4294967296;
 }
 function drawArenaFloor() {
   const A = CONFIG;
-  const bi = state === "hub" ? BIOMES[0] : biomeForDepth(depth);
+  const biIdx = state === "hub" ? 0 : biomeIdxForDepth(depth);
+  const bi = BIOMES[biIdx];
+  const detail = ffx.level !== "off" && !touchUI; // floor flourishes gate with EFFECTS/touch
   // floor — fill only the visible window (arena is bigger than the screen now).
   // Compute the visible rect LOCALLY (don't clobber the shared _viewRect used for cull margins).
   const vx0 = (0 - aOX) / aS - 8, vy0 = (0 - aOY) / aS - 8;
@@ -8240,6 +8285,17 @@ function drawArenaFloor() {
   const fx1 = clamp(vx1, 0, A.arenaW), fy1 = clamp(vy1, 0, A.arenaH);
   ctx.fillStyle = bi.floor;
   ctx.fillRect(fx0, fy0, fx1 - fx0, fy1 - fy0);
+  const CELL = 120; // large deck panel size (decals live on these; grid is the finer 60 lines)
+  const cgx0 = Math.floor(fx0 / CELL), cgx1 = Math.ceil(fx1 / CELL);
+  const cgy0 = Math.floor(fy0 / CELL), cgy1 = Math.ceil(fy1 / CELL);
+  // alternating deck-panel shading (checker) for a paneled-floor read — cheap rect fills
+  ctx.fillStyle = "rgba(255,255,255,0.012)";
+  for (let cx = cgx0; cx < cgx1; cx++) for (let cy = cgy0; cy < cgy1; cy++) {
+    if (((cx + cy) & 1) === 0) continue;
+    const px = Math.max(cx * CELL, fx0), py = Math.max(cy * CELL, fy0);
+    const pw = Math.min((cx + 1) * CELL, fx1) - px, ph = Math.min((cy + 1) * CELL, fy1) - py;
+    if (pw > 0 && ph > 0) ctx.fillRect(px, py, pw, ph);
+  }
   // grid — only the lines crossing the visible window
   ctx.strokeStyle = bi.grid;
   ctx.lineWidth = 1;
@@ -8249,6 +8305,39 @@ function drawArenaFloor() {
   for (let x = gx0; x < gx1; x += 60) { ctx.moveTo(x, fy0); ctx.lineTo(x, fy1); }
   for (let y = gy0; y < gy1; y += 60) { ctx.moveTo(fx0, y); ctx.lineTo(fx1, y); }
   ctx.stroke();
+  // bolder PANEL SEAMS on the coarse 120-grid (heavier line every CELL px)
+  ctx.strokeStyle = "rgba(120,140,210,0.10)";
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  const sx0 = Math.max(CELL, Math.floor(fx0 / CELL) * CELL), sy0 = Math.max(CELL, Math.floor(fy0 / CELL) * CELL);
+  for (let x = sx0; x < fx1 && x < A.arenaW; x += CELL) { ctx.moveTo(x, fy0); ctx.lineTo(x, fy1); }
+  for (let y = sy0; y < fy1 && y < A.arenaH; y += CELL) { ctx.moveTo(fx0, y); ctx.lineTo(fx1, y); }
+  ctx.stroke();
+  // occasional floor DECALS — grates, vent dots, warning corner marks — sparse & biome-tinted.
+  if (detail) {
+    for (let cx = cgx0; cx < cgx1; cx++) for (let cy = cgy0; cy < cgy1; cy++) {
+      const hsh = floorCellHash(cx, cy);
+      if (hsh > 0.16) continue; // ~16% of panels get a decal
+      const mx = cx * CELL + CELL / 2, my = cy * CELL + CELL / 2;
+      if (mx < fx0 || mx > fx1 || my < fy0 || my > fy1) continue;
+      const kind = Math.floor(hsh * 100) % 3;
+      if (kind === 0) { // grate: a few parallel slats
+        ctx.strokeStyle = "rgba(120,140,200,0.10)"; ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let i = -2; i <= 2; i++) { ctx.moveTo(mx - 22, my + i * 7); ctx.lineTo(mx + 22, my + i * 7); }
+        ctx.stroke();
+      } else if (kind === 1) { // hazard warning corner stripes (faint)
+        ctx.save(); ctx.globalAlpha = 0.07; ctx.fillStyle = "#ffcc55";
+        for (let i = 0; i < 4; i++) { ctx.fillRect(mx - 26 + i * 14, my - 24, 7, 48); }
+        ctx.restore();
+      } else { // vent dot cluster + ring
+        ctx.strokeStyle = "rgba(120,140,200,0.12)"; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.arc(mx, my, 16, 0, TAU); ctx.stroke();
+        ctx.fillStyle = "rgba(120,140,200,0.10)";
+        for (let i = 0; i < 6; i++) { const a = (i / 6) * TAU; ctx.beginPath(); ctx.arc(mx + Math.cos(a) * 8, my + Math.sin(a) * 8, 1.8, 0, TAU); ctx.fill(); }
+      }
+    }
+  }
   // soft center light (arena centre)
   const g = ctx.createRadialGradient(A.arenaW / 2, A.arenaH / 2, 50, A.arenaW / 2, A.arenaH / 2, A.arenaW * 0.5);
   g.addColorStop(0, bi.light);
@@ -8305,7 +8394,8 @@ function drawLighting() {
     if ((e.burnT || 0) > 0) add(e.x, e.y, 54 + Math.sin(timeNow * 18 + e.x) * 8, "#ff8844", 0.3);
     else if (e.frozenT > 0) add(e.x, e.y, 44, "#bfe8ff", 0.22);
   }
-  for (const pd of pillars) add(pd.x, pd.y, pd.r + 26, "#5577ff", 0.12); // glowstone-like props
+  const obAcc = obstacleAccent(); // obstacles cast a faint biome-tinted ambient pool
+  for (const pd of pillars) add(pd.x, pd.y, pd.r + 26, pd.kind ? obAcc : "#5577ff", 0.12);
   if (!lights.length) return;
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
@@ -8411,8 +8501,208 @@ function drawFxRings() {
   }
 }
 
+/* ---- OBSTACLE ART ----------------------------------------------------------------
+   Each obstacle is one of OBSTACLE_KINDS, tagged at generation by biome. Rendering is
+   fully procedural & driven by the object's stable seed (no per-frame allocation, look is
+   consistent every frame). The CIRCULAR footprint (p.r) is the collision shape and is kept
+   readable as cover; a cast shadow + top bevel sells solidity in the top-down view. All the
+   extra panel/seam/light detail is gated behind spriteDetail() (full + precise pointer);
+   reduced/off/touch get a simpler chunky silhouette so it still reads as a wall. */
+
+/* warm/biome accent for an obstacle's neon edge lighting (depends on sector). */
+const OBSTACLE_ACCENTS = ["#5a8cff", "#c266ff", "#ff8a4a", "#4ad6a0", "#ff5a8c"];
+function obstacleAccent() { return OBSTACLE_ACCENTS[clamp(arenaBiomeIdx, 0, OBSTACLE_ACCENTS.length - 1)]; }
+
+/* cheap cast shadow + ambient occlusion ellipse offset toward bottom-right (light from top-left) */
+function obstacleShadow(p) {
+  const r = p.r;
+  ctx.fillStyle = "rgba(0,0,0,0.34)";
+  ctx.beginPath(); ctx.ellipse(p.x + r * 0.18, p.y + r * 0.26, r * 1.04, r * 0.92, 0, 0, TAU); ctx.fill();
+}
+
+function drawObstacleBody(p, detail) {
+  const acc = obstacleAccent();
+  const r = p.r, k = p.kind, s = p.seed;
+  switch (k) {
+    case "reactor": { // server / reactor column: faceted body, glowing vertical seams, panel lights
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot * 0.15);
+      const sides = 6, R = r;
+      // body (dark metal) with a top bevel highlight
+      ctx.fillStyle = p.hue;
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) { const a = (i / sides) * TAU; const fn = i ? "lineTo" : "moveTo"; ctx[fn](Math.cos(a) * R, Math.sin(a) * R); }
+      ctx.closePath(); ctx.fill();
+      // top-face inner plate (lighter — reads as raised)
+      ctx.fillStyle = "rgba(120,150,220,0.16)";
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) { const a = (i / sides) * TAU; const fn = i ? "lineTo" : "moveTo"; ctx[fn](Math.cos(a) * R * 0.62, Math.sin(a) * R * 0.62 - R * 0.1); }
+      ctx.closePath(); ctx.fill();
+      // glowing reactor seams (pulse), gated for full detail
+      const pulse = 0.45 + 0.4 * Math.sin(timeNow * 2.2 + s * 0.7);
+      if (detail) glow(acc, 8);
+      ctx.strokeStyle = hexA(acc, 0.35 + 0.4 * pulse); ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + p.rot; ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * R * 0.92, Math.sin(a) * R * 0.92); }
+      ctx.stroke();
+      noglow();
+      // core pip
+      ctx.fillStyle = hexA(acc, 0.5 + 0.45 * pulse);
+      ctx.beginPath(); ctx.arc(0, -R * 0.08, R * 0.16, 0, TAU); ctx.fill();
+      // outline
+      ctx.strokeStyle = hexA(acc, 0.55); ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < sides; i++) { const a = (i / sides) * TAU; const fn = i ? "lineTo" : "moveTo"; ctx[fn](Math.cos(a) * R, Math.sin(a) * R); }
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case "crystal": { // crystalline rock formation: clustered angular shards rising from the floor
+      ctx.save(); ctx.translate(p.x, p.y);
+      // base rock
+      ctx.fillStyle = "rgba(18,16,40,0.95)";
+      ctx.beginPath(); ctx.ellipse(0, r * 0.12, r * 0.96, r * 0.8, 0, 0, TAU); ctx.fill();
+      const shards = detail ? 5 : 3;
+      for (let i = 0; i < shards; i++) {
+        const a = (i / shards) * TAU + p.rot;
+        const off = r * (0.28 + hash01(s, i) * 0.22);
+        const bx = Math.cos(a) * off, by = Math.sin(a) * off * 0.7;
+        const h = r * (0.7 + hash01(s, i + 11) * 0.55);
+        const wsh = r * (0.24 + hash01(s, i + 21) * 0.16);
+        ctx.fillStyle = i % 2 ? p.hue : "rgba(40,30,70,0.95)";
+        ctx.beginPath();
+        ctx.moveTo(bx - wsh, by); ctx.lineTo(bx, by - h); ctx.lineTo(bx + wsh, by); ctx.closePath(); ctx.fill();
+        // glowing facet edge
+        if (detail) glow(acc, 7);
+        ctx.strokeStyle = hexA(acc, 0.5 + 0.3 * Math.sin(timeNow * 1.8 + i + s)); ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(bx, by - h); ctx.lineTo(bx - wsh * 0.4, by - h * 0.4); ctx.stroke();
+        noglow();
+      }
+      ctx.strokeStyle = hexA(acc, 0.4); ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.ellipse(0, r * 0.12, r * 0.96, r * 0.8, 0, 0, TAU); ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case "conduit": { // conduit pylon: round housing + bracket fins + a humming power ring
+      ctx.save(); ctx.translate(p.x, p.y);
+      ctx.fillStyle = p.hue;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
+      // bracket fins (4) — chunky cross sells "structure"
+      ctx.fillStyle = "rgba(60,75,130,0.55)";
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * TAU + p.rot;
+        ctx.save(); ctx.rotate(a);
+        ctx.fillRect(r * 0.5, -r * 0.16, r * 0.6, r * 0.32);
+        ctx.restore();
+      }
+      // inner housing
+      ctx.fillStyle = "rgba(14,16,38,0.95)";
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, TAU); ctx.fill();
+      // humming power ring (pulse)
+      const pr = 0.4 + 0.45 * Math.sin(timeNow * 3 + s);
+      if (detail) glow(acc, 9);
+      ctx.strokeStyle = hexA(acc, 0.4 + 0.4 * pr); ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.6, 0, TAU); ctx.stroke();
+      noglow();
+      ctx.fillStyle = hexA(acc, 0.45 + 0.4 * pr);
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.2, 0, TAU); ctx.fill();
+      ctx.strokeStyle = hexA(acc, 0.5); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case "cargo": { // cargo container / crate: chamfered square box, panel lines, corner brackets
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot * 0.12);
+      const R = r * 0.92, ch2 = R * 0.22;
+      ctx.fillStyle = p.hue;
+      rrect(-R, -R, R * 2, R * 2, ch2); ctx.fill();
+      // raised top plate
+      ctx.fillStyle = "rgba(120,150,220,0.13)";
+      rrect(-R * 0.78, -R * 0.86, R * 1.56, R * 1.4, ch2 * 0.7); ctx.fill();
+      // panel seams
+      if (detail) {
+        ctx.strokeStyle = "rgba(10,14,34,0.85)"; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(-R, 0); ctx.lineTo(R, 0); ctx.moveTo(0, -R); ctx.lineTo(0, R); ctx.stroke();
+      }
+      // corner status lights (one flickers, seeded) + warning chevrons
+      const lit = (Math.floor(timeNow * 3) + Math.floor(hash01(s, 9) * 4)) % 4;
+      for (let i = 0; i < 4; i++) {
+        const cxp = (i & 1 ? 1 : -1) * R * 0.74, cyp = (i & 2 ? 1 : -1) * R * 0.74;
+        const on = i === lit;
+        ctx.fillStyle = on ? hexA(acc, 0.95) : "rgba(80,95,150,0.5)";
+        if (on && detail) glow(acc, 6);
+        ctx.beginPath(); ctx.arc(cxp, cyp, R * 0.1, 0, TAU); ctx.fill();
+        if (on) noglow();
+      }
+      ctx.strokeStyle = hexA(acc, 0.5); ctx.lineWidth = 2;
+      rrect(-R, -R, R * 2, R * 2, ch2); ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    case "machinery": { // broken machinery: blocky chassis + pipes + sputtering vent light
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot * 0.1);
+      const R = r * 0.9;
+      ctx.fillStyle = p.hue;
+      rrect(-R, -R * 0.82, R * 2, R * 1.64, R * 0.16); ctx.fill();
+      // tilted broken cowl panel
+      ctx.fillStyle = "rgba(50,60,105,0.7)";
+      ctx.save(); ctx.rotate(0.18 + hash01(s, 5) * 0.2);
+      rrect(-R * 0.7, -R * 0.9, R * 1.3, R * 0.5, R * 0.1); ctx.fill();
+      ctx.restore();
+      // pipes across the top
+      if (detail) {
+        ctx.strokeStyle = "rgba(90,110,170,0.5)"; ctx.lineWidth = 3; ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(-R * 0.7, R * 0.5); ctx.lineTo(R * 0.7, R * 0.2); ctx.stroke();
+        ctx.lineCap = "butt";
+      }
+      // sputtering vent (faulty flicker, seeded) — sells "broken but live"
+      const spark = (Math.sin(timeNow * 9 + s) > 0.4) ? 1 : 0;
+      ctx.fillStyle = spark ? "#ffd27a" : "rgba(80,70,50,0.6)";
+      if (spark && detail) glow("#ffb050", 8);
+      ctx.beginPath(); ctx.arc(R * 0.4, -R * 0.4, R * 0.14, 0, TAU); ctx.fill();
+      if (spark) noglow();
+      ctx.strokeStyle = hexA(acc, 0.5); ctx.lineWidth = 2;
+      rrect(-R, -R * 0.82, R * 2, R * 1.64, R * 0.16); ctx.stroke();
+      ctx.restore();
+      break;
+    }
+    default: { // "shard" — shattered pillar: jagged broken column stump with glowing fracture core
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+      const pts = 8;
+      ctx.fillStyle = p.hue;
+      ctx.beginPath();
+      for (let i = 0; i < pts; i++) {
+        const a = (i / pts) * TAU;
+        const rr = r * (0.7 + hash01(s, i) * 0.4);
+        const fn = i ? "lineTo" : "moveTo"; ctx[fn](Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.fill();
+      // glowing fracture core (pulse)
+      const pulse = 0.4 + 0.5 * (0.5 + 0.5 * Math.sin(timeNow * 1.6 + s));
+      if (detail) glow(acc, 8);
+      ctx.strokeStyle = hexA(acc, 0.4 + 0.4 * pulse); ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = 0; i < 3; i++) { const a = (i / 3) * TAU + p.rot * 2; ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * r * 0.55, Math.sin(a) * r * 0.55); }
+      ctx.stroke();
+      ctx.fillStyle = hexA(acc, 0.5 + 0.4 * pulse);
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.18, 0, TAU); ctx.fill();
+      noglow();
+      ctx.strokeStyle = hexA(acc, 0.55); ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < pts; i++) {
+        const a = (i / pts) * TAU;
+        const rr = r * (0.7 + hash01(s, i) * 0.4);
+        const fn = i ? "lineTo" : "moveTo"; ctx[fn](Math.cos(a) * rr, Math.sin(a) * rr);
+      }
+      ctx.closePath(); ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
 function drawPillars() {
+  const detail = spriteDetail();
   for (const p of pillars) {
+    if (!inView(p.x, p.y, p.r + 30)) continue; // cull off-view obstacles
     const tmp = p.ttl !== undefined;
     ctx.save();
     if (tmp) {
@@ -8442,31 +8732,63 @@ function drawPillars() {
       ctx.restore();
       continue;
     }
-    glow("#3355ff", 10);
-    ctx.fillStyle = p.hue;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
-    noglow();
-    ctx.strokeStyle = "rgba(110,140,255,0.5)";
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.stroke();
-    ctx.strokeStyle = "rgba(110,140,255,0.18)";
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 0.62, 0, TAU); ctx.stroke();
+    // legacy/boss obstacles generated without a kind fall back to the classic disc look.
+    if (!p.kind) {
+      glow("#3355ff", 10);
+      ctx.fillStyle = p.hue;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.fill();
+      noglow();
+      ctx.strokeStyle = "rgba(110,140,255,0.5)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, TAU); ctx.stroke();
+      ctx.restore();
+      continue;
+    }
+    obstacleShadow(p);
+    drawObstacleBody(p, detail);
     ctx.restore();
   }
 }
 
 function drawDoors() {
+  const detail = spriteDetail();
   for (const d of doors) {
     const o = d.openT;
     const rw = DOOR_REWARDS[d.reward];
+    const x0 = d.x - d.w / 2, y0 = d.y - d.h / 2;
     ctx.save();
     ctx.globalAlpha = o;
+    // DOOR as a powered PORTAL/gateway: heavy frame + glowing energy interior that flows upward.
+    // outer frame housing
     glow(rw.col, 16);
-    ctx.fillStyle = "rgba(8,10,30,0.95)";
-    rrect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h, 6); ctx.fill();
-    ctx.strokeStyle = rw.col;
-    ctx.lineWidth = 2;
-    rrect(d.x - d.w / 2, d.y - d.h / 2, d.w, d.h, 6); ctx.stroke();
+    ctx.fillStyle = "rgba(10,12,30,0.96)";
+    rrect(x0 - 4, y0 - 4, d.w + 8, d.h + 8, 8); ctx.fill();
+    // portal interior — vertical energy gradient (reusing a per-call gradient is fine: doors are few)
+    const pg = ctx.createLinearGradient(0, y0, 0, y0 + d.h);
+    pg.addColorStop(0, hexA(rw.col, 0.32));
+    pg.addColorStop(0.5, hexA(rw.col, 0.1));
+    pg.addColorStop(1, hexA(rw.col, 0.28));
+    ctx.fillStyle = pg;
+    rrect(x0, y0, d.w, d.h, 6); ctx.fill();
+    // flowing scanline shimmer across the portal mouth (idle animation, gated)
+    if (detail) {
+      const sy = y0 + ((timeNow * 26) % (d.h + 12)) - 6;
+      ctx.save(); ctx.beginPath(); rrect(x0, y0, d.w, d.h, 6); ctx.clip();
+      ctx.fillStyle = hexA(rw.col, 0.22);
+      ctx.fillRect(x0, sy, d.w, 4);
+      ctx.restore();
+    }
+    // frame edge + corner bracket studs
+    ctx.strokeStyle = rw.col; ctx.lineWidth = 2.4;
+    rrect(x0, y0, d.w, d.h, 6); ctx.stroke();
+    if (detail) {
+      ctx.fillStyle = hexA(rw.col, 0.85);
+      for (let i = 0; i < 4; i++) {
+        const bx = i & 1 ? d.x + d.w / 2 - 6 : d.x - d.w / 2 + 6;
+        const by = i & 2 ? d.y + d.h / 2 - 5 : d.y - d.h / 2 + 5;
+        ctx.beginPath(); ctx.arc(bx, by, 2, 0, TAU); ctx.fill();
+      }
+    }
     noglow();
     ctx.fillStyle = rw.col;
     ctx.font = "bold 13px 'Courier New', monospace";
@@ -8528,14 +8850,33 @@ function drawDoors() {
 
 function drawZonesAndPickups() {
   for (const z of zones) {
-    if (z.caustic) { // LOBBER caustic pool: bubbling acid-green danger puddle
+    if (z.caustic) { // LOBBER caustic pool: bubbling toxic puddle, clear acid-green hazard tint
       const a = clamp(z.t / (z.tm || 4), 0, 1);
+      const detailZ = spriteDetail();
       glow("#aaff55", 10);
-      ctx.fillStyle = "rgba(140,230,60," + (0.10 + 0.14 * a) + ")";
+      // puddle body (brighter, layered for a "viscous" read)
+      ctx.fillStyle = "rgba(120,210,50," + (0.14 + 0.16 * a) + ")";
       ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, TAU); ctx.fill();
-      ctx.strokeStyle = "rgba(180,255,90," + (0.4 + 0.3 * Math.sin(timeNow * 6 + z.x)) + ")";
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(z.x, z.y, z.r * (0.85 + 0.1 * Math.sin(timeNow * 4 + z.y)), 0, TAU); ctx.stroke();
+      ctx.fillStyle = "rgba(170,255,90," + (0.1 + 0.12 * a) + ")";
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.r * 0.7, 0, TAU); ctx.fill();
+      // rippling hazard rim
+      ctx.strokeStyle = "rgba(190,255,100," + (0.45 + 0.3 * Math.sin(timeNow * 6 + z.x)) + ")";
+      ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.arc(z.x, z.y, z.r * (0.88 + 0.08 * Math.sin(timeNow * 4 + z.y)), 0, TAU); ctx.stroke();
+      // rising bubbles — stable per-pool positions (seeded by z.x/z.y), cheap & EFFECTS-gated
+      if (detailZ) {
+        const nb = 4;
+        for (let i = 0; i < nb; i++) {
+          const ph = (timeNow * 0.9 + i * 0.31 + z.x * 0.01) % 1;
+          const ba = (i / nb) * TAU + z.y * 0.3;
+          const br = z.r * (0.25 + 0.5 * ((Math.sin(z.x + i) * 0.5 + 0.5)));
+          const bx = z.x + Math.cos(ba) * br, by = z.y + Math.sin(ba) * br;
+          ctx.globalAlpha = a * (1 - ph) * 0.8;
+          ctx.fillStyle = "#d8ff9a";
+          ctx.beginPath(); ctx.arc(bx, by - ph * 4, (1 - ph) * 2.4 + 0.6, 0, TAU); ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
       noglow();
       continue;
     }
@@ -8631,6 +8972,29 @@ function drawSweeps() {
   }
 }
 
+/* a single laser-fence emitter pylon: base ring + emitter prongs + status eye (no allocations) */
+function drawFencePylon(px, py, ang, on, warn, detail) {
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.beginPath(); ctx.ellipse(px + 2, py + 3, 11, 9, 0, 0, TAU); ctx.fill();
+  glow("#ff5577", on ? 12 : 4);
+  ctx.fillStyle = "#241326";
+  ctx.beginPath(); ctx.arc(px, py, 10, 0, TAU); ctx.fill();
+  ctx.strokeStyle = on ? "#ff5577" : "rgba(255,85,119,0.5)"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(px, py, 10, 0, TAU); ctx.stroke();
+  if (detail) { // emitter prongs facing the beam (two, unrolled)
+    ctx.strokeStyle = on ? "#ff8899" : "rgba(170,90,110,0.7)"; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + Math.cos(ang + 0.5) * 6, py + Math.sin(ang + 0.5) * 6);
+    ctx.lineTo(px + Math.cos(ang + 0.25) * 13, py + Math.sin(ang + 0.25) * 13);
+    ctx.moveTo(px + Math.cos(ang - 0.5) * 6, py + Math.sin(ang - 0.5) * 6);
+    ctx.lineTo(px + Math.cos(ang - 0.25) * 13, py + Math.sin(ang - 0.25) * 13);
+    ctx.stroke();
+  }
+  ctx.fillStyle = on ? "#ffd0dc" : warn ? (Math.floor(timeNow * 10) % 2 ? "#ff8899" : "#552233") : "#552233";
+  ctx.beginPath(); ctx.arc(px, py, 3.6, 0, TAU); ctx.fill();
+  noglow();
+}
+
 function drawHazards() {
   // AFTERSHOCK quake rings
   for (const q of quakes) {
@@ -8646,82 +9010,130 @@ function drawHazards() {
     noglow();
     ctx.restore();
   }
+  const detail = spriteDetail();
   for (const h of hazards) {
     if (h.kind === "spike") {
+      if (!inView(h.x, h.y, h.s + 16)) continue;
       const act = spikeActive(h), warn = spikeWarning(h);
       const s = h.s;
       ctx.save();
-      ctx.fillStyle = act ? "rgba(80,20,30,0.85)" : "rgba(30,18,40,0.8)";
-      ctx.strokeStyle = act ? "#ff5566" : warn ? "rgba(255,119,85," + (0.45 + 0.45 * Math.abs(Math.sin(timeNow * 14))) + ")" : "rgba(255,119,85,0.35)";
-      ctx.lineWidth = 2;
+      // mechanical spike EMITTER: a metal floor housing with iris ports the blades erupt from.
+      // shadow / seated AO
+      ctx.fillStyle = "rgba(0,0,0,0.3)";
+      rrect(h.x - s + 2, h.y - s + 3, s * 2, s * 2, 6); ctx.fill();
+      // housing plate
+      ctx.fillStyle = act ? "rgba(70,18,28,0.9)" : "rgba(26,18,34,0.85)";
+      rrect(h.x - s, h.y - s, s * 2, s * 2, 6); ctx.fill();
+      // recessed inner trench (where blades come from)
+      ctx.fillStyle = "rgba(8,6,16,0.9)";
+      rrect(h.x - s * 0.78, h.y - s * 0.78, s * 1.56, s * 1.56, 4); ctx.fill();
+      // corner bolt studs (mechanical read)
+      if (detail) {
+        ctx.fillStyle = "rgba(120,110,130,0.55)";
+        for (let i = 0; i < 4; i++) {
+          const bx = h.x + (i & 1 ? 1 : -1) * s * 0.82, by = h.y + (i & 2 ? 1 : -1) * s * 0.82;
+          ctx.beginPath(); ctx.arc(bx, by, 2.4, 0, TAU); ctx.fill();
+        }
+      }
+      // warm-up TELEGRAPH: warning glow strip blinks before blades fire
+      const wcol = act ? "#ff5566" : warn ? "rgba(255,119,85," + (0.4 + 0.45 * Math.abs(Math.sin(timeNow * 14))) + ")" : "rgba(255,119,85,0.3)";
       if (act) glow("#ff5566", 12);
-      rrect(h.x - s, h.y - s, s * 2, s * 2, 5); ctx.fill();
-      rrect(h.x - s, h.y - s, s * 2, s * 2, 5); ctx.stroke();
+      ctx.strokeStyle = wcol; ctx.lineWidth = 2;
+      rrect(h.x - s, h.y - s, s * 2, s * 2, 6); ctx.stroke();
       noglow();
-      // spikes rise slightly during the warn rhythm, fully when live
-      const ext = act ? 1 : warn ? clamp((h.t / h.warn - 0.6) / 0.4, 0, 1) * 0.3 : 0;
+      // spikes rise slightly during warm-up, fully extend & glint when live
+      const ext = act ? 1 : warn ? clamp((h.t / h.warn - 0.6) / 0.4, 0, 1) * 0.35 : 0;
       if (ext > 0.02) {
-        ctx.fillStyle = act ? "#ff8899" : "#aa5566";
         if (act) glow("#ff5566", 10);
         for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
           const sx = h.x - s + s * (i + 0.5) * 2 / 3, sy = h.y - s + s * (j + 0.5) * 2 / 3;
+          const blade = 5 + 11 * ext;
+          // blade body
+          ctx.fillStyle = act ? "#ff8899" : "#a85566";
           ctx.beginPath();
-          ctx.moveTo(sx - 4, sy + 3); ctx.lineTo(sx + 4, sy + 3); ctx.lineTo(sx, sy + 3 - 9 * ext - 4);
+          ctx.moveTo(sx - 4, sy + 3); ctx.lineTo(sx + 4, sy + 3); ctx.lineTo(sx, sy + 3 - blade);
           ctx.closePath(); ctx.fill();
+          // hot edge highlight on the live blade
+          if (act && detail) {
+            ctx.strokeStyle = "rgba(255,235,235,0.9)"; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(sx, sy + 3 - blade); ctx.lineTo(sx - 2, sy + 3 - blade * 0.4); ctx.stroke();
+          }
         }
         noglow();
       }
       ctx.restore();
     } else if (h.kind === "fence") {
+      if (!inView((h.x1 + h.x2) / 2, (h.y1 + h.y2) / 2, dist(h.x1, h.y1, h.x2, h.y2) / 2 + 24)) continue;
       const on = fenceOn(h), warn = fenceWarn(h);
+      const ang = angTo(h.x1, h.y1, h.x2, h.y2);
       ctx.save();
-      for (const pp of [[h.x1, h.y1], [h.x2, h.y2]]) { // pylon posts
-        glow("#ff5577", on ? 12 : 5);
-        ctx.fillStyle = "#2a1a35";
-        ctx.beginPath(); ctx.arc(pp[0], pp[1], 9, 0, TAU); ctx.fill();
-        ctx.strokeStyle = on ? "#ff5577" : "rgba(255,85,119,0.5)";
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(pp[0], pp[1], 9, 0, TAU); ctx.stroke();
-        ctx.fillStyle = on ? "#ff8899" : warn ? (Math.floor(timeNow * 10) % 2 ? "#ff8899" : "#552233") : "#552233";
-        ctx.beginPath(); ctx.arc(pp[0], pp[1], 3.5, 0, TAU); ctx.fill();
-        noglow();
-      }
+      // crackling energy beam BETWEEN the pylons when live
       if (on) {
         glow("#ff5577", 14);
-        ctx.strokeStyle = "rgba(255,85,119,0.95)";
-        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = "rgba(255,170,190,0.5)"; ctx.lineWidth = 8;
         ctx.beginPath(); ctx.moveTo(h.x1, h.y1); ctx.lineTo(h.x2, h.y2); ctx.stroke();
-        ctx.strokeStyle = "rgba(255,170,190,0.5)";
-        ctx.lineWidth = 8;
+        ctx.strokeStyle = "rgba(255,85,119,0.95)"; ctx.lineWidth = 3.5;
         ctx.beginPath(); ctx.moveTo(h.x1, h.y1); ctx.lineTo(h.x2, h.y2); ctx.stroke();
+        // arc crackle: a few zig-zag segments jittering along the beam (deterministic per frame quant)
+        if (detail) {
+          const segs = 7, nx = -Math.sin(ang), ny = Math.cos(ang);
+          ctx.strokeStyle = "rgba(255,220,235,0.85)"; ctx.lineWidth = 1.4;
+          ctx.beginPath(); ctx.moveTo(h.x1, h.y1);
+          for (let i = 1; i < segs; i++) {
+            const tt = i / segs;
+            const j = (Math.sin(timeNow * 30 + i * 2.3) * 0.5) * 5;
+            ctx.lineTo(h.x1 + (h.x2 - h.x1) * tt + nx * j, h.y1 + (h.y2 - h.y1) * tt + ny * j);
+          }
+          ctx.lineTo(h.x2, h.y2); ctx.stroke();
+        }
         noglow();
-      } else if (warn) { // telegraphed power-up blink
-        ctx.strokeStyle = "rgba(255,85,119," + (Math.floor(timeNow * 10) % 2 ? 0.55 : 0.15) + ")";
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 6]);
+      } else if (warn) { // telegraphed power-up: pulsing dashed line
+        ctx.strokeStyle = "rgba(255,85,119," + (Math.floor(timeNow * 10) % 2 ? 0.6 : 0.15) + ")";
+        ctx.lineWidth = 2; ctx.setLineDash([6, 6]);
         ctx.beginPath(); ctx.moveTo(h.x1, h.y1); ctx.lineTo(h.x2, h.y2); ctx.stroke();
         ctx.setLineDash([]);
       }
+      // EMITTER PYLONS at each end (drawn twice, no per-frame array allocation)
+      drawFencePylon(h.x1, h.y1, ang, on, warn, detail);
+      drawFencePylon(h.x2, h.y2, ang, on, warn, detail);
       ctx.restore();
     }
   }
-  // volatile barrels
+  // volatile barrels: glowing UNSTABLE canisters with a warning pulse
   for (const b of barrels) {
     if (b.dead) continue;
+    if (!inView(b.x, b.y, b.r + 16)) continue;
+    const detail2 = detail;
     const fusing = b.fuse >= 0;
+    const warnPulse = 0.5 + 0.5 * Math.sin(timeNow * 4 + b.x); // idle instability throb
     const fl = fusing && Math.floor(timeNow * 18) % 2 === 0;
     ctx.save();
-    glow("#ffb050", fusing ? 18 : 8);
-    ctx.fillStyle = fl ? "#ffffff" : "#7a3a18";
+    // shadow
+    ctx.fillStyle = "rgba(0,0,0,0.3)";
+    ctx.beginPath(); ctx.ellipse(b.x + 2, b.y + 3, b.r * 1.05, b.r * 0.85, 0, 0, TAU); ctx.fill();
+    // canister body (metallic) with a contained glowing core
+    glow("#ffb050", fusing ? 18 : 6 + 6 * warnPulse);
+    ctx.fillStyle = fl ? "#ffffff" : "#5e3014";
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.fill();
-    ctx.strokeStyle = "#ffb050";
-    ctx.lineWidth = 2;
+    // unstable inner glow core (always pulsing — reads as dangerous even idle)
+    const coreA = fusing ? 0.95 : (0.35 + 0.4 * warnPulse);
+    ctx.fillStyle = fl ? "#ffffff" : hexA("#ffc060", coreA);
+    ctx.beginPath(); ctx.arc(b.x, b.y, b.r * (0.45 + (fusing ? 0.2 : 0.12 * warnPulse)), 0, TAU); ctx.fill();
+    noglow();
+    // metal banding (top/bottom rings) + rim
+    ctx.strokeStyle = "#ffb050"; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, TAU); ctx.stroke();
-    ctx.strokeStyle = fl ? "#ffb050" : "#ffd27a"; // hazard stripe
-    ctx.lineWidth = 3;
+    if (detail2) {
+      ctx.strokeStyle = "rgba(255,210,122,0.55)"; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.r * 0.72, -0.4, Math.PI - 0.4); ctx.stroke();
+    }
+    // hazard stripe band
+    ctx.strokeStyle = fl ? "#ffb050" : "#ffd27a"; ctx.lineWidth = 3;
     ctx.beginPath(); ctx.moveTo(b.x - b.r * 0.7, b.y - 2); ctx.lineTo(b.x + b.r * 0.7, b.y - 2); ctx.stroke();
-    ctx.fillStyle = fl ? "#ffffff" : "#ffb050"; // valve light
-    ctx.beginPath(); ctx.arc(b.x, b.y - b.r - 3, 2.2 + (fusing ? 1.5 : 0), 0, TAU); ctx.fill();
+    // pressure-valve light on top (flares as it fuses)
+    ctx.fillStyle = fl ? "#ffffff" : hexA("#ffb050", 0.6 + 0.4 * warnPulse);
+    if (fusing) glow("#ffb050", 10);
+    ctx.beginPath(); ctx.arc(b.x, b.y - b.r - 3, 2.2 + (fusing ? 1.8 : warnPulse), 0, TAU); ctx.fill();
     noglow();
     ctx.restore();
   }
@@ -10501,9 +10913,31 @@ function drawDnums() {
   ctx.globalAlpha = 1;
 }
 
+/* hub CONSOLE base: a seated pedestal + side struts + a status antenna behind the station box,
+   so each station reads as a real machine, not a floating label. Cheap, EFFECTS-gated detail. */
+function consoleBase(cx, cy, col, hw, detail) {
+  // floor footprint shadow
+  ctx.fillStyle = "rgba(0,0,0,0.3)";
+  ctx.beginPath(); ctx.ellipse(cx + 3, cy + 34, hw + 8, 14, 0, 0, TAU); ctx.fill();
+  // pedestal plinth
+  ctx.fillStyle = "rgba(14,18,38,0.95)";
+  rrect(cx - hw - 6, cy + 22, (hw + 6) * 2, 16, 4); ctx.fill();
+  ctx.strokeStyle = hexA(col, 0.4); ctx.lineWidth = 1.6;
+  rrect(cx - hw - 6, cy + 22, (hw + 6) * 2, 16, 4); ctx.stroke();
+  if (detail) {
+    // status antenna with a blinking tip
+    ctx.strokeStyle = hexA(col, 0.5); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx + hw - 4, cy - 26); ctx.lineTo(cx + hw + 8, cy - 40); ctx.stroke();
+    const blink = (Math.floor(timeNow * 2) % 2) ? 0.95 : 0.3;
+    glow(col, 6); ctx.fillStyle = hexA(col, blink);
+    ctx.beginPath(); ctx.arc(cx + hw + 8, cy - 40, 2.4, 0, TAU); ctx.fill(); noglow();
+  }
+}
 function drawHubObjects() {
   const t = HUB;
+  const detail = spriteDetail();
   // upgrade terminal
+  consoleBase(t.termX, t.termY, "#ffcc44", 34, detail);
   glow("#ffcc44", 16);
   ctx.fillStyle = "#181230";
   rrect(t.termX - 34, t.termY - 26, 68, 52, 8); ctx.fill();
@@ -10526,6 +10960,7 @@ function drawHubObjects() {
   }
   // HEAT terminal (难度契约): toggle difficulty contracts for bonus cores
   const hPts = heatTotal();
+  consoleBase(t.heatX, t.heatY, "#ff7755", 34, detail);
   glow("#ff7755", 16);
   ctx.fillStyle = "#2a1418";
   rrect(t.heatX - 34, t.heatY - 26, 68, 52, 8); ctx.fill();
@@ -10550,6 +10985,7 @@ function drawHubObjects() {
   }
   // ARMORY weapon rack (武器架): cycle weapon forms — 18 forms in a 6x3 grid
   const Wsel = weaponDef();
+  consoleBase(t.rackX, t.rackY + 14, Wsel.col, 86, detail);
   glow(Wsel.col, 16);
   ctx.fillStyle = "#121a2c";
   rrect(t.rackX - 86, t.rackY - 34, 172, 80, 8); ctx.fill();
@@ -10611,6 +11047,7 @@ function drawHubObjects() {
     ctx.fillText(touchUI ? "TAP — 武器 / BOLT — 异相" : "E — 武器 SWITCH · BOLT — 异相 ASPECT", t.rackX, t.rackY - 48);
   }
   // STATS terminal (战绩): lifetime service record
+  consoleBase(t.statX, t.statY, "#8fd0ff", 34, detail);
   glow("#8fd0ff", 16);
   ctx.fillStyle = "#101a30";
   rrect(t.statX - 34, t.statY - 26, 68, 52, 8); ctx.fill();
@@ -10630,13 +11067,34 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — SERVICE RECORD" : "PRESS E — SERVICE RECORD", t.statX, t.statY - 48);
   }
-  // exit gate
+  // exit gate — DESCENT PORTAL: twin emitter pylons framing a flowing energy mouth
+  const ex0 = t.exitX - t.exitW / 2, ey0 = t.exitY - t.exitH / 2;
+  // pylon posts each side
+  for (const sgn of [-1, 1]) {
+    const px = t.exitX + sgn * (t.exitW / 2 + 5);
+    glow("#5ee6ff", 10);
+    ctx.fillStyle = "rgba(12,30,40,0.95)";
+    rrect(px - 5, ey0 - 6, 10, t.exitH + 12, 3); ctx.fill();
+    ctx.strokeStyle = "#5ee6ff"; ctx.lineWidth = 2;
+    rrect(px - 5, ey0 - 6, 10, t.exitH + 12, 3); ctx.stroke();
+    noglow();
+  }
+  // portal energy interior (flowing gradient)
   glow("#5ee6ff", 18);
-  ctx.fillStyle = "rgba(94,230,255,0.12)";
-  rrect(t.exitX - t.exitW / 2, t.exitY - t.exitH / 2, t.exitW, t.exitH, 6); ctx.fill();
-  ctx.strokeStyle = "#5ee6ff";
-  ctx.lineWidth = 2.5;
-  rrect(t.exitX - t.exitW / 2, t.exitY - t.exitH / 2, t.exitW, t.exitH, 6); ctx.stroke();
+  const eg = ctx.createLinearGradient(0, ey0, 0, ey0 + t.exitH);
+  eg.addColorStop(0, "rgba(94,230,255,0.28)");
+  eg.addColorStop(0.5, "rgba(94,230,255,0.08)");
+  eg.addColorStop(1, "rgba(94,230,255,0.24)");
+  ctx.fillStyle = eg;
+  rrect(ex0, ey0, t.exitW, t.exitH, 6); ctx.fill();
+  if (detail) { // descending scan shimmer
+    const sy = ey0 + ((timeNow * 28) % (t.exitH + 14)) - 7;
+    ctx.save(); ctx.beginPath(); rrect(ex0, ey0, t.exitW, t.exitH, 6); ctx.clip();
+    ctx.fillStyle = "rgba(94,230,255,0.2)"; ctx.fillRect(ex0, sy, t.exitW, 4);
+    ctx.restore();
+  }
+  ctx.strokeStyle = "#5ee6ff"; ctx.lineWidth = 2.5;
+  rrect(ex0, ey0, t.exitW, t.exitH, 6); ctx.stroke();
   noglow();
   ctx.fillStyle = "#5ee6ff";
   ctx.font = "bold 13px 'Courier New', monospace";
