@@ -1114,8 +1114,9 @@ function heatTotal(h) {
 /* heat snapshot for the active run + fractional core accumulator */
 let runHeat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
 let runHeatPts = 0, coreFrac = 0;
+let ksGreedMul = 1; // AVARICE COIN keepsake: run-level core-income multiplier (cores are shared in co-op)
 function coreGain(n) {
-  const g = n * (1 + 0.25 * runHeatPts) + coreFrac;
+  const g = n * (1 + 0.25 * runHeatPts) * ksGreedMul + coreFrac;
   const whole = Math.floor(g);
   coreFrac = g - whole;
   cores += whole; runCores += whole;
@@ -1378,6 +1379,154 @@ function favoriteWeapon() {
     if (n > bestN) { bestN = n; bestId = w.id; }
   }
   return bestId;
+}
+
+/* ---------------- §E5 KEEPSAKES (纪念物) — equip ONE trinket before a run for a passive ----------------
+   A Hades-style keepsake system. Each player equips ONE keepsake (P1 = `keepsake`, P2 = `p2keepsake`);
+   its passive applies for the WHOLE run. A keepsake LEVELS UP with use (per relevant trigger, usually a
+   room cleared while equipped) through 3 ranks, strengthening its effect. Per-keepsake rank+progress is
+   persisted in the store ("keepsakes" JSON: id -> {lv, prog}). Effects are read as cheap per-player flags
+   computed at run start / on trigger — no per-frame allocation. Most keepsakes are unlocked from the start;
+   a few are gated behind a cheap one-time cores purchase as a small collection goal. Co-op per-player.
+
+   LEVELING: a keepsake at level L (1..3) gains progress toward L+1 each time its trigger fires (usually a
+   room cleared). prog thresholds = KEEPSAKE_REQ[L]; reaching the cap holds at rank 3. The `val(lv)` helper
+   in each def returns the rank-scaled magnitude (lv is 1..3). Run-locked snapshot: at run start each player
+   stores `ksId` + `ksLv` so mid-run rank-ups don't change the active effect (rank-ups apply next run, like
+   the rest of the run-mod budget). Progress, however, accrues live and persists when a room is cleared. */
+const KEEPSAKE_MAXRANK = 3;
+const KEEPSAKE_REQ = [0, 4, 10, 18]; // rooms cleared to advance FROM rank index (1->2 at 4, 2->3 at 10; 3 caps at 18 shown)
+const KEEPSAKES = [
+  { id: "scholar", glyph: "✎", col: "#5ee6ff", name: "CODEX SHARD", nameCN: "典籍残页",
+    desc: "+1 boon offered on the FIRST boon screen of the run (+1 reroll at rank 3)",
+    descCN: "本局第一个祝福界面多 +1 选项（满级再 +1 重抽）",
+    val: (lv) => 1 }, // always +1 boon offer; rank 3 also grants +1 reroll (handled at run start)
+  { id: "berserker", glyph: "✷", col: "#ff5566", name: "CRACKED VISOR", nameCN: "裂痕面甲",
+    desc: "below 35% HP, deal more damage (rank scales the bonus)",
+    descCN: "生命低于 35% 时造成更多伤害（等级提升加成）",
+    val: (lv) => 0.15 + 0.10 * (lv - 1) }, // +15/25/35% damage while low
+  { id: "cryostat", glyph: "❄", col: "#aaeeff", name: "GLACIER TEAR", nameCN: "冰川之泪",
+    desc: "freeze lasts longer and freeze nova cooldown is reduced",
+    descCN: "冰冻持续更久，冰冻新星冷却降低",
+    val: (lv) => 0.20 + 0.10 * (lv - 1) }, // +20/30/40% freeze dur, -same% cd
+  { id: "medkit", glyph: "✚", col: "#66ff99", name: "VITAL CACHE", nameCN: "生机容器",
+    desc: "restore HP on entering each new REGION (rank scales the heal)",
+    descCN: "进入每个新区域时回复生命（等级提升回复量）",
+    val: (lv) => 0.30 + 0.20 * (lv - 1) }, // heal 30/50/70% maxHp on region transition
+  { id: "bulwark", glyph: "▣", col: "#ff8855", name: "IRON BALLAST", nameCN: "玄铁压舱",
+    desc: "+max HP for the whole run (rank scales the bonus)",
+    descCN: "全程增加最大生命（等级提升加成）",
+    val: (lv) => 25 + 20 * (lv - 1) }, // +25/45/65 max HP
+  { id: "ambush", glyph: "◎", col: "#ffee55", name: "FIRST STRIKE", nameCN: "先发制人",
+    desc: "the FIRST hit you land each room always crits and breaks poise",
+    descCN: "每个房间你打出的第一击必定暴击并削韧",
+    val: (lv) => 0.25 + 0.25 * (lv - 1) }, // rank scales the bonus break fraction
+  { id: "thruster", glyph: "»", col: "#5ee6ff", name: "SPARE THRUSTER", nameCN: "备用推进器",
+    desc: "+1 dash charge for the run (+faster recharge at higher rank)",
+    descCN: "本局 +1 冲刺充能（高等级冲刺回充更快）",
+    val: (lv) => 1 }, // +1 dash charge; rank adds recharge speed
+  { id: "leech", glyph: "♥", col: "#ff6688", name: "SANGUINE CHIP", nameCN: "血契芯片",
+    desc: "heal a little on every kill (respects the lifesteal cap)",
+    descCN: "每次击杀回复少量生命（受吸血上限限制）",
+    val: (lv) => 2 + 2 * (lv - 1) }, // heal 2/4/6 per kill, capped
+  { id: "greed", glyph: "◆", col: "#ffcc44", name: "AVARICE COIN", nameCN: "贪婪之币",
+    desc: "+core income for the whole run (rank scales the bonus)",
+    descCN: "全程提升核心收益（等级提升加成）",
+    val: (lv) => 0.15 + 0.10 * (lv - 1) }, // +15/25/35% cores
+  { id: "rune", glyph: "✦", col: "#7fff5a", name: "RESONANT RUNE", nameCN: "共鸣符文",
+    desc: "your elemental enchants hit harder (rank scales potency)",
+    descCN: "元素附魔效果更强（等级提升威力）",
+    val: (lv) => 0.20 + 0.15 * (lv - 1) }, // +20/35/50% enchant potency
+  { id: "reflex", glyph: "◈", col: "#8ff0ff", name: "TUNED REFLEX", nameCN: "调谐反射",
+    desc: "wider PERFECT-DODGE and PARRY timing windows",
+    descCN: "扩大完美闪避与弹反的判定窗口",
+    val: (lv) => 0.20 + 0.12 * (lv - 1) }, // +20/32/44% window
+  { id: "thorns", glyph: "✜", col: "#caa6ff", name: "BARBED PLATING", nameCN: "倒刺装甲",
+    desc: "foes that touch you take reflected contact damage",
+    descCN: "接触你的敌人受到反伤",
+    val: (lv) => 14 + 10 * (lv - 1) }, // contact reflect 14/24/34 dmg
+];
+const keepsakeById = (id) => KEEPSAKES.find((k) => k.id === id);
+/* a few keepsakes are gated behind a cheap one-time cores purchase (a small collection goal).
+   The rest are unlocked from the start. */
+const KEEPSAKE_LOCKED = { rune: 120, reflex: 160, thorns: 200 };
+function keepsakeUnlocked(id) {
+  if (!(id in KEEPSAKE_LOCKED)) return true;
+  return !!(ksProgress[id] && ksProgress[id].own);
+}
+function keepsakeCost(id) { return KEEPSAKE_LOCKED[id] || 0; }
+
+/* persistent per-keepsake progress: store key "keepsakes" = { id: {lv, prog, own} }.
+   lv = current rank (1..3); prog = trigger count toward next rank; own = unlocked (for gated ones). */
+let ksProgress = {};
+try {
+  const raw = JSON.parse(store.get("keepsakes") || "{}");
+  if (raw && typeof raw === "object") {
+    for (const k of KEEPSAKES) {
+      const r = raw[k.id];
+      ksProgress[k.id] = {
+        lv: r && r.lv ? clamp(r.lv | 0, 1, KEEPSAKE_MAXRANK) : 1,
+        prog: r && r.prog ? Math.max(0, r.prog | 0) : 0,
+        own: r ? !!r.own : false,
+      };
+    }
+  }
+} catch (e) { /* fresh */ }
+for (const k of KEEPSAKES) if (!ksProgress[k.id]) ksProgress[k.id] = { lv: 1, prog: 0, own: false };
+function saveKeepsakes() { store.set("keepsakes", JSON.stringify(ksProgress)); }
+function ksLevel(id) { return (ksProgress[id] && ksProgress[id].lv) || 1; }
+/* requirement to advance FROM the keepsake's current rank to the next; 0 = maxed */
+function ksReq(id) { const lv = ksLevel(id); return lv >= KEEPSAKE_MAXRANK ? 0 : KEEPSAKE_REQ[lv]; }
+/* register a leveling trigger for an equipped keepsake (called per room cleared, per player) */
+function ksGainProgress(id) {
+  if (!id) return;
+  const r = ksProgress[id];
+  if (!r || r.lv >= KEEPSAKE_MAXRANK) return;
+  r.prog++;
+  const need = KEEPSAKE_REQ[r.lv];
+  if (r.prog >= need) {
+    r.lv = Math.min(KEEPSAKE_MAXRANK, r.lv + 1);
+    r.prog = 0;
+    const k = keepsakeById(id);
+    if (k) toast("KEEPSAKE — " + k.nameCN + " · " + k.name + " → RANK " + r.lv, k.col);
+    if (typeof audio !== "undefined" && audio.buy) audio.buy();
+  }
+  saveKeepsakes();
+}
+/* per-player equipped keepsake selection (P1 = keepsake, P2 = p2keepsake; "" = none). Validated
+   against the unlock set so a save edit / removed id never equips a locked keepsake. */
+function ksValidEquip(id) { return id && keepsakeById(id) && keepsakeUnlocked(id) ? id : ""; }
+let curKeepsake = ksValidEquip(store.get("keepsake") || "");
+let p2Keepsake = ksValidEquip(store.get("p2keepsake") || "");
+function setKeepsake(id, forP2) {
+  id = ksValidEquip(id);
+  if (forP2) { p2Keepsake = id; store.set("p2keepsake", id); }
+  else { curKeepsake = id; store.set("keepsake", id); }
+}
+/* the keepsake EQUIPPED for a player index (live hub selection) */
+function equippedKeepsake(idx) { return idx === 1 ? p2Keepsake : curKeepsake; }
+/* run-time helpers reading the player's RUN-LOCKED keepsake snapshot (ksId/ksLv). Cheap flag reads.
+   `hasKs(p, id)` = does this player run with keepsake `id`?  `ksVal(p)` = rank-scaled magnitude. */
+function hasKs(p, id) { return !!(p && p.ksId === id); }
+function ksVal(p) { const k = p && keepsakeById(p.ksId); return k ? k.val(p.ksLv || 1) : 0; }
+/* TUNED REFLEX keepsake: rank-scaled widening of a player's PERFECT-DODGE / PARRY timing windows */
+function pdWindowFor(p) { return CONFIG.pdWindow * (p && hasKs(p, "reflex") ? 1 + ksVal(p) : 1); }
+function parryWindowFor(p) { return CONFIG.parryWindow * (p && hasKs(p, "reflex") ? 1 + ksVal(p) : 1); }
+/* snapshot the equipped keepsake onto a player at run start and apply its run-start passives.
+   Run-start passives: bulwark (+max HP), thruster (+dash charge). Others are read live at their
+   trigger sites. The snapshot freezes rank for the run; progress still accrues live & persists. */
+function applyKeepsakeToPlayer(p) {
+  if (!p) return;
+  const id = ksValidEquip(equippedKeepsake(p.idx));
+  p.ksId = id;
+  p.ksLv = id ? ksLevel(id) : 1;
+  p.ksAmbushReady = hasKs(p, "ambush");
+  if (!id) return;
+  if (id === "bulwark") { const add = Math.round(ksVal(p)); p.maxHp += add; p.hp = p.maxHp; }
+  if (id === "thruster") {
+    p.dashMax = Math.min(6, p.dashMax + 1); // respect dash soft cap (newPlayer caps base at 5)
+    p.dashCharges = p.dashMax;
+  }
 }
 
 /* ---------------- §F BOONS ---------------- */
@@ -1941,6 +2090,7 @@ let rerollsLeft = 0;
 let boonChoices = [];
 /* co-op boon selection: queue of player indices still to pick, the per-pick context */
 let boonQueue = [], boonPickIdx = 0, boonAfter = null, boonMax = 3;
+let ksFirstBoonDone = false; // CODEX SHARD keepsake: the run's first boon screen consumed the +1 offer
 let surgePicking = false, surgeChoices = []; // POWER SURGE sub-selection: owned boons to level up
 let showBuild = false;                       // BUILD 概览 overview panel (toggled with B / while paused)
 let pauseItemCount = 3;                       // number of selectable pause-menu items (set in drawPause)
@@ -1986,6 +2136,7 @@ const HUB = (() => {
     heatX: cx - ox, heatY: cy - oy, heatR: 52,
     rackX: cx - ox, rackY: cy + oy, rackR: 52,
     statX: cx + ox, statY: cy + oy, statR: 52,
+    keepX: cx, keepY: cy + oy + 96, keepR: 52,  // KEEPSAKE case — lower-centre, below the rack/stat row
     exitX: cx, exitY: cy - oy - 200, exitW: 130, exitH: 36,
   };
 })();
@@ -2049,6 +2200,7 @@ window.addEventListener("keydown", (e) => {
     if (state === "shop") { closeShop(); return; }
     if (state === "heat") { closeHeat(); return; }
     if (state === "stats") { closeStats(); return; }
+    if (state === "keepsake") { closeKeepsakes(); return; }
     if (state === "boon") return; // must choose
     if (state === "play" || state === "hub") { paused = !paused; if (paused) menuHighlight = 0; else showBuild = false; audio.uiSnd(); }
     return;
@@ -2089,6 +2241,13 @@ window.addEventListener("keydown", (e) => {
     if (k === "e" || k === "Enter") closeStats();
     return;
   }
+  if (state === "keepsake") {
+    const n = parseInt(k, 10);
+    if (n >= 1 && n <= KEEPSAKES.length) { menuHighlight = n - 1; selectKeepsake(n - 1); return; }
+    if ((k === "Tab" || k === "p2" || k === "t") && numPlayers > 1) { ksEditP = ksEditP === 0 ? 1 : 0; menuHighlight = 0; audio.uiSnd(); return; }
+    if (k === "e" || k === "Enter") closeKeepsakes();
+    return;
+  }
   if (state === "victory") {
     // C / Enter / 1 = continue into endless · H / Esc / 2 = return to hub
     if (k === "c" || k === "Enter" || k === "1") { continueEndless(); return; }
@@ -2108,6 +2267,7 @@ window.addEventListener("keydown", (e) => {
     if (player && dist(player.x, player.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) { openHeat(); return; }
     if (player && dist(player.x, player.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30) { cycleWeapon(); return; }
     if (player && dist(player.x, player.y, HUB.statX, HUB.statY) < HUB.statR + 30) { openStats(); return; }
+    if (player && dist(player.x, player.y, HUB.keepX, HUB.keepY) < HUB.keepR + 30) { openKeepsakes(false); return; }
   }
 });
 window.addEventListener("keyup", (e) => {
@@ -2140,7 +2300,7 @@ canvas.addEventListener("mousedown", (e) => {
     }
     paused = false; return;
   }
-  if (state === "boon" || state === "shop" || state === "heat" || state === "stats" || state === "victory") { uiClick(e.clientX, e.clientY); return; }
+  if (state === "boon" || state === "shop" || state === "heat" || state === "stats" || state === "keepsake" || state === "victory") { uiClick(e.clientX, e.clientY); return; }
   if (e.button === 0) {
     mouse.left = true;
     if (state === "hub" && player && dist(player.x, player.y, HUB.termX, HUB.termY) < HUB.termR + 30) {
@@ -2148,6 +2308,9 @@ canvas.addEventListener("mousedown", (e) => {
     }
     if (state === "hub" && player && dist(player.x, player.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) {
       openHeat(); mouse.left = false; return;
+    }
+    if (state === "hub" && player && dist(player.x, player.y, HUB.keepX, HUB.keepY) < HUB.keepR + 30) {
+      openKeepsakes(false); mouse.left = false; return;
     }
     if (state === "hub" && player && dist(player.x, player.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30) {
       cycleWeapon(); mouse.left = false; return;
@@ -2194,7 +2357,7 @@ canvas.addEventListener("touchstart", (e) => {
       if (!hit) paused = false;
       continue;
     }
-    if (state === "boon" || state === "shop" || state === "heat" || state === "stats" || state === "victory") { uiClick(x, y); continue; }
+    if (state === "boon" || state === "shop" || state === "heat" || state === "stats" || state === "keepsake" || state === "victory") { uiClick(x, y); continue; }
     const db = dashBtnPos(), bb = boltBtnPos();
     if (dist(x, y, db.x, db.y) < db.r + 10) {
       touches[t.identifier] = { role: "dash" }; if (players[0]) players[0].dashBuf = 0.15; continue;
@@ -2229,6 +2392,9 @@ canvas.addEventListener("touchstart", (e) => {
     }
     if (state === "hub" && player && dist(player.x, player.y, HUB.statX, HUB.statY) < HUB.statR + 30) {
       openStats(); continue;
+    }
+    if (state === "hub" && player && dist(player.x, player.y, HUB.keepX, HUB.keepY) < HUB.keepR + 30) {
+      openKeepsakes(false); continue;
     }
     if (player) {
       const tx = s2wX(x), ty = s2wY(y);
@@ -2515,6 +2681,8 @@ function newPlayer(idx) {
     meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
     stealBudget: 0,                    // SIPHON EDGE lifesteal-per-second throttle
     boons: {}, boonPow: {}, boonBest: {},
+    // KEEPSAKE (纪念物): run-locked snapshot of the equipped trinket + its rank, plus per-room flags.
+    ksId: "", ksLv: 1, ksAmbushReady: false, // ksAmbushReady = FIRST STRIKE primed this room
     downed: false, reviveT: 0,         // co-op down/revive state
     slashBuf: 0, dashBuf: 0, freezeBuf: 0, lastDir: { x: 1, y: 0 }, // per-player buffered inputs
   };
@@ -2570,11 +2738,13 @@ function applyWeaponEnchants(e, p) {
   p = p || ctxP || player;
   if (!p || !p.enchants || e.hp <= 0) return;
   const en = p.enchants;
+  // RESONANT RUNE keepsake: amplify elemental enchant potency (DoTs/status; lifesteal stays capped).
+  const ksRune = hasKs(p, "rune") ? (1 + ksVal(p)) : 1;
   // FIRE: ignite (burn DoT) — scales with potency
-  const fire = en.fire || 0;
+  const fire = (en.fire || 0) * ksRune;
   if (fire > 0) applyBurn(e, (3.5 + depth * 0.4) * fire * dmgMul());
   // ICE: build freeze stacks + chill slow (multiple stacks build faster)
-  const ice = en.ice || 0;
+  const ice = (en.ice || 0) * ksRune;
   if (ice > 0 && e.hp > 0) {
     e.iceSlow = Math.max(e.iceSlow || 0, 0.4);
     e.iceSlowT = Math.max(e.iceSlowT || 0, 1.0);
@@ -2591,10 +2761,10 @@ function applyWeaponEnchants(e, p) {
     }
   }
   // ELECTRIC: shock + a small chain (auto-triggers FREEZE->SHATTER on frozen foes via applyShock)
-  const shock = en.shock || 0;
+  const shock = (en.shock || 0) * ksRune;
   if (shock > 0 && e.hp > 0) applyShock(e, (3 + depth * 0.35) * shock * dmgMul(), shock >= 2 ? 1 : 0);
   // POISON: stacking DoT that ramps & lingers (more potency = more stacks per hit)
-  const poison = en.poison || 0;
+  const poison = (en.poison || 0) * ksRune;
   if (poison > 0 && e.hp > 0) applyPoison(e, (3 + depth * 0.35) * poison * dmgMul(), 1 + Math.floor(poison * 0.5));
   // LIFESTEAL: heal on hit, respecting the SHARED per-second lifesteal throughput cap
   const steal = en.steal || 0;
@@ -2636,6 +2806,8 @@ function dmgMul() {
   let m = 1 + softCap(raw, 1.5, 4.0);          // soft knee at +150%, asymptote ~+400%
   const sp = ctxP || player;                   // PERFECT DODGE buff window: +25% damage (per-player)
   if (sp && (sp.pdBuffT || 0) > 0) m *= 1.25;
+  // CRACKED VISOR keepsake: bonus damage while the wielder is below 35% HP (rank scales it)
+  if (sp && hasKs(sp, "berserker") && sp.hp > 0 && sp.hp < sp.maxHp * 0.35) m *= 1 + ksVal(sp);
   return m;
 }
 function dashRegenMul() {
@@ -2783,7 +2955,10 @@ function advanceBoonPick(max) {
   if (boonQueue.length === 0) { finishBoonSelection(); return; }
   boonPickIdx = boonQueue[0];
   const who = players[boonPickIdx] || players[0];
-  boonChoices = rollBoons(who, max);
+  // CODEX SHARD keepsake: +1 boon offered on the FIRST boon screen of the run (once).
+  let m = max;
+  if (!ksFirstBoonDone && hasKs(who, "scholar")) { m = (m || 3) + Math.round(ksVal(who)); }
+  boonChoices = rollBoons(who, m);
   surgeChoices = []; surgePicking = false;
   menuHighlight = 0;
   if (boonChoices.length === 0) { boonQueue.shift(); advanceBoonPick(max); return; }
@@ -2791,6 +2966,7 @@ function advanceBoonPick(max) {
 }
 function finishBoonSelection() {
   boonChoices = []; surgeChoices = []; surgePicking = false;
+  ksFirstBoonDone = true; // CODEX SHARD: the run's first boon screen is now spent
   const fn = boonAfter; boonAfter = null;
   if (fn) fn();
 }
@@ -3048,6 +3224,12 @@ function maybeRegionBanner() {
   };
   toast("REGION — " + r.zh + " · " + r.en, r.tint);
   if (typeof audio !== "undefined" && audio.uiSnd) audio.uiSnd();
+  // VITAL CACHE keepsake: restore HP on entering each new region (rank scales the heal).
+  for (const p of players) {
+    if (!p || p.downed || p.hp <= 0 || !hasKs(p, "medkit")) continue;
+    const h = Math.round(p.maxHp * ksVal(p));
+    if (h > 0) { p.hp = Math.min(p.maxHp, p.hp + h); dnum(p.x, p.y - 22, "+" + h, "#66ff99", true); }
+  }
 }
 function updateRegionBanner(dt) {
   if (!regionBanner) return;
@@ -3471,6 +3653,13 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag) {
     return;
   }
   const sp = ctxP || player;
+  // FIRST STRIKE keepsake: the first hit landed each room always crits and dumps a big break chunk.
+  let ksAmbushHit = false;
+  if (sp && sp.ksAmbushReady) {
+    sp.ksAmbushReady = false;
+    isCrit = true; ksAmbushHit = true;
+    if ((e.breakMax || 0) > 0 && !e.broken) addBreak(e, (e.breakMax || 0) * ksVal(sp));
+  }
   // DUO PHASE STRIKE (DASH+CRIT): the first hit shortly after a dash always crits & refunds dash
   let blinkHit = false;
   if (!isCrit && sp && boonLv("duo_blink") && (sp.dashedT || 0) > 0 && (sp.blinkUsed === undefined || !sp.blinkUsed)) {
@@ -3560,6 +3749,7 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag) {
     }
   }
   if (blinkHit) { burst(e.x, e.y, "#aaf6ff", 14, 260, 0.4, 3); dnum(e.x, e.y - e.r - 16, "PHASE", "#aaf6ff", true); }
+  if (ksAmbushHit) { burst(e.x, e.y, "#ffee55", 12, 240, 0.4, 3); dnum(e.x, e.y - e.r - 16, "FIRST STRIKE", "#ffee55", true); }
   if (e.type === "phantom" && e.state === "cloak") { e.state = "recover"; e.t = 1.0; } // tagging a phantom rips its cloak
   const kbScale = e.type === "boss" ? 0.12 : (e.type === "tank" ? 0.3 : 1);
   e.kbx += kx * kbScale; e.kby += ky * kbScale;
@@ -3834,6 +4024,19 @@ function killEnemy(e) {
     for (const o of enemies) if (o !== e && o.hp > 0) alive++;
     if (alive === 0) slowmoT = 0.5;
   }
+  // SANGUINE CHIP keepsake: heal a little on every kill, respecting the shared lifesteal cap.
+  {
+    const kp = ctxP || player;
+    if (kp && hasKs(kp, "leech") && kp.hp > 0 && !kp.downed) {
+      const heal = Math.max(1, Math.round(ksVal(kp)));
+      const capPerSec = 14; // generous but bounded throughput (shares the stealBudget tick reset)
+      if ((kp.stealBudget || 0) < capPerSec) {
+        const give = Math.min(heal, capPerSec - (kp.stealBudget || 0));
+        kp.hp = Math.min(kp.maxHp, kp.hp + give);
+        kp.stealBudget = (kp.stealBudget || 0) + give;
+      }
+    }
+  }
   if (boonLv("reset")) {
     const kp = ctxP || player;
     kp.dashCharges = Math.min(kp.dashMax, kp.dashCharges + 1);
@@ -3895,7 +4098,7 @@ function killEnemy(e) {
 function tryPerfectDodge(p, ang, attacker) {
   if (!p || p.hp <= 0 || p.downed) return false;
   if (p.dashT <= 0) return false;                                  // must be mid-dash
-  if ((p.dashElapsed || 0) > CONFIG.pdWindow) return false;        // only the tight early window counts
+  if ((p.dashElapsed || 0) > pdWindowFor(p)) return false;         // only the tight early window counts (keepsake may widen)
   if (attacker && attacker.type === "boss" && (attacker.phaseInvT || 0) > 0) return false; // no degenerate phase-invuln farming
   // i-frame negation already happened in the caller; the reward (slow-mo + buff) respects anti-spam.
   if ((p.pdSpamCD || 0) > 0) return false;
@@ -4004,6 +4207,10 @@ function damagePlayer(d, ang, attacker, victim, parryable) {
   if (boonLv("thorn") && attacker && attacker.hp > 0) {
     const thornDmg = Math.round(9 * boonPow("thorn") * (aegis > 0 ? 1.5 + 0.5 * aegis : 1));
     hitEnemy(attacker, thornDmg, Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
+  }
+  // BARBED PLATING keepsake: reflect flat contact damage onto the attacker (rank scales it).
+  if (hasKs(p, "thorns") && attacker && attacker.hp > 0) {
+    hitEnemy(attacker, Math.round(ksVal(p)), Math.cos(ang) * 120, Math.sin(ang) * 120, false, false);
   }
   ctxP = prevCtx;
   if (aegis > 0) { // AEGIS heals a small flat amount on contact (capped per the steal budget)
@@ -4898,6 +5105,7 @@ function genRoom() {
   roomClear = false; waveIdx = 0; shopRoom = false;
   challengeT = 0; challengeFailed = false; fountainUsed = false;
   for (const p of players) p.fountainUsed = false;
+  for (const p of players) p.ksAmbushReady = hasKs(p, "ambush"); // FIRST STRIKE keepsake re-primes each room
   eliteRoom = false; eliteSpawned = false; miniBossActive = false;
   // ROOM TYPE: combat-free specials (via pendingRoom) win; else region structure decides —
   // region-end → boss, region-midpoint → miniboss, otherwise a normal combat room.
@@ -5259,6 +5467,7 @@ function enterHub() {
   lastRegionIdx = -1; regionBanner = null; // region structure resets in the hub
   runHeat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
   runHeatPts = 0; coreFrac = 0;
+  ksGreedMul = 1; // reset keepsake core multiplier in the hub
   roomFade = 1;
   genTerrain(0, 0.6); // light decorative scenery for the hub (combat-free, surface biome)
   audio.uiSnd();
@@ -5285,8 +5494,15 @@ function startRun() {
   if (runHeat.lowhp) { // FRAGILE FRAME: -25% max HP
     for (const p of players) { p.maxHp = Math.max(20, Math.round(p.maxHp * 0.75)); p.hp = p.maxHp; }
   }
+  for (const p of players) applyKeepsakeToPlayer(p); // KEEPSAKE run-start passives (after HEAT HP mods)
+  ksFirstBoonDone = false; // CODEX SHARD: the first boon screen of the run hasn't happened yet
+  for (const p of players) if (hasKs(p, "scholar") && p.ksLv >= 3) rerollsLeft++; // CODEX SHARD R3: +1 reroll
+  ksGreedMul = 1; // AVARICE COIN: take the strongest greed bonus among equipped players (shared cores)
+  for (const p of players) if (hasKs(p, "greed")) ksGreedMul = Math.max(ksGreedMul, 1 + ksVal(p));
   if (runHeatPts > 0) toast("HEAT " + runHeatPts + " — 契约生效 · cores +" + runHeatPts * 25 + "%", "#ff7755");
   if (numPlayers > 1) toast("CO-OP — P1 " + (WEAPONS.find((w) => w.id === players[0].weapon) || {}).name + " · P2 " + (WEAPONS.find((w) => w.id === players[1].weapon) || {}).name, "#ffb14e");
+  // KEEPSAKE equipped toasts
+  for (const p of players) { const k = keepsakeById(p.ksId); if (k) toast((numPlayers > 1 ? p.tag + " " : "") + "KEEPSAKE — " + k.nameCN + " · " + k.name + " R" + p.ksLv, k.col); }
   if (meta.boon > 0) {
     beginBoonSelection(nextRoom, 3);
   } else {
@@ -5300,6 +5516,26 @@ function openStats() { state = "stats"; menuHighlight = 0; audio.uiSnd(); }
 function closeStats() { state = "hub"; audio.uiSnd(); }
 function openHeat() { state = "heat"; menuHighlight = 0; audio.uiSnd(); }
 function closeHeat() { state = "hub"; audio.uiSnd(); }
+/* KEEPSAKE case: `ksEditP` = which player slot is being edited (0=P1, 1=P2 in co-op). */
+let ksEditP = 0;
+function openKeepsakes(forP2) { state = "keepsake"; ksEditP = forP2 ? 1 : 0; menuHighlight = 0; audio.uiSnd(); }
+function closeKeepsakes() { state = "hub"; audio.uiSnd(); }
+/* equip / unequip a keepsake row (or buy a locked one) for the currently-edited player slot. */
+function selectKeepsake(i) {
+  const k = KEEPSAKES[i];
+  if (!k) return;
+  if (!keepsakeUnlocked(k.id)) { // locked: buy it with cores (one-time)
+    const c = keepsakeCost(k.id);
+    if (cores < c) { audio.deny(); toast("NOT ENOUGH CORES — 需要 " + c + " ⬡", "#ff5566"); return; }
+    cores -= c; ksProgress[k.id].own = true; saveKeepsakes(); saveMeta(); audio.buy();
+    toast("KEEPSAKE UNLOCKED — " + k.nameCN + " · " + k.name, k.col);
+    return;
+  }
+  // toggle: equipping the already-equipped keepsake removes it (only ONE active at a time per player)
+  const cur = equippedKeepsake(ksEditP);
+  setKeepsake(cur === k.id ? "" : k.id, ksEditP === 1);
+  audio.uiSnd();
+}
 function toggleHeat(i) {
   const m = HEAT_MODS[i];
   if (!m) return;
@@ -7169,8 +7405,11 @@ function tryFreeze(p) {
   ctxP = p;
   if (!p || p.hp <= 0 || p.freezeCD > 0) return;
   p.freezeBuf = 0;
-  const cd = CONFIG.freezeCD * p.freezeCDMul * Math.max(0.3, Math.pow(0.75, boonPow("cryo")));
+  // GLACIER TEAR keepsake: reduce freeze nova cooldown and extend freeze duration (rank scales it).
+  const ksCryo = hasKs(p, "cryostat") ? ksVal(p) : 0;
+  const cd = CONFIG.freezeCD * p.freezeCDMul * Math.max(0.3, Math.pow(0.75, boonPow("cryo"))) * (1 - ksCryo * 0.5);
   p.freezeCD = cd; p.freezeCDMax = cd;
+  const ksFreezeMul = 1 + ksCryo; // longer freeze on the foes this nova catches
   novas.push({ x: p.x, y: p.y, t: 0.5, tm: 0.5, maxR: CONFIG.freezeR });
   audio.freezeCast();
   shake(3, 0.15);
@@ -7182,7 +7421,7 @@ function tryFreeze(p) {
       if ((e.shockT || 0) > 0) { shatterCombo(e); continue; }  // FREEZE + SHOCK = SHATTER
       if ((e.burnT || 0) > 0) { thermalSnap(e); continue; }    // BURN + FREEZE = THERMAL SNAP
       if (!canFreeze(e)) continue;                             // boss thaw-resistance window
-      e.frozenT = e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur;
+      e.frozenT = (e.type === "boss" ? CONFIG.freezeBossDur : CONFIG.freezeDur) * ksFreezeMul;
       e.vx = 0; e.vy = 0;
       burst(e.x, e.y, "#bfe8ff", 8, 130, 0.4, 2.5);
     }
@@ -7198,7 +7437,7 @@ function tryParry(p) {
   if (!p || p.hp <= 0 || p.downed) return;
   if ((p.parryCD || 0) > 0 || (p.parryT || 0) > 0) return; // in recovery / already open
   if (state !== "play" && state !== "hub") return;
-  p.parryT = CONFIG.parryWindow;
+  p.parryT = parryWindowFor(p);
   p.parryFlashT = Math.max(p.parryFlashT || 0, 0.18); // a small "guard up" tell
   audio.dash(); // light whoosh on the guard raise (distinct clang plays on a successful parry)
   ffx.ring(p.x, p.y, 30, "#ffe07a", 0.22, 2);
@@ -7363,7 +7602,9 @@ function updatePlayer(p, dt) {
   p.parryFlashT = Math.max(0, (p.parryFlashT || 0) - dt);
   if (p.dashT > 0) p.dashElapsed = (p.dashElapsed || 0) + dt; // advance the perfect-dodge window clock
   if (p.dashCharges < p.dashMax) {
-    p.dashCD -= dt * dashRegenMul();
+    // SPARE THRUSTER keepsake: higher ranks also speed dash recharge (+15% R2, +30% R3)
+    const ksDashRegen = hasKs(p, "thruster") && p.ksLv >= 2 ? 1 + 0.15 * (p.ksLv - 1) : 1;
+    p.dashCD -= dt * dashRegenMul() * ksDashRegen;
     if (p.dashCD <= 0) {
       p.dashCharges++;
       if (p.dashCharges < p.dashMax) p.dashCD = CONFIG.dashCD;
@@ -7547,6 +7788,7 @@ function separatePlayers(p) {
 function hubInteract(p) {
   if (dist(p.x, p.y, HUB.termX, HUB.termY) < HUB.termR + 30) { openShop(); return; }
   if (dist(p.x, p.y, HUB.heatX, HUB.heatY) < HUB.heatR + 30) { openHeat(); return; }
+  if (dist(p.x, p.y, HUB.keepX, HUB.keepY) < HUB.keepR + 30) { openKeepsakes(p.idx === 1); return; }
   if (dist(p.x, p.y, HUB.rackX, HUB.rackY) < HUB.rackR + 30) { p.idx === 1 ? cycleWeaponP2() : cycleWeapon(); return; }
   if (dist(p.x, p.y, HUB.statX, HUB.statY) < HUB.statR + 30) { openStats(); return; }
 }
@@ -9126,6 +9368,8 @@ function step(dt) {
     } else {
       roomClear = true;
       roomsCleared++;
+      // KEEPSAKE leveling: each equipped keepsake gains progress per room cleared (persists).
+      { const seen = {}; for (const p of players) { if (p && p.ksId && !seen[p.ksId]) { seen[p.ksId] = 1; ksGainProgress(p.ksId); } } }
       for (const p of players) { // SECOND WIND: per-player heal on room clear
         if (p.downed || p.hp <= 0) continue;
         const lv = p.boonPow && p.boonPow.wind ? p.boonPow.wind : 0;
@@ -9242,7 +9486,7 @@ function step(dt) {
         if (dist(b.x, b.y, p.x, p.y) < b.r + p.r) {
           // a PARRY window or active dash i-frame still consumes the bolt & lets damagePlayer
           // award a deflect / PERFECT DODGE (enemy bolts are parryable projectiles).
-          if ((p.parryT || 0) > 0 || (p.dashT > 0 && (p.dashElapsed || 0) <= CONFIG.pdWindow)) {
+          if ((p.parryT || 0) > 0 || (p.dashT > 0 && (p.dashElapsed || 0) <= pdWindowFor(p))) {
             damagePlayer(b.dmg, Math.atan2(b.vy, b.vx), b.owner || null, p, true);
             b.t = -1;
             break;
@@ -9334,7 +9578,7 @@ function step(dt) {
       const ex = s.cx + Math.cos(s.a) * s.len, ey = s.cy + Math.sin(s.a) * s.len;
       for (const p of players) {
         if (p.downed || p.hp <= 0) continue;
-        const inParry = (p.parryT || 0) > 0 || (p.dashT > 0 && (p.dashElapsed || 0) <= CONFIG.pdWindow);
+        const inParry = (p.parryT || 0) > 0 || (p.dashT > 0 && (p.dashElapsed || 0) <= pdWindowFor(p));
         if ((p.ifr > 0 || p.hurtT > 0) && !inParry) continue; // already invuln & no skill window — skip
         const sd = segDist(p.x, p.y, s.cx, s.cy, ex, ey);
         if (sd.d < 9 + p.r) {
@@ -12593,6 +12837,39 @@ function drawHubObjects() {
     ctx.font = "13px 'Courier New', monospace";
     ctx.fillText(touchUI ? "TAP — SERVICE RECORD" : "PRESS E — SERVICE RECORD", t.statX, t.statY - 48);
   }
+  // KEEPSAKE case (纪念物): browse + equip ONE trinket before the run
+  consoleBase(t.keepX, t.keepY, "#caa6ff", 38, detail);
+  glow("#caa6ff", 16);
+  ctx.fillStyle = "#1c1430";
+  rrect(t.keepX - 38, t.keepY - 26, 76, 52, 8); ctx.fill();
+  ctx.strokeStyle = "#caa6ff";
+  ctx.lineWidth = 2.5;
+  rrect(t.keepX - 38, t.keepY - 26, 76, 52, 8); ctx.stroke();
+  noglow();
+  // show P1's currently equipped keepsake glyph in the case (or an empty slot)
+  {
+    const k1 = keepsakeById(curKeepsake);
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    if (k1) { drawKeepsakeIcon(t.keepX, t.keepY - 2, k1, 13, ksLevel(k1.id)); }
+    else { ctx.fillStyle = "rgba(202,166,255,0.45)"; ctx.font = "bold 18px 'Courier New', monospace"; ctx.fillText("◇", t.keepX, t.keepY - 2); }
+  }
+  ctx.fillStyle = "#caa6ff";
+  ctx.font = "bold 10px 'Courier New', monospace";
+  ctx.fillText("KEEPSAKE 纪念物", t.keepX, t.keepY + t.keepR * 0.66 + 6);
+  if (numPlayers > 1) {
+    const k2 = keepsakeById(p2Keepsake);
+    ctx.fillStyle = PLAYER_SKINS[1].col;
+    ctx.font = "bold 10px 'Courier New', monospace";
+    ctx.fillText("P2 " + (k2 ? (k2.glyph + " " + k2.name) : "—"), t.keepX, t.keepY + t.keepR * 0.66 + 19);
+  }
+  const kPulse = 0.5 + Math.sin(timeNow * 3 + 2.2) * 0.3;
+  ctx.strokeStyle = "rgba(202,166,255," + kPulse * 0.6 + ")";
+  ctx.beginPath(); ctx.arc(t.keepX, t.keepY, t.keepR, 0, TAU); ctx.stroke();
+  if (player && dist(player.x, player.y, t.keepX, t.keepY) < t.keepR + 30) {
+    ctx.fillStyle = "#caa6ff";
+    ctx.font = "13px 'Courier New', monospace";
+    ctx.fillText(touchUI ? "TAP — KEEPSAKE 纪念物" : "PRESS E — KEEPSAKE 纪念物", t.keepX, t.keepY - 48);
+  }
   // exit gate — DESCENT PORTAL: twin emitter pylons framing a flowing energy mouth
   const ex0 = t.exitX - t.exitW / 2, ey0 = t.exitY - t.exitH / 2;
   // pylon posts each side
@@ -12884,6 +13161,15 @@ function drawPlayerBars(p, u, by, side) {
           }
         }
       }
+    }
+  }
+  // KEEPSAKE indicator: small icon + rank near the player's bars during a run (unobtrusive).
+  if (state !== "hub") {
+    const k = keepsakeById(p.ksId);
+    if (k) {
+      const kix = right ? bx + bw - 10 * u : bx + 10 * u;
+      const kiy = by - (numPlayers > 1 ? 26 : 18) * u;
+      drawKeepsakeIcon(kix, kiy, k, 9 * u, p.ksLv || 1);
     }
   }
 }
@@ -13373,6 +13659,7 @@ function drawTitle() {
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "护盾(蓝)需先击破才能伤血：重武器/暴击/蓄力/冰冻更快破盾 — SHIELD (护盾, blue) soaks HP dmg till broken; heavy/crit/charged/FREEZE shred it",
     "猛攻积攒破防(黄条)：满则破防硬直+承伤暴增；强敌/BOSS更难破 — aggression fills BREAK (破防, amber); full = stagger + bonus dmg; bosses resist",
+    "枢纽 纪念物 案：出征前装备一件纪念物获得被动，随使用升级(3级) — hub KEEPSAKE case: equip ONE trinket for a passive that LEVELS UP with use (3 ranks)",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -13392,6 +13679,7 @@ function drawTitle() {
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
     "护盾(蓝)需先击破才能伤血：重武器/暴击/蓄力/冰冻更快破盾 — SHIELD (护盾, blue) soaks HP dmg till broken; heavy/crit/charged/FREEZE shred it",
     "猛攻积攒破防(黄条)：满则破防硬直+承伤暴增；强敌/BOSS更难破 — aggression fills BREAK (破防, amber); full = stagger + bonus dmg; bosses resist",
+    "枢纽 纪念物 案：出征前装备一件纪念物获得被动，随使用升级(3级) — hub KEEPSAKE case: equip ONE trinket for a passive that LEVELS UP with use (3 ranks)",
     "商店之门用核心购物 — SHOP doors: buy wares with cores",
     "枢纽 HEAT 终端：难度契约换更多核心 — hub HEAT terminal: contracts for bonus cores",
     "死亡即成长：在枢纽终端消费核心 — death is progress: spend cores at the hub",
@@ -13951,6 +14239,135 @@ function drawStatsScreen() {
   uiRects.push({ x: cw / 2 - 140, y: cy - 18, w: 280, h: 36, act: "statsclose" });
 }
 
+/* KEEPSAKE icon — a procedural canvas glyph: a faceted gem/badge backdrop in the keepsake's
+   colour with its glyph, plus optional rank pips ring. No image assets, no per-frame allocation
+   beyond the path. `r` = icon radius (world/screen px). `lv` (1..3) draws filled rank pips. */
+function drawKeepsakeIcon(cx, cy, k, r, lv, dim) {
+  const col = k.col;
+  ctx.save();
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // hexagonal gem backdrop
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) { const a = -Math.PI / 2 + i * TAU / 6; const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r; i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); }
+  ctx.closePath();
+  ctx.fillStyle = dim ? "rgba(14,16,34,0.92)" : "rgba(14,18,40,0.96)";
+  ctx.fill();
+  if (!dim) glow(col, 8);
+  ctx.strokeStyle = dim ? "rgba(120,130,170,0.4)" : col;
+  ctx.lineWidth = Math.max(1.5, r * 0.12);
+  ctx.stroke();
+  noglow();
+  // central glyph
+  ctx.fillStyle = dim ? "rgba(170,180,210,0.5)" : col;
+  ctx.font = "bold " + Math.round(r * 1.15) + "px 'Courier New', monospace";
+  ctx.fillText(k.glyph, cx, cy + r * 0.05);
+  // rank pips along the bottom
+  if (lv && !dim) {
+    for (let i = 0; i < KEEPSAKE_MAXRANK; i++) {
+      const filled = i < lv;
+      ctx.beginPath();
+      ctx.arc(cx + (i - 1) * r * 0.5, cy + r * 1.15, r * 0.14, 0, TAU);
+      ctx.fillStyle = filled ? col : "rgba(120,130,170,0.35)";
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+/* KEEPSAKE case screen: browse owned keepsakes, equip ONE for the run (per-player in co-op).
+   Each row shows the procedural icon, bilingual name + effect, current rank, and progress to the
+   next rank. Locked keepsakes show a cores price. Navigable by mouse/touch/keyboard/gamepad. */
+function drawKeepsakeScreen() {
+  dimScreen(0.7);
+  uiRects = [];
+  const u = us();
+  const editId = equippedKeepsake(ksEditP);
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  glow("#caa6ff", 16);
+  ctx.fillStyle = "#caa6ff";
+  ctx.font = "bold " + 24 * u + "px 'Courier New', monospace";
+  ctx.fillText("KEEPSAKE 纪念物", cw / 2, ch * 0.075);
+  noglow();
+  ctx.fillStyle = "rgba(200,180,255,0.75)";
+  ctx.font = "bold " + 12 * u + "px 'Courier New', monospace";
+  const slotLbl = numPlayers > 1 ? ("EQUIP FOR " + (ksEditP === 1 ? "P2" : "P1")) : "EQUIP ONE FOR THE RUN — 出征前装备一件";
+  ctx.fillText(slotLbl + " · ◆ " + fmtNum(cores), cw / 2, ch * 0.075 + 22 * u);
+  if (numPlayers > 1) {
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = 10 * u + "px 'Courier New', monospace";
+    ctx.fillText(touchUI ? "tap P-tab to switch player" : "[Tab] / □ switch player slot", cw / 2, ch * 0.075 + 38 * u);
+    uiRects.push({ x: cw / 2 - 120, y: ch * 0.075 + 30 * u, w: 240, h: 18 * u, act: "kstab" });
+  }
+  const w = Math.min(640 * u, cw - 40);
+  const rh = 52 * u;
+  const x = (cw - w) / 2;
+  let y = ch * 0.155;
+  for (let i = 0; i < KEEPSAKES.length; i++) {
+    const k = KEEPSAKES[i];
+    const owned = keepsakeUnlocked(k.id);
+    const equipped = editId === k.id;
+    const lv = ksLevel(k.id);
+    const hover = (mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + rh) || (anyGamepad() && menuHighlight === i);
+    ctx.save();
+    glow(equipped ? k.col : (owned ? "#445" : "#332"), hover ? 16 : 7);
+    ctx.fillStyle = equipped ? "rgba(26,20,46,0.96)" : "rgba(10,12,30,0.95)";
+    rrect(x, y, w, rh, 8); ctx.fill();
+    ctx.strokeStyle = equipped ? k.col : (owned ? "rgba(140,150,200,0.5)" : "rgba(120,100,140,0.4)");
+    ctx.lineWidth = equipped ? 2.6 : 2;
+    rrect(x, y, w, rh, 8); ctx.stroke();
+    noglow();
+    // icon
+    drawKeepsakeIcon(x + 26 * u, y + rh * 0.42, k, 15 * u, owned ? lv : 0, !owned);
+    // name + desc
+    ctx.textAlign = "left";
+    ctx.fillStyle = owned ? "#fff" : "rgba(255,255,255,0.55)";
+    ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
+    ctx.fillText("[" + (i + 1) + "] " + k.nameCN + " · " + k.name + (owned ? (" · R" + lv) : ""), x + 52 * u, y + rh * 0.3);
+    ctx.fillStyle = "rgba(190,200,235,0.72)";
+    ctx.font = 10.5 * u + "px 'Courier New', monospace";
+    ctx.fillText(k.descCN, x + 52 * u, y + rh * 0.56);
+    ctx.fillStyle = "rgba(170,185,225,0.6)";
+    ctx.font = 9.5 * u + "px 'Courier New', monospace";
+    ctx.fillText(k.desc, x + 52 * u, y + rh * 0.8);
+    // right column: status + progress
+    ctx.textAlign = "right";
+    if (!owned) {
+      ctx.fillStyle = cores >= keepsakeCost(k.id) ? "#ffcc44" : "rgba(255,120,120,0.85)";
+      ctx.font = "bold " + 12 * u + "px 'Courier New', monospace";
+      ctx.fillText("UNLOCK ◆ " + keepsakeCost(k.id), x + w - 14, y + rh * 0.32);
+    } else {
+      ctx.fillStyle = equipped ? k.col : "rgba(200,180,255,0.65)";
+      ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+      ctx.fillText(equipped ? "EQUIPPED ✓" : "EQUIP", x + w - 14, y + rh * 0.3);
+      // rank progress bar
+      const need = ksReq(k.id);
+      const prog = (ksProgress[k.id] && ksProgress[k.id].prog) || 0;
+      const barW = 110 * u, bx2 = x + w - 14 - barW, by2 = y + rh * 0.62;
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      rrect(bx2, by2, barW, 5 * u, 2); ctx.fill();
+      if (need > 0) {
+        ctx.fillStyle = k.col;
+        rrect(bx2, by2, barW * clamp(prog / need, 0, 1), 5 * u, 2); ctx.fill();
+      } else {
+        ctx.fillStyle = "#ffd27a";
+        rrect(bx2, by2, barW, 5 * u, 2); ctx.fill();
+      }
+      ctx.fillStyle = "rgba(200,210,245,0.7)";
+      ctx.font = 9 * u + "px 'Courier New', monospace";
+      ctx.fillText(need > 0 ? (prog + " / " + need + " 房间") : "MAX 满级", x + w - 14, y + rh * 0.86);
+    }
+    ctx.restore();
+    uiRects.push({ x, y, w, h: rh, act: "ks", i });
+    y += rh + 7 * u;
+  }
+  ctx.textAlign = "center";
+  ctx.fillStyle = "rgba(255,255,255,0.6)";
+  ctx.font = 12 * u + "px 'Courier New', monospace";
+  const cyy = Math.min(ch - 24, y + 8 * u);
+  ctx.fillText(touchUI ? "tap a keepsake to equip · tap here to close" : "[1-" + KEEPSAKES.length + "] equip/toggle · [E]/[Esc] close", cw / 2, cyy);
+  uiRects.push({ x: cw / 2 - 200, y: cyy - 16, w: 400, h: 32, act: "ksclose" });
+}
+
 /* BUILD 概览 — bilingual per-player build summary on the pause overlay.
    Shows each player's weapon (name+class), active enchants (element icons + potency), and owned
    boons GROUPED BY THEME (rarity-colored, with stack/level), plus key derived stats. Reads through
@@ -14224,6 +14641,9 @@ function uiClick(x, y) {
       if (r.act === "heatmod") { toggleHeat(r.i); return; }
       if (r.act === "heatclose") { closeHeat(); return; }
       if (r.act === "statsclose") { closeStats(); return; }
+      if (r.act === "ks") { menuHighlight = r.i; selectKeepsake(r.i); return; }
+      if (r.act === "ksclose") { closeKeepsakes(); return; }
+      if (r.act === "kstab") { ksEditP = ksEditP === 0 ? 1 : 0; menuHighlight = 0; audio.uiSnd(); return; }
       if (r.act === "fxtoggle") { ffx.cycleLevel(); return; }
       if (r.act === "fstoggle") { toggleFullscreen(); updateFsBtn(); return; }
       if (r.act === "fsauto") { setAutoFullscreen(!FS.auto); audio.uiSnd(); return; }
@@ -14285,7 +14705,7 @@ function render(frameDt) {
   drawSweeps();
   drawZonesAndPickups();
   drawSingularities();
-  if (state === "hub" || state === "shop" || state === "heat" || state === "stats") drawHubObjects();
+  if (state === "hub" || state === "shop" || state === "heat" || state === "stats" || state === "keepsake") drawHubObjects();
   if (roomType === "fountain" && state === "play") drawFountain();
   if (shopRoom || roomType === "treasure") drawPedestals();
   if (roomClear) drawDoors();
@@ -14417,6 +14837,9 @@ function render(frameDt) {
   } else if (state === "stats") {
     drawHUD();
     drawStatsScreen();
+  } else if (state === "keepsake") {
+    drawHUD();
+    drawKeepsakeScreen();
   }
 
   // mute hint
@@ -14458,6 +14881,7 @@ function pollGamepadUI(dt) {
       else if (state === "shop") closeShop();
       else if (state === "heat") closeHeat();
       else if (state === "stats") closeStats();
+      else if (state === "keepsake") closeKeepsakes();
       return;
     }
   }
@@ -14486,13 +14910,17 @@ function pollGamepadUI(dt) {
     if (gpCancel()) { paused = false; audio.uiSnd(); }
     return;
   }
-  // boon / shop / heat menu navigation
-  if (state === "boon" || state === "shop" || state === "heat" || state === "stats") {
+  // boon / shop / heat / stats / keepsake menu navigation
+  if (state === "boon" || state === "shop" || state === "heat" || state === "stats" || state === "keepsake") {
     const stepNav = gpMenuStep(dt);
     const count = menuItemCount();
     if ((stepNav.nav || stepNav.vert) && GP.navCD <= 0 && count > 0) {
       menuHighlight = (menuHighlight + (stepNav.nav || stepNav.vert) + count) % count;
       GP.navCD = 0.18; audio.uiSnd();
+    }
+    // KEEPSAKE: □ (btn 2) swaps which player's slot is being edited in co-op
+    if (state === "keepsake" && numPlayers > 1) {
+      for (const pad of GP.pads) if (gpPressed(pad, 2)) { ksEditP = ksEditP === 0 ? 1 : 0; menuHighlight = 0; audio.uiSnd(); break; }
     }
     if (gpConfirm()) menuConfirm();
     if (gpCancel()) menuCancel();
@@ -14503,6 +14931,7 @@ function menuItemCount() {
   if (state === "boon") return surgePicking ? surgeChoices.length : boonChoices.length;
   if (state === "shop") return META_UPGRADES.length;
   if (state === "heat") return HEAT_MODS.length;
+  if (state === "keepsake") return KEEPSAKES.length;
   return 0;
 }
 function menuConfirm() {
@@ -14510,11 +14939,13 @@ function menuConfirm() {
   else if (state === "shop") buyMeta(META_UPGRADES[menuHighlight]);
   else if (state === "heat") toggleHeat(menuHighlight);
   else if (state === "stats") closeStats();
+  else if (state === "keepsake") selectKeepsake(menuHighlight);
 }
 function menuCancel() {
   if (state === "shop") closeShop();
   else if (state === "heat") closeHeat();
   else if (state === "stats") closeStats();
+  else if (state === "keepsake") closeKeepsakes();
   // boon must be chosen — no cancel
 }
 
