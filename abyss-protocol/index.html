@@ -49,7 +49,14 @@
              J / Left click / tap  = melee slash
              Right Ctrl / Right click / Shift / E = plasma bolt (energy)
              K (or Q) = freeze nova (ice skill, 12s CD)
-             Space = dash (i-frames)
+             Space = dash (i-frames). A LAST-MOMENT dash that negates an
+                     incoming attack in the dash's first ~0.18s = PERFECT
+                     DODGE (完美闪避): slow-mo + dash reset + brief dmg/crit
+                     buff + style (anti-spam gated).
+             L = parry (弹反): a tight ~0.16s window that deflects an incoming
+                     melee/contact/parryable projectile and COUNTERS — stagger +
+                     knockback + a big chunk of BREAK (bosses parryable; AoE
+                     pools/beams/hazards are not). Whiffing leaves a recovery.
              P or Esc = pause, M = mute, F = fullscreen toggle.
              (Auto-fullscreen on the first start gesture, persisted & toggleable
              in the pause menu; a ⛶ button sits top-right on title/pause.)
@@ -148,6 +155,16 @@ const CONFIG = Object.freeze({
   dashIfr: 0.27,
   dashCD: 0.95,
   hurtIfr: 0.75,
+  // ---- PERFECT DODGE (完美闪避) + PARRY (弹反) skill mechanics (per-player) ----
+  pdWindow: 0.18,        // dash sub-window (from dash start) in which a negated hit counts as a PERFECT DODGE
+  pdSlowmo: 0.4,         // PERFECT DODGE time-dilation beat (s, real-time) — snappy, not abusable
+  pdBuff: 2.2,           // PERFECT DODGE crit/damage buff window (s) granted on trigger
+  pdSpamCD: 1.6,         // anti-spam: the slow-mo + buff reward can't re-trigger for this long (i-frame negation always works)
+  parryWindow: 0.16,     // PARRY active window (s) — tight timing skill
+  parryRecover: 0.55,    // PARRY whiff recovery/cooldown (s) — punished if mistimed
+  parrySlowmo: 0.34,     // PARRY time-dilation beat (s, real-time)
+  parryBreak: 0.45,      // PARRY break-meter chunk as a fraction of the target's breakMax (big poise synergy)
+  parryBreakBoss: 0.34,  // PARRY break chunk vs bosses (still meaningful, slightly tempered)
   freezeCD: 12,                 // freeze nova cooldown (s)
   freezeDur: 2.5,               // freeze duration on normals
   freezeBossDur: 1.2,           // freeze duration on bosses
@@ -764,6 +781,21 @@ class AudioEngine {
     const t = this.ctx.currentTime;
     this.noise(t, 0.22, 0.14, "bandpass", 600, 2600);
     this.tone("sine", 180, 520, t, 0.16, 0.06, true);
+  }
+  perfectDodge() { // PERFECT DODGE (完美闪避): airy time-stretch whoosh + bright rising shimmer
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.noise(t, 0.18, 0.1, "bandpass", 1200, 3200);
+    this.tone("sine", 520, 1320, t, 0.22, 0.07, true);
+    this.tone("triangle", 1760, 2640, t + 0.04, 0.16, 0.05, true);
+  }
+  parry() { // PARRY (弹反): bright metallic clang + sharp spark crack
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime;
+    this.tone("square", 1400, 880, t, 0.07, 0.12, true);
+    this.tone("triangle", 2200, 1600, t, 0.12, 0.08, true);
+    this.noise(t, 0.1, 0.16, "highpass", 4200, 8000);
+    this.tone("sine", 660, 990, t + 0.05, 0.18, 0.05, true);
   }
   enemyDie(big) {
     if (!this.ok()) return;
@@ -1893,6 +1925,7 @@ let pillars = [], doors = [], pickups = [], spawnQ = [], zones = [], toasts = []
 let terrain = []; // decorative procedural scenery (lakes/mountains/plants); NO collision
 let waves = [], waveIdx = 0, roomClear = false, boss = null;
 let freezeT = 0, shakeT = 0, shakeA = 0, redFlash = 0, roomFade = 0;
+let whiteFlash = 0;        // brief bright screen flash for PERFECT DODGE / PARRY tells (decays in render)
 let mortars = [], novas = [], pedestals = [];
 /* boss telegraph FX (pooled): rotating laser sweeps + radial rune-zones.
    sweeps: telegraphed rotating beam lines (OVERSEER).  used by no other system. */
@@ -2135,6 +2168,7 @@ window.addEventListener("mouseup", (e) => {
 function dashBtnPos() { return { x: cw - 64 * us(), y: ch - 64 * us(), r: 44 * us() }; }
 function boltBtnPos() { return { x: cw - 150 * us(), y: ch - 110 * us(), r: 36 * us() }; }
 function freezeBtnPos() { return { x: cw - 236 * us(), y: ch - 60 * us(), r: 32 * us() }; }
+function parryBtnPos() { return { x: cw - 150 * us(), y: ch - 32 * us(), r: 30 * us() }; }
 const touches = {}; // id -> {role, x, y}
 
 canvas.addEventListener("touchstart", (e) => {
@@ -2171,6 +2205,10 @@ canvas.addEventListener("touchstart", (e) => {
     const fb = freezeBtnPos();
     if (dist(x, y, fb.x, fb.y) < fb.r + 10) {
       touches[t.identifier] = { role: "freeze" }; if (players[0]) players[0].freezeBuf = 0.18; continue;
+    }
+    const qb = parryBtnPos();
+    if (dist(x, y, qb.x, qb.y) < qb.r + 10) {
+      touches[t.identifier] = { role: "parry" }; if (players[0]) players[0].parryBuf = 0.15; continue;
     }
     if (x < cw * 0.45 && joy.id === -1) {
       joy.id = t.identifier; joy.bx = x; joy.by = y; joy.dx = 0; joy.dy = 0;
@@ -2467,6 +2505,11 @@ function newPlayer(idx) {
     dashT: 0, dashCD: 0, dashCharges: dashes, dashMax: dashes,
     dashDX: 0, dashDY: 0,
     ifr: 0, hurtT: 0, trail: [], trailT: 0,
+    dashElapsed: 0,                    // time since the current dash STARTED (for the PERFECT DODGE sub-window)
+    parryT: 0, parryCD: 0, parryBuf: 0, // PARRY active window / recovery cooldown / buffered input
+    pdBuffT: 0,                        // PERFECT DODGE damage/crit buff window
+    pdSpamCD: 0,                       // PERFECT DODGE reward (slow-mo+buff) anti-spam lockout
+    pdFlashT: 0, parryFlashT: 0,       // per-player tell ring timers (render only)
     aimDraw: -Math.PI / 2, walkT: 0, moveAmt: 0, recoilT: 0, // render-anim state
     freezeCD: 0, freezeCDMax: 0, buyCD: 0,
     meleeMul: 1, boltMul: 1, freezeCDMul: 1, frozenBonus: 0, // run-mods (shop items)
@@ -2590,7 +2633,10 @@ function softCap(x, knee, ceil) {
 }
 function dmgMul() {
   const raw = meta.dmg * 0.10;                 // +10% per level, raw
-  return 1 + softCap(raw, 1.5, 4.0);           // soft knee at +150%, asymptote ~+400%
+  let m = 1 + softCap(raw, 1.5, 4.0);          // soft knee at +150%, asymptote ~+400%
+  const sp = ctxP || player;                   // PERFECT DODGE buff window: +25% damage (per-player)
+  if (sp && (sp.pdBuffT || 0) > 0) m *= 1.25;
+  return m;
 }
 function dashRegenMul() {
   const raw = 0.05 * Math.max(0, (meta.dash || 0) - 4);
@@ -2605,7 +2651,12 @@ function boltDamage() {
   const splitX = Math.max(0, boonPow("split") - boonLv("split")); // tri-cannon rarity bonus
   return CONFIG.boltDmg * dmgMul() * (1 + boonPow("over") * 0.35) * (1 + splitX * 0.06) * p.boltMul;
 }
-function critRoll() { return Math.random() < Math.min(0.85, (weaponDefP().critBase || 0) + boonPow("crit") * 0.15); }
+function critRoll() {
+  const sp = ctxP || player;
+  // PERFECT DODGE buff window: a strong crit bonus (per-player), clamped with everything else
+  const pd = (sp && (sp.pdBuffT || 0) > 0) ? 0.4 : 0;
+  return Math.random() < Math.min(0.9, (weaponDefP().critBase || 0) + boonPow("crit") * 0.15 + pd);
+}
 function meleeRangeNow() { return (CONFIG.meleeRange + Math.min(64, boonPow("arc") * 12)) * weaponDefP().rangeMul; }
 function meleeArcNow() {
   if (weaponDefP().id === "maul") return TAU; // maul: full 360° slam
@@ -3832,10 +3883,121 @@ function killEnemy(e) {
 
 /* damagePlayer: victim is an explicit player (defaults to legacy players[0]).
    The boon context (thorns) reads the victim's boons. */
-function damagePlayer(d, ang, attacker, victim) {
+/* ---------------- PERFECT DODGE (完美闪避) + PARRY (弹反) ----------------
+   Both are per-player timing skills that route through damagePlayer (the single choke point
+   every enemy attack passes through). damagePlayer negates the hit via i-frames / parry window
+   FIRST, then asks these helpers whether the negation earned a skill reward. The i-frame
+   negation itself ALWAYS works; only the slow-mo + buff reward is gated by an anti-spam cooldown
+   so chaining dash can't farm buffs. Neither fires during a boss phase-change invuln beat. */
+
+/* did this player just PERFECT-DODGE? — an attack was negated while the player is in the EARLY
+   sub-window of an active dash (rewards last-moment timing, not dash-spam). */
+function tryPerfectDodge(p, ang, attacker) {
+  if (!p || p.hp <= 0 || p.downed) return false;
+  if (p.dashT <= 0) return false;                                  // must be mid-dash
+  if ((p.dashElapsed || 0) > CONFIG.pdWindow) return false;        // only the tight early window counts
+  if (attacker && attacker.type === "boss" && (attacker.phaseInvT || 0) > 0) return false; // no degenerate phase-invuln farming
+  // i-frame negation already happened in the caller; the reward (slow-mo + buff) respects anti-spam.
+  if ((p.pdSpamCD || 0) > 0) return false;
+  p.pdSpamCD = CONFIG.pdSpamCD;
+  p.pdBuffT = CONFIG.pdBuff;                                       // brief crit/damage buff window
+  p.pdFlashT = 0.35;                                              // per-player tell ring
+  // REWARD: refund a dash charge + reset its recharge, partial energy back, style gain.
+  p.dashCharges = Math.min(p.dashMax, p.dashCharges + 1);
+  p.dashCD = 0;
+  p.energy = Math.min(p.maxEnergy, p.energy + 22);
+  skillStyleGain(2);
+  // a short, snappy time-dilation beat (reuse the slow-mo infra; never extend past its own length)
+  slowmoT = Math.max(slowmoT, CONFIG.pdSlowmo);
+  whiteFlash = Math.max(whiteFlash, 0.28);
+  dnum(p.x, p.y - 26, "PERFECT! 完美闪避", "#8ff0ff", true);
+  toast("PERFECT DODGE — 完美闪避!", "#8ff0ff");
+  ffx.ring(p.x, p.y, 56, "#8ff0ff", 0.45, 5);
+  ffx.spawnLight(p.x, p.y, 120, "#bff6ff", 0.7);
+  ffx.pulse(p.x, p.y, 4);
+  burst(p.x, p.y, "#bff6ff", 14, 220, 0.45, 2.5);
+  audio.perfectDodge();
+  shake(3, 0.14);
+  return true;
+}
+
+/* is THIS player in an active PARRY window able to deflect this attack from `attacker`? */
+function canParry(p, attacker, parryable) {
+  if (!p || p.hp <= 0 || p.downed) return false;
+  if ((p.parryT || 0) <= 0) return false;        // only during the active window
+  if (parryable === false) return false;         // unparryable attacks (AoE pools, etc.)
+  return true;
+}
+
+/* a successful PARRY: negate the hit, counter the attacker (stagger/knockback + a big chunk of
+   BREAK), slow-mo + tell + sparks + style. Bosses can be parried (telegraphed melee/charge) and
+   it's a strong break-builder; never builds break during a boss phase-change invuln beat. */
+function doParry(p, ang, attacker) {
+  p.parryT = 0;                                   // consume the window
+  p.parryCD = CONFIG.parryRecover;                // recovery/cooldown
+  p.ifr = Math.max(p.ifr, 0.3);                   // brief safety i-frames on a clean parry
+  p.parryFlashT = 0.38;
+  skillStyleGain(3);
+  slowmoT = Math.max(slowmoT, CONFIG.parrySlowmo);
+  freezeT = Math.max(freezeT, 0.05);              // a crisp hit-stop on the clang
+  whiteFlash = Math.max(whiteFlash, 0.22);
+  const px = p.x, py = p.y;
+  dnum(px, py - 26, "PARRY! 弹反", "#ffd24a", true);
+  toast("PARRY — 弹反!", "#ffd24a");
+  audio.parry();
+  ffx.ring(px, py, 46, "#ffe07a", 0.4, 6);
+  ffx.spawnLight(px, py, 110, "#ffd24a", 0.7);
+  ffx.pulse(px, py, 4);
+  shake(5, 0.2);
+  // COUNTER the attacker: stagger + knockback + a heavy chunk of BREAK (poise synergy)
+  if (attacker && attacker.hp > 0) {
+    const a = angTo(px, py, attacker.x, attacker.y);
+    // sparks at the clash point
+    const cx = px + Math.cos(a) * (p.r + 6), cy = py + Math.sin(a) * (p.r + 6);
+    sparkLine(cx - 8, cy - 8, cx + 8, cy + 8, "#ffe07a", 8);
+    burst(cx, cy, "#fff2c0", 12, 260, 0.4, 2.5);
+    if (attacker.type !== "boss" || (attacker.phaseInvT || 0) <= 0) {
+      // knockback (bosses resist), then break — a strong break-builder vs the poise system
+      const resist = attacker.type === "boss" ? 0.25 : 1;
+      attacker.kbx += Math.cos(a) * 420 * resist;
+      attacker.kby += Math.sin(a) * 420 * resist;
+      // brief stagger so a parried melee visibly recoils
+      if (attacker.type !== "boss") { attacker.shockT = Math.max(attacker.shockT || 0, 0.5); }
+      if ((attacker.breakMax || 0) > 0) {
+        const frac = attacker.type === "boss" ? CONFIG.parryBreakBoss : CONFIG.parryBreak;
+        addBreak(attacker, attacker.breakMax * frac);
+      }
+    }
+  }
+  return true;
+}
+
+/* shared, save-room/state-aware style gain for the skill mechanics (mirrors styleKill's gate) */
+function skillStyleGain(n) {
+  if (state !== "play" || roomClear) return;
+  styleN += n;
+  styleT = 3.5;
+  let r = -1;
+  for (let i = 0; i < STYLE_RANKS.length; i++) if (styleN >= STYLE_RANKS[i].at) r = i;
+  if (r > styleRank) {
+    styleRank = r;
+    stylePop = 0.45;
+    if (r === 3) audio.styleChime(); else audio.styleUp(r);
+  }
+  if (styleRank > styleBestRoom) styleBestRoom = styleRank;
+}
+
+function damagePlayer(d, ang, attacker, victim, parryable) {
   const p = victim || player;
   if (!p || p.hp <= 0 || p.downed) return;
-  if (p.ifr > 0 || p.hurtT > 0) return;
+  // PARRY (弹反): a well-timed parry deflects the blow and counters (highest-skill answer).
+  // Checked before i-frames so a parried hit always triggers the counter, even if also invuln.
+  if (canParry(p, attacker, parryable)) { doParry(p, ang, attacker); return; }
+  if (p.ifr > 0 || p.hurtT > 0) {
+    // the hit was negated by i-frames — if it was a last-moment dash, reward a PERFECT DODGE.
+    tryPerfectDodge(p, ang, attacker);
+    return;
+  }
   const prevCtx = ctxP; ctxP = p;
   // DUO AEGIS REACTOR (DEFENSE+LIFESTEAL): thorns hit harder, and taking a hit heals a little
   const aegis = boonLv("duo_aegis") ? boonPow("duo_aegis") : 0;
@@ -4631,7 +4793,7 @@ function updateHazards(dt) {
       for (const p of players) {
         if (p.downed || p.hp <= 0) continue;
         if (Math.abs(p.x - h.x) < h.s + p.r * 0.4 && Math.abs(p.y - h.y) < h.s + p.r * 0.4) {
-          damagePlayer(10 * eDmgMul(), angTo(h.x, h.y, p.x + rand(-1, 1), p.y + rand(-1, 1)), null, p);
+          damagePlayer(10 * eDmgMul(), angTo(h.x, h.y, p.x + rand(-1, 1), p.y + rand(-1, 1)), null, p, false); // env hazard: unparryable
         }
       }
       for (const e of enemies) {
@@ -4648,7 +4810,7 @@ function updateHazards(dt) {
         if (p.downed || p.hp <= 0) continue;
         const sd = segDist(p.x, p.y, h.x1, h.y1, h.x2, h.y2);
         if (sd.d < 7 + p.r) {
-          damagePlayer(9 * eDmgMul(), angTo(sd.cx, sd.cy, p.x, p.y), null, p);
+          damagePlayer(9 * eDmgMul(), angTo(sd.cx, sd.cy, p.x, p.y), null, p, false); // env hazard: unparryable
           pushFromSeg(p, sd, 7 + p.r);
         }
       }
@@ -5060,11 +5222,14 @@ function nearestPlayer(x, y, includeDowned) {
 function targetFor(e) { return nearestPlayer(e.x, e.y, false) || nearestPlayer(e.x, e.y, true) || player; }
 function allDowned() { return players.length > 0 && players.every((p) => p.downed || p.hp <= 0); }
 function anyLowHp() { for (const p of players) if (p && p.hp > 0 && !p.downed && p.hp < p.maxHp * 0.25) return true; return false; }
-/* damage every alive player whose body overlaps a circle (radius R + their r) */
-function damagePlayersInRadius(x, y, R, dmg, attacker) {
+/* damage every alive player whose body overlaps a circle (radius R + their r).
+   AoE radial damage (mortars, caustic pools, shockwaves) is UNPARRYABLE by default — you can't
+   deflect a pool/blast — keeping parry readable. (Dash i-frames / PERFECT DODGE still apply.) */
+function damagePlayersInRadius(x, y, R, dmg, attacker, parryable) {
+  if (parryable === undefined) parryable = false;
   for (const p of players) {
     if (p.downed || p.hp <= 0) continue;
-    if (dist(x, y, p.x, p.y) < R + p.r) damagePlayer(dmg, angTo(x, y, p.x, p.y), attacker, p);
+    if (dist(x, y, p.x, p.y) < R + p.r) damagePlayer(dmg, angTo(x, y, p.x, p.y), attacker, p, parryable);
   }
 }
 
@@ -5087,6 +5252,7 @@ function enterHub() {
   clearArrows();
   arrowRains.length = 0;
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
+  whiteFlash = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
   eliteRoom = false; eliteSpawned = false; miniBossActive = false;
@@ -7023,6 +7189,21 @@ function tryFreeze(p) {
   }
 }
 
+/* PARRY (弹反): open a tight active parry window. A short recovery/cooldown follows so it's a
+   timing skill, not a hold-to-block. The actual deflect+counter happens in doParry (via
+   damagePlayer) when an attack lands during the window. */
+function tryParry(p) {
+  p = p || ctxP || player;
+  ctxP = p;
+  if (!p || p.hp <= 0 || p.downed) return;
+  if ((p.parryCD || 0) > 0 || (p.parryT || 0) > 0) return; // in recovery / already open
+  if (state !== "play" && state !== "hub") return;
+  p.parryT = CONFIG.parryWindow;
+  p.parryFlashT = Math.max(p.parryFlashT || 0, 0.18); // a small "guard up" tell
+  audio.dash(); // light whoosh on the guard raise (distinct clang plays on a successful parry)
+  ffx.ring(p.x, p.y, 30, "#ffe07a", 0.22, 2);
+}
+
 function tryDash(p) {
   p = p || ctxP || player;
   ctxP = p;
@@ -7034,6 +7215,7 @@ function tryDash(p) {
   const m = Math.hypot(dx, dy);
   p.dashDX = dx / m; p.dashDY = dy / m;
   p.dashT = CONFIG.dashDur;
+  p.dashElapsed = 0;               // start the PERFECT DODGE early-window clock
   p.dashedT = 0.45;                 // BLADE RIPOSTE: arm the post-dash empowered slash
   // BLADE DASH BLADE (异相·疾刃): dashing auto-triggers a slash when the dash ends (free, no energy)
   const Wd = weaponDefP(p);
@@ -7073,6 +7255,7 @@ function readPlayerControls(p) {
     // rack aspect-toggle edge excludes the "e" key (E already cycles weapons at the rack)
     if (mouse.right || keys["Shift"] || keys["ctrlRight"] || boltHeld) boltHeldNow = true;
     if (keys["k"] || keys["q"]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
+    if (keys["l"]) p.parryBuf = Math.max(p.parryBuf, 0.05); // L = PARRY (弹反)
     if (keys[" "]) p.dashBuf = Math.max(p.dashBuf, 0.05);
     if (touchFireHeld) { p.slashBuf = Math.max(p.slashBuf, 0.05); c.fireHeld = true; } // touch tap held on the right half
   }
@@ -7092,6 +7275,7 @@ function readPlayerControls(p) {
     // dash / freeze / confirm stay SINGLE-SHOT on hold (edge only), even when held down
     if (gpPressed(pad, 0)) { p.dashBuf = 0.15; c.interact = true; }
     if (gpPressed(pad, 3) || gpPressed(pad, 4)) p.freezeBuf = 0.18;
+    if (gpPressed(pad, 6)) p.parryBuf = 0.15; // L2 = PARRY (弹反)
   }
   // P2 keyboard scheme
   if (p.idx === 1 && p2UsesKeyboard()) {
@@ -7100,6 +7284,7 @@ function readPlayerControls(p) {
     p._meleePrev = !!keys["."];
     if (keys["/"]) { c.bolt = true; boltHeldNow = true; }
     if (keys[","]) p.freezeBuf = Math.max(p.freezeBuf, 0.05);
+    if (keys[";"]) p.parryBuf = Math.max(p.parryBuf, 0.05); // P2 PARRY (弹反)
     if (keys["Enter"]) p.dashBuf = Math.max(p.dashBuf, 0.05);
   }
   // rising-edge detection for the rack aspect toggle (per-player, device-agnostic)
@@ -7168,6 +7353,15 @@ function updatePlayer(p, dt) {
   p.slashBuf = Math.max(0, p.slashBuf - dt);
   p.dashBuf = Math.max(0, p.dashBuf - dt);
   p.freezeBuf = Math.max(0, p.freezeBuf - dt);
+  // PERFECT DODGE / PARRY skill timers
+  p.parryBuf = Math.max(0, (p.parryBuf || 0) - dt);
+  p.parryT = Math.max(0, (p.parryT || 0) - dt);
+  p.parryCD = Math.max(0, (p.parryCD || 0) - dt);
+  p.pdBuffT = Math.max(0, (p.pdBuffT || 0) - dt);
+  p.pdSpamCD = Math.max(0, (p.pdSpamCD || 0) - dt);
+  p.pdFlashT = Math.max(0, (p.pdFlashT || 0) - dt);
+  p.parryFlashT = Math.max(0, (p.parryFlashT || 0) - dt);
+  if (p.dashT > 0) p.dashElapsed = (p.dashElapsed || 0) + dt; // advance the perfect-dodge window clock
   if (p.dashCharges < p.dashMax) {
     p.dashCD -= dt * dashRegenMul();
     if (p.dashCD <= 0) {
@@ -7210,6 +7404,7 @@ function updatePlayer(p, dt) {
   if (p.freezeBuf > 0 && !atRackNow) tryFreeze(p);
   else if (atRackNow) p.freezeBuf = 0;
   if (p.dashBuf > 0) { const had = p.dashT; tryDash(p); if (p.dashT > 0 && !had) p.dashBuf = 0; }
+  if (p.parryBuf > 0 && !atRackNow) { const had = p.parryT; tryParry(p); if (p.parryT > 0 && !had) p.parryBuf = 0; }
   ctxP = p;
 
   // movement — shallow decorative liquid lightly slows on-foot speed (fair: telegraphed by the
@@ -7400,7 +7595,7 @@ function enemyContact(e, dmg, dt) {
   for (const p of players) {
     if (p.downed || p.hp <= 0) continue;
     if (dist(e.x, e.y, p.x, p.y) < e.r + p.r) {
-      damagePlayer(dmg * eDmgMul() * (e.elite ? 1.5 : 1), angTo(e.x, e.y, p.x, p.y), e, p);
+      damagePlayer(dmg * eDmgMul() * (e.elite ? 1.5 : 1), angTo(e.x, e.y, p.x, p.y), e, p, true); // contact/melee is parryable
       e.contactCD = 0.5;
       break;
     }
@@ -7564,7 +7759,7 @@ function updateEnemy(e, dt) {
         shake(8, 0.35);
         audio.enemyDie(true);
         if (dist(e.x, e.y, p.x, p.y) < R + p.r) {
-          damagePlayer(18 * eDmgMul(), angTo(e.x, e.y, p.x, p.y), e);
+          damagePlayer(18 * eDmgMul(), angTo(e.x, e.y, p.x, p.y), e, p, false); // bomber blast: AoE, unparryable
         }
         e.state = "seek"; e.cd = rand(2.0, 2.8);
       }
@@ -8839,6 +9034,7 @@ function step(dt) {
   shakeT = Math.max(0, shakeT - dt);
   if (shakeT <= 0) shakeA = 0;
   redFlash = Math.max(0, redFlash - dt * 1.6);
+  whiteFlash = Math.max(0, whiteFlash - dt * 3.2);
   roomFade = Math.max(0, roomFade - dt * 2.4);
   bossWarnT = Math.max(0, bossWarnT - dt);
 
@@ -9044,8 +9240,15 @@ function step(dt) {
       for (const p of players) {
         if (p.downed || p.hp <= 0) continue;
         if (dist(b.x, b.y, p.x, p.y) < b.r + p.r) {
+          // a PARRY window or active dash i-frame still consumes the bolt & lets damagePlayer
+          // award a deflect / PERFECT DODGE (enemy bolts are parryable projectiles).
+          if ((p.parryT || 0) > 0 || (p.dashT > 0 && (p.dashElapsed || 0) <= CONFIG.pdWindow)) {
+            damagePlayer(b.dmg, Math.atan2(b.vy, b.vx), b.owner || null, p, true);
+            b.t = -1;
+            break;
+          }
           if (p.ifr <= 0 && p.hurtT <= 0) {
-            damagePlayer(b.dmg, Math.atan2(b.vy, b.vx), null, p);
+            damagePlayer(b.dmg, Math.atan2(b.vy, b.vx), b.owner || null, p, true);
             b.t = -1;
             break;
           }
@@ -9131,10 +9334,12 @@ function step(dt) {
       const ex = s.cx + Math.cos(s.a) * s.len, ey = s.cy + Math.sin(s.a) * s.len;
       for (const p of players) {
         if (p.downed || p.hp <= 0) continue;
-        if (p.ifr > 0 || p.hurtT > 0) continue;
+        const inParry = (p.parryT || 0) > 0 || (p.dashT > 0 && (p.dashElapsed || 0) <= CONFIG.pdWindow);
+        if ((p.ifr > 0 || p.hurtT > 0) && !inParry) continue; // already invuln & no skill window — skip
         const sd = segDist(p.x, p.y, s.cx, s.cy, ex, ey);
         if (sd.d < 9 + p.r) {
-          damagePlayer(s.dmg * eDmgMul(), angTo(sd.cx, sd.cy, p.x, p.y), null, p);
+          // laser sweeps are a beam — unparryable (can't deflect a beam), but PERFECT DODGE applies
+          damagePlayer(s.dmg * eDmgMul(), angTo(sd.cx, sd.cy, p.x, p.y), s.owner || null, p, false);
           s.hitCD = 0.45;
           break;
         }
@@ -11895,6 +12100,48 @@ function drawOnePlayer(p) {
   }
   if (p.downed) { drawDowned(p); return; }
   bloomCircle(p.x, p.y, p.dashT > 0 ? 34 : 24, p.dashT > 0 ? p.colDash : p.col, 0.5);
+  // PARRY active-window guard ring (amber, spinning while open) — readable timing tell
+  if ((p.parryT || 0) > 0) {
+    const a = clamp(p.parryT / CONFIG.parryWindow, 0, 1);
+    ctx.save();
+    glow("#ffd24a", 10);
+    ctx.strokeStyle = "rgba(255,210,74," + (0.5 + 0.5 * a) + ")";
+    ctx.lineWidth = 2.5;
+    const sw = timeNow * 9;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 9, sw, sw + TAU * 0.7); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
+  // PERFECT DODGE flash ring (cyan, expanding)
+  if ((p.pdFlashT || 0) > 0) {
+    const a = p.pdFlashT / 0.35;
+    ctx.save();
+    glow("#8ff0ff", 12);
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = "#8ff0ff"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 10 + (1 - a) * 30, 0, TAU); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
+  // PERFECT DODGE buff aura (subtle pulsing cyan rim while the buff window is live)
+  if ((p.pdBuffT || 0) > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.3 + 0.2 * Math.sin(timeNow * 12);
+    ctx.strokeStyle = "#8ff0ff"; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 5, 0, TAU); ctx.stroke();
+    ctx.restore();
+  }
+  // PARRY success flash (bright amber burst ring)
+  if ((p.parryFlashT || 0) > 0) {
+    const a = p.parryFlashT / 0.38;
+    ctx.save();
+    glow("#ffe07a", 12);
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = "#ffe07a"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 8 + (1 - a) * 26, 0, TAU); ctx.stroke();
+    noglow();
+    ctx.restore();
+  }
   drawAndroid(p);
   if (numPlayers > 1) drawPlayerTag(p);
 
@@ -12571,6 +12818,37 @@ function drawPlayerBars(p, u, by, side) {
       ctx.fillText("K", fx, fy + 15 * u);
     }
   }
+  // PARRY (弹反) icon: amber shield glyph. Lights up when ready; radial sweep while in recovery;
+  // a bright filled flash during the active parry window.
+  {
+    const qx = bx + 7 + p.dashMax * 18 * u + 16 * u + 26 * u, qy = py;
+    const open = (p.parryT || 0) > 0;
+    const ready = (p.parryCD || 0) <= 0 && !open;
+    const col = "#ffd24a";
+    ctx.fillStyle = open ? "rgba(255,210,74,0.35)" : "rgba(8,10,30,0.85)";
+    rrect(qx - 9 * u, qy - 9 * u, 18 * u, 18 * u, 4); ctx.fill();
+    if (ready || open) glow(col, 8);
+    ctx.strokeStyle = (ready || open) ? col : "rgba(255,210,74,0.3)";
+    ctx.lineWidth = 1.5;
+    rrect(qx - 9 * u, qy - 9 * u, 18 * u, 18 * u, 4); ctx.stroke();
+    noglow();
+    ctx.fillStyle = (ready || open) ? col : "rgba(255,210,74,0.4)";
+    ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("⚔", qx, qy + 1);
+    if ((p.parryCD || 0) > 0) {
+      const frac = 1 - clamp(p.parryCD / CONFIG.parryRecover, 0, 1);
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(qx, qy, 11 * u, -Math.PI / 2, -Math.PI / 2 + TAU * frac);
+      ctx.stroke();
+    } else if (!touchUI && p.idx === 0 && numPlayers === 1) {
+      ctx.font = 8 * u + "px 'Courier New', monospace";
+      ctx.fillStyle = "rgba(255,210,74,0.6)";
+      ctx.fillText("L", qx, qy + 15 * u);
+    }
+  }
   // weapon form readout (P1 to the right of bars, P2 to the left of its mirrored bars)
   {
     const W = weaponDefP(p);
@@ -12997,7 +13275,7 @@ function drawTouchControls() {
     ctx.beginPath(); ctx.arc(joy.bx + joy.dx * 52 * u, joy.by + joy.dy * 52 * u, 20 * u, 0, TAU); ctx.fill();
   }
   // buttons
-  const db = dashBtnPos(), bb = boltBtnPos(), fb = freezeBtnPos();
+  const db = dashBtnPos(), bb = boltBtnPos(), fb = freezeBtnPos(), qb = parryBtnPos();
   ctx.globalAlpha = 0.4;
   ctx.fillStyle = "rgba(94,230,255,0.16)";
   ctx.strokeStyle = "#5ee6ff"; ctx.lineWidth = 2;
@@ -13013,6 +13291,16 @@ function drawTouchControls() {
     ctx.arc(fb.x, fb.y, fb.r - 5, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - player.freezeCD / player.freezeCDMax));
     ctx.stroke();
   }
+  // PARRY (弹反) touch button — amber; radial sweep during recovery
+  const pReady = player && (player.parryCD || 0) <= 0;
+  ctx.fillStyle = "rgba(255,210,74,0.16)";
+  ctx.strokeStyle = "#ffd24a";
+  ctx.beginPath(); ctx.arc(qb.x, qb.y, qb.r, 0, TAU); ctx.fill(); ctx.stroke();
+  if (player && (player.parryCD || 0) > 0) {
+    ctx.beginPath();
+    ctx.arc(qb.x, qb.y, qb.r - 5, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - player.parryCD / CONFIG.parryRecover));
+    ctx.stroke();
+  }
   ctx.globalAlpha = 0.85;
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
@@ -13023,6 +13311,8 @@ function drawTouchControls() {
   ctx.fillStyle = "#aaeeff";
   ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
   ctx.fillText("FREEZE", fb.x, fb.y);
+  ctx.fillStyle = pReady ? "#ffd24a" : "rgba(255,210,74,0.5)";
+  ctx.fillText("PARRY", qb.x, qb.y);
   ctx.restore();
 }
 
@@ -13076,6 +13366,8 @@ function drawTitle() {
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
     "持法杖施法·持枪械开火·持弓射箭(长弓蓄力) — STAFF casts · GUN fires · BOW looses arrows (hold to draw the LONGBOW)",
     "DASH 冲刺（无敌帧）· BOLT 光弹 · FREEZE 冰冻新星 — dash · bolt · freeze nova",
+    "完美闪避：擦帧冲刺触发慢动作+冲刺重置 — PERFECT DODGE: last-moment dash → slow-mo + dash reset",
+    "弹反：及时格挡反击并大幅破防(强敌克星) — PARRY (PARRY button / L1): time it to counter and break",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
     "武器架 BOLT 键切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores)",
     "所有武器可叠加元素附魔：火/冰/电/毒/吸血 — ALL weapons stack elemental enchants: fire/ice/shock/poison/lifesteal",
@@ -13091,7 +13383,9 @@ function drawTitle() {
     "深渊分为多个区域：每区中点 MINI-BOSS 头目，区终 REGION BOSS，奖励更丰厚 — the abyss is split into REGIONS: a MINI-BOSS at each region's midpoint, a REGION BOSS at its end (richer rewards)",
     "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
     "J 近战／法杖施法／枪械开火／弓箭(长弓蓄力) · 右Ctrl 光弹 — J slash / cast / fire gun / loose arrow (hold = draw LONGBOW) · R-Ctrl bolt",
-    "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
+    "K 冰冻新星 · 空格冲刺（无敌帧）· L 弹反 — K freeze nova · Space dash (i-frames) · L parry",
+    "完美闪避：擦帧冲刺触发慢动作+冲刺重置 — PERFECT DODGE: last-moment dash → slow-mo + dash reset",
+    "弹反(L)：及时格挡反击并大幅破防 — PARRY (L): time it to counter and break (boss-killer)",
     "纯键盘可玩：未动鼠标时自动瞄准 — keyboard-only: auto-aim when mouse is idle",
     "枢纽武器架：18 种武器形态（含 3 法杖·3 枪械·3 弓）与战绩终端 — hub ARMORY: 18 weapon forms (3 staves + 3 guns + 3 bows) · STATS terminal",
     "武器架按 BOLT 切换异相(ASPECT)：18 种异相改变武器玩法 — at the rack, BOLT toggles a weapon's ASPECT (18 alt forms; unlock with cores)",
@@ -13114,10 +13408,10 @@ function drawTitle() {
   }
 }
 
-const GAMEPAD_HELP = "手柄：左摇杆移动 · 右摇杆瞄准 · □近战 · R2发射 · ×冲刺 · △冰冻 — gamepad: sticks move/aim, □ slash, R2 bolt, × dash, △ freeze";
+const GAMEPAD_HELP = "手柄：左摇杆移动 · 右摇杆瞄准 · □近战 · R2发射 · ×冲刺 · △冰冻 · L2弹反 — gamepad: sticks move/aim, □ slash, R2 bolt, × dash, △ freeze, L2 parry";
 const COOP_HELP = [
   "双人：P1 键鼠/手柄1 · P2 手柄2 或方向键 — 2P: P1 keyboard+mouse/pad1 · P2 pad2 or arrows",
-  "P2 键盘：方向键移动 · . 近战 · / 发射 · Enter 冲刺 · , 冰冻 — P2 keys: arrows · . slash · / bolt · Enter dash · , freeze",
+  "P2 键盘：方向键移动 · . 近战 · / 发射 · Enter 冲刺 · , 冰冻 · ; 弹反 — P2 keys: arrows · . slash · / bolt · Enter dash · , freeze · ; parry",
   "倒下后队友靠近 3 秒可复活；双双倒下则游戏结束 — revive a downed ally by standing close ~3s; both down = game over",
 ];
 
@@ -14030,6 +14324,11 @@ function render(frameDt) {
   // red hurt flash
   if (redFlash > 0) {
     ctx.fillStyle = "rgba(255,30,60," + redFlash * 0.4 + ")";
+    ctx.fillRect(0, 0, cw, ch);
+  }
+  // PERFECT DODGE / PARRY bright flash (additive bloom-ish white-cyan beat)
+  if (whiteFlash > 0) {
+    ctx.fillStyle = "rgba(200,240,255," + whiteFlash * 0.32 + ")";
     ctx.fillRect(0, 0, cw, ch);
   }
   // low-HP heartbeat vignette: red edges pulsing with the heartbeat layer
