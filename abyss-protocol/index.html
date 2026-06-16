@@ -2884,12 +2884,139 @@ const FINAL_DEPTH = 24;   // a natural boss depth (24 % bossEvery === 0)
 const FINAL_BOSS = { kind: "abyss", name: "ABYSS CORE 深渊之核", col: "#ff4fd0", r: 60, hp: 3600, speed: 60, final: true }; // hp 2600->3600 (3-phase climax)
 let runCleared = false;   // set true once the final boss has been beaten this run
 
+/* ===================== §M0 REGIONS / BIOME RUN-STRUCTURE =====================
+   The run is divided into a sequence of named, themed REGIONS layered ON TOP of the raw
+   depth counter (depth still increments every room and feeds all scaling). Each region:
+     • spans a contiguous band of depths (lo..hi), ~6 rooms each, tuned to FINAL_DEPTH=24,
+     • has a bilingual NAME (中文/English) and a BIOME theme (biome index → tint + terrain +
+       obstacle tables, all already keyed off arenaBiomeIdx),
+     • has its own ENEMY-POOL WEIGHTING (which of the ~12 enemy types appear & how often), so
+       early regions feel different from deep ones and tougher foes are introduced as you dive,
+     • ends with a REGION BOSS (one of the 7 rotating bosses, assigned so each region ends with
+       a distinct fight), and has a MINI-BOSS / elite-gauntlet at its MIDPOINT (a step below the
+       region boss). The FINAL region ends with the ABYSS CORE → victory/通关.
+   The post-clear endless loop re-runs this region structure, harder, by mapping looped depth
+   back through the regions (see regionForDepth). Migrates old saves gracefully (pure layer). */
+const REGIONS = [
+  { id: 0, lo: 1,  hi: 6,  biome: 0, boss: "warden",
+    zh: "静渊前哨", en: "QUIET DEPTHS", tint: "#5ee6ff",
+    pool: { chaser: 4, swarmer: 3, shooter: 2, bomber: 1, blinker: 1 } },
+  { id: 1, lo: 7,  hi: 12, biome: 1, boss: "summoner",
+    zh: "虚空回廊", en: "VOID GALLERIES", tint: "#bb66ff",
+    pool: { chaser: 2, swarmer: 2, shooter: 3, phantom: 2, blinker: 2, bomber: 2, lobber: 1 } },
+  { id: 2, lo: 13, hi: 18, biome: 2, boss: "artillery",
+    zh: "熔火工厂", en: "MOLTEN FORGE", tint: "#ff8833",
+    pool: { tank: 3, bomber: 2, lobber: 3, shield: 2, bulwark: 2, totem: 1, chaser: 1 } },
+  { id: 3, lo: 19, hi: 23, biome: 3, boss: "juggernaut",
+    zh: "寂灭电厂", en: "DEAD REACTOR", tint: "#4ad6a0",
+    pool: { bulwark: 3, shield: 2, tank: 2, medic: 2, totem: 2, phantom: 2, lobber: 1, shooter: 1 } },
+  { id: 4, lo: 24, hi: 24, biome: 4, boss: "abyss", final: true,
+    zh: "深渊之核", en: "ABYSS CORE", tint: "#ff4fd0",
+    // final region is a single boss room; pool used only if the endless loop ever lands here.
+    pool: { phantom: 3, bulwark: 2, shield: 2, tank: 1, lobber: 1, shooter: 1, blinker: 1 } },
+];
+/* the alternate region bosses used on the endless loop, so a re-run of a region ends with a
+   FRESH boss each pass (rotates through the 7 minus the region's primary). */
+const REGION_LOOP_BOSSES = ["overseer", "hexweaver", "splitter", "warden", "summoner", "artillery", "juggernaut"];
+const REGION_SPAN = 6;        // depths per region (the looped structure repeats every this many)
+const PRECLEAR_DEPTHS = FINAL_DEPTH; // depths 1..FINAL_DEPTH are the authored (pre-clear) run
+
+/* map any depth to a region index. Pre-clear depths use the authored bands; after the final
+   depth (endless loop) we wrap through the four COMBAT regions (0..3) so the loop re-runs the
+   region structure, harder, rather than uniform depth. */
+function regionIdxForDepth(d) {
+  if (d <= 0) return 0;
+  if (d <= FINAL_DEPTH) {
+    for (let i = 0; i < REGIONS.length; i++) if (d >= REGIONS[i].lo && d <= REGIONS[i].hi) return i;
+    return REGIONS.length - 1;
+  }
+  // endless loop: cycle the 4 combat regions, ONE region per synthesized 6-room band, so each
+  // band is a full region (midpoint mini-boss + end region boss) and the four cycle in order.
+  const band = Math.floor((d - FINAL_DEPTH - 1) / REGION_SPAN); // 0-based band past the clear
+  return band % 4;                              // band 0→R0, 1→R1, 2→R2, 3→R3, 4→R0, ...
+}
+function regionForDepth(d) { return REGIONS[regionIdxForDepth(d)]; }
+/* which loop number are we on? 0 during the authored run, 1+ on each endless pass (every 4 bands). */
+function loopForDepth(d) { return d <= FINAL_DEPTH ? 0 : Math.floor((d - FINAL_DEPTH - 1) / (4 * REGION_SPAN)) + 1; }
+/* a region's local span [lo,hi] for the CURRENT pass (authored band, or a synthesized band on
+   the endless loop). Returns {lo,hi,mid,bossD} in absolute depth. */
+function regionBandForDepth(d) {
+  if (d <= FINAL_DEPTH) {
+    const r = regionForDepth(d);
+    const mid = Math.floor((r.lo + r.hi) / 2);
+    return { lo: r.lo, hi: r.hi, mid, bossD: r.hi, final: !!r.final };
+  }
+  // endless: synthesize a 6-room band aligned to the loop grid.
+  const base = FINAL_DEPTH + 1 + Math.floor((d - FINAL_DEPTH - 1) / REGION_SPAN) * REGION_SPAN;
+  const lo = base, hi = base + REGION_SPAN - 1;
+  return { lo, hi, mid: lo + Math.floor((REGION_SPAN - 1) / 2), bossD: hi, final: false };
+}
+/* is this depth a REGION-BOSS room? (the authored boss depths, or every REGION_SPAN-th room
+   in the endless loop.) Replaces the old fixed "every bossEvery-th" cadence as the source of
+   truth while staying aligned to bossEvery (6,12,18 → 24 final). */
+function isRegionBossDepth(d) {
+  if (d <= 0) return false;
+  if (d <= FINAL_DEPTH) { const r = regionForDepth(d); return d === r.hi; }
+  return regionBandForDepth(d).bossD === d;
+}
+/* is this depth a MINI-BOSS room? (each region's midpoint.) */
+function isMiniBossDepth(d) {
+  if (d <= 0) return false;
+  return regionBandForDepth(d).mid === d && !isRegionBossDepth(d);
+}
+/* the boss kind that ENDS the region containing depth d. On the endless loop, rotate through
+   the alternate roster so each pass ends with a fresh fight. */
+function regionBossKind(d) {
+  if (d <= FINAL_DEPTH) return regionForDepth(d).boss;
+  const ri = regionIdxForDepth(d), lp = loopForDepth(d);
+  return REGION_LOOP_BOSSES[(ri + lp) % REGION_LOOP_BOSSES.length];
+}
+/* current region progress: which room within its band (1-based) and the band length. */
+function regionProgress(d) {
+  const b = regionBandForDepth(d);
+  return { idx: clamp(d - b.lo + 1, 1, b.hi - b.lo + 1), len: b.hi - b.lo + 1, band: b };
+}
+let lastRegionIdx = -1;       // track region transitions to fire the intro banner once
+let regionBanner = null;      // {zh,en,t,dur,col} lightweight region-intro banner
+let miniBossActive = false;   // a mini-boss encounter is live this room
+
+/* fire a brief bilingual region-intro banner when the run crosses into a new region. On the
+   endless loop the same four regions repeat, so we key on region index AND loop number so each
+   re-entry still announces itself. Lighter than the boss entrance (no AI gate, no letterbox). */
+function maybeRegionBanner() {
+  const ri = regionIdxForDepth(depth);
+  const key = ri + loopForDepth(depth) * 100;
+  if (key === lastRegionIdx) return;
+  lastRegionIdx = key;
+  const r = regionForDepth(depth);
+  const lp = loopForDepth(depth);
+  regionBanner = {
+    zh: r.zh + (lp > 0 ? " · 第" + (lp + 1) + "轮" : ""),
+    en: r.en + (lp > 0 ? "  ·  LOOP " + (lp + 1) : ""),
+    col: r.tint, t: 0, dur: 3.0,
+  };
+  toast("REGION — " + r.zh + " · " + r.en, r.tint);
+  if (typeof audio !== "undefined" && audio.uiSnd) audio.uiSnd();
+}
+function updateRegionBanner(dt) {
+  if (!regionBanner) return;
+  regionBanner.t += dt;
+  if (regionBanner.t >= regionBanner.dur) regionBanner = null;
+}
+
 function spawnBoss(forceKind) {
   const tier = Math.floor(depth / CONFIG.bossEvery);
   const hard = depth >= 18;
   let def = forceKind ? BOSS_KINDS.find((b) => b.kind === forceKind) : null;
   // FINAL BOSS milestone: at FINAL_DEPTH (and only the first time, pre-clear) spawn the ABYSS CORE.
   if (!def && !forceKind && depth === FINAL_DEPTH && !runCleared) def = FINAL_BOSS;
+  // REGION BOSS: each region ends with its assigned boss (distinct per region; rotates on the
+  // endless loop). Falls back to the old anti-repeat random pick if no assignment resolves.
+  if (!def && !forceKind) {
+    const rk = regionBossKind(depth);
+    if (rk === "abyss") def = FINAL_BOSS; // endless final-region pass keeps the core climax
+    else def = BOSS_KINDS.find((b) => b.kind === rk) || null;
+  }
   if (!def) {
     const pool = BOSS_KINDS.filter((b) => b.kind !== lastBossKind);
     def = pick(pool.length ? pool : BOSS_KINDS);
@@ -2935,6 +3062,69 @@ function spawnBoss(forceKind) {
   startBossEntrance(boss, def, hard);
 }
 
+/* ---- MINI-BOSS / ELITE-GAUNTLET ENCOUNTER ----
+   Inserted at each region's MIDPOINT: a tougher-than-normal foe — a step below the region boss.
+   It reuses the boss entity scaffold so it gets the on-screen HP bar, the SHIELD/BREAK layers,
+   and a LIGHT (2-phase) arc, plus its own brief entrance — but with far less HP than a region
+   boss and built from a regular enemy kind (chosen from the region's pool). Drops richer rewards
+   (handled in killEnemy via e.miniboss + the room-clear payout). Performance: same pooling as
+   spawnBoss; no per-frame allocation. */
+const MINIBOSS_NAMES = {
+  chaser:   "RAVAGER 撕裂者",   shooter:  "WARDEN-LT 副监守",  tank:     "BREAKER 破障者",
+  bomber:   "DETONATOR 引爆者", shield:   "AEGIS 壁垒者",       bulwark:  "RAMPART 城垒者",
+  phantom:  "STALKER 潜袭者",   blinker:  "FLICKER 闪现者",     lobber:   "SPITTER 喷酸者",
+  totem:    "BEACON 信标者",    medic:    "MENDER 修复者",      swarmer:  "BROODLORD 巢主",
+};
+function spawnMiniBoss() {
+  const tier = Math.max(1, Math.floor(depth / CONFIG.bossEvery) + 1);
+  const r = regionForDepth(depth);
+  // choose the heaviest sensible kind from the region's pool (skip swarmer/medic/totem as a solo
+  // mini-boss core; they make weak duels). Prefer chunky kinds so the duel reads as an elite.
+  const PREF = ["bulwark", "tank", "shield", "lobber", "phantom", "bomber", "blinker", "shooter", "chaser"];
+  let kind = null;
+  for (const k of PREF) if (r.pool[k]) { kind = k; break; }
+  if (!kind) kind = "chaser";
+  const ed = ENEMY_DEFS[kind] || ENEMY_DEFS.chaser;
+  const name = MINIBOSS_NAMES[kind] || (kind.toUpperCase() + " 精英");
+  // HP: elite-class but clearly under a region boss — a chunky duel, scaled by depth & co-op.
+  const baseHp = ed.hp * 16; // ~elite x several; small HP bar (well below ~1300+ region bosses)
+  const hp = Math.round(baseHp * (1 + (depth - 1) * 0.10) * coopHpMul());
+  let bpx = player.x, bpy = player.y, bpn = 1;
+  for (const p of players) if (p && p !== player && (p.hp > 0 || p.downed)) { bpx += p.x; bpy += p.y; bpn++; }
+  bpx /= bpn; bpy /= bpn;
+  const mx = clamp(bpx, 200, CONFIG.arenaW - 200);
+  const my = clamp(bpy - 380, 130, CONFIG.arenaH - 200);
+  const m = {
+    type: "boss", kind, name, final: false, miniboss: true,
+    x: mx, y: my, vx: 0, vy: 0, r: Math.round(ed.r * 1.7),
+    hp, maxHp: hp,
+    col: ed.col, speed: (ed.speed || 90) * 1.05 + tier * 4,
+    flash: 0, kbx: 0, kby: 0,
+    state: "move", // routed through the generic boss AI (updateBoss) — uses boss states
+    t: rand(0, 1), cd: rand(0.5, 1.2), atk: 0,
+    dirX: 0, dirY: 0, phase: rand(0, TAU), sub: 0, rot: 0,
+    contactCD: 0, spawnT: 0.4, tier, hard: depth >= 18, gen: 0, frozenT: 0,
+    burnT: 0, burnStacks: 0, burnDps: 0, burnTick: 0, shockT: 0, sdCD: 0, enraged: false,
+    poisonT: 0, poisonStacks: 0, poisonDps: 0, poisonTick: 0,
+    strafe: Math.random() < 0.5 ? 1 : -1, tx: 0, ty: 0,
+    plates: 0, sweepA: 0,
+    bphase: 1, phaseInvT: 0, bossRage: false, phaseSpeedBumped: false,
+    healTgt: null, beeped: false, shieldA: -Math.PI / 2,
+  };
+  if (kind === "shield" || kind === "bulwark") m.shieldA = -Math.PI / 2;
+  initBossCombatLayers(m); // mini-bosses share the SHIELD + BREAK layers (lighter pools below)
+  // lighter break meter than a full boss so they can be staggered more readily (still elite).
+  m.breakMax = Math.max(120, m.maxHp * 0.13); m.breakBase = m.breakMax;
+  // give the mini-boss a real (but modest) phase shield to chew through, as an extra-attack beat.
+  m.shieldMax = Math.round(m.maxHp * 0.14); m.shieldHp = 0; m.shield360 = true; m.shieldRegen = 0;
+  boss = m;                 // route it through the boss HUD/bar (HP bar + entrance)
+  bossName = name; bossBarMax = hp;
+  m.spawnT = BOSS_ENTRANCE_DUR * 0.65; // matches the shorter mini-boss entrance
+  miniBossActive = true;
+  enemies.push(m);
+  startBossEntrance(m, { name, kind, col: ed.col, final: false }, false, true);
+}
+
 /* ---- BOSS ENTRANCE CUTSCENE ----
    A short, dramatic, SKIPPABLE intro before each boss fight: name banner (中文/English),
    a camera focus/zoom toward the boss, a slam + screen shake, a distinct roar/sting, and a
@@ -2942,16 +3132,17 @@ function spawnBoss(forceKind) {
    then the fight begins. Works for every boss incl. the FINAL boss. Pause/co-op safe. */
 const BOSS_ENTRANCE_DUR = 2.4;
 let bossEntrance = null;
-function startBossEntrance(b, def, hard) {
+function startBossEntrance(b, def, hard, mini) {
   bossEntrance = {
-    t: 0, dur: BOSS_ENTRANCE_DUR,
+    // mini-boss entrances are shorter & lighter than a full boss entrance
+    t: 0, dur: mini ? BOSS_ENTRANCE_DUR * 0.65 : BOSS_ENTRANCE_DUR,
     name: def.name, kind: def.kind, col: def.col,
-    x: b.x, y: b.y, r: b.r, hard: !!hard, final: !!def.final,
+    x: b.x, y: b.y, r: b.r, hard: !!hard, final: !!def.final, mini: !!mini,
     roared: false, slammed: false, skipped: false,
   };
   bossWarnT = 0; // the entrance overlay replaces the legacy warning flash
   audio.bossSting(def.kind, def.final);
-  shake(8, 0.4);
+  shake(mini ? 6 : 8, mini ? 0.3 : 0.4);
 }
 function skipBossEntrance() {
   if (bossEntrance && !bossEntrance.skipped) { bossEntrance.skipped = true; }
@@ -3623,7 +3814,10 @@ function killEnemy(e) {
     }
   }
   // core drops (splitter fragments drop a share each)
-  let n = e.type === "boss" ? (e.gen ? randi(3, 5) : randi(14, 18)) : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
+  // MINI-BOSS drops are richer than trash but a step below a full region boss.
+  let n = e.type === "boss"
+    ? (e.miniboss ? randi(9, 13) : (e.gen ? randi(3, 5) : randi(14, 18)))
+    : e.type === "tank" ? randi(2, 4) : (Math.random() < 0.4 ? 1 : 0);
   if (e.elite) n += randi(3, 5);
   while (n-- > 0) {
     pickups.push({ kind: "core", x: e.x, y: e.y, vx: rand(-120, 120), vy: rand(-120, 120), t: 12 });
@@ -3802,7 +3996,9 @@ function addZone(x, y) {
 }
 
 /* ---------------- §M ROOMS / GEN ---------------- */
-function isBossDepth(d) { return d > 0 && d % CONFIG.bossEvery === 0; }
+// A boss room is now a REGION-END room (region boss / final boss). Stays aligned to the old
+// bossEvery cadence for the authored run (region ends fall on 6,12,18,24) but is region-driven.
+function isBossDepth(d) { return isRegionBossDepth(d); }
 
 /* ----- ARENA LAYOUTS -----
    The combat room obstacle layout. Several themed configurations pick from a weighted
@@ -4194,31 +4390,68 @@ function terrainSlowFactor(x, y, dashing) {
   return 1;
 }
 
+/* REGION-WEIGHTED enemy pick: returns a type drawn from the current region's pool (a
+   {type: weight} map) so each region's combat composition is distinct. swarmer/chaser stay
+   available as a baseline so a region can never roll an empty pool. Allocation-free per call
+   beyond the small local weight list (built once per wave in buildWaves). */
+function regionPool(d) {
+  const r = regionForDepth(d);
+  return r && r.pool ? r.pool : { chaser: 3, swarmer: 2 };
+}
+/* weighted pick from a {type:weight} map, honoring depth-gating so a type never appears before
+   its intro depth (keeps early regions from leaking late kinds even if pooled). */
+const ENEMY_INTRO = { chaser: 1, swarmer: 1, shooter: 2, bomber: 3, blinker: 3, tank: 4, lobber: 4, shield: 5, bulwark: 5, medic: 6, totem: 6, phantom: 7 };
+function regionPickType(pool, d) {
+  let total = 0;
+  for (const k in pool) { if ((ENEMY_INTRO[k] || 1) <= d) total += pool[k]; }
+  if (total <= 0) return d >= 2 ? "shooter" : "chaser";
+  let roll = Math.random() * total;
+  for (const k in pool) {
+    if ((ENEMY_INTRO[k] || 1) > d) continue;
+    roll -= pool[k];
+    if (roll <= 0) return k;
+  }
+  return "chaser";
+}
+/* build ONE wave list from the region pool within a budget (factor scales the budget; used for
+   the mini-boss room's lighter supporting pack). */
+function regionWave(d, factor) {
+  const coopBudget = 1 + 0.45 * (playerCountSafe() - 1);
+  let budget = (2.6 + d * 1.25) * coopBudget * (factor || 1);
+  const pool = regionPool(d);
+  const wave = [];
+  let guard = 0;
+  while (budget > 0.5 && guard++ < 50) {
+    const t = regionPickType(pool, d);
+    const def = ENEMY_DEFS[t] || ENEMY_DEFS.chaser;
+    if (def.cost > budget + 0.3) { if (guard > 20) break; continue; }
+    if (t === "medic" && wave.indexOf("medic") !== -1) continue;
+    if (t === "totem" && wave.indexOf("totem") !== -1) continue;
+    if (t === "swarmer") {
+      const pack = randi(3, 5);
+      for (let i = 0; i < pack; i++) wave.push("swarmer");
+      budget -= def.cost * pack;
+    } else { wave.push(t); budget -= def.cost; }
+  }
+  if (!wave.length) wave.push("chaser");
+  return wave;
+}
 function buildWaves(d) {
   waves = [];
   // MORE WAVES (longer gauntlet): wave count now scales with depth — 1 early, climbing to
   // a cap of 5 deep — so each combat room is a real run of fights. Co-op budget unchanged.
+  // Enemy composition now comes from the current REGION's weighted pool (regionPickType), so
+  // each region feels distinct and tougher kinds enter as you descend.
   const nWaves = d <= 1 ? 1 : clamp(2 + Math.floor((d - 1) / 4), 2, 5);
-  // co-op spawns more bodies per wave so two players have enough to fight
   const coopBudget = 1 + 0.45 * (playerCountSafe() - 1);
+  const pool = regionPool(d);
   for (let w = 0; w < nWaves; w++) {
     let budget = (2.6 + d * 1.25 + w * 1.1) * coopBudget;
     const wave = [];
-    const types = ["chaser", "swarmer"];
-    if (d >= 2) types.push("shooter");
-    if (d >= 3) types.push("bomber");
-    if (d >= 3) types.push("blinker");   // NEW: teleporting blink-striker enters early-mid
-    if (d >= 4) types.push("tank");
-    if (d >= 4) types.push("lobber");    // NEW: caustic-pool bombardier
-    if (d >= 5) types.push("shield");
-    if (d >= 5) types.push("bulwark");   // NEW: shielded charger
-    if (d >= 6) types.push("medic");
-    if (d >= 6) types.push("totem");     // NEW: empower totem (rooted buffer)
-    if (d >= 7) types.push("phantom");
     let guard = 0;
     while (budget > 0.5 && guard++ < 40) {
-      const t = pick(types);
-      const def = ENEMY_DEFS[t];
+      const t = regionPickType(pool, d);
+      const def = ENEMY_DEFS[t] || ENEMY_DEFS.chaser;
       if (def.cost > budget + 0.3) continue;
       if (t === "medic" && wave.indexOf("medic") !== -1) continue; // one medic per wave
       if (t === "totem" && wave.indexOf("totem") !== -1) continue; // at most one totem per wave
@@ -4503,10 +4736,15 @@ function genRoom() {
   roomClear = false; waveIdx = 0; shopRoom = false;
   challengeT = 0; challengeFailed = false; fountainUsed = false;
   for (const p of players) p.fountainUsed = false;
-  eliteRoom = false; eliteSpawned = false;
-  roomType = pendingRoom || (isBossDepth(depth) ? "boss" : "normal");
+  eliteRoom = false; eliteSpawned = false; miniBossActive = false;
+  // ROOM TYPE: combat-free specials (via pendingRoom) win; else region structure decides —
+  // region-end → boss, region-midpoint → miniboss, otherwise a normal combat room.
+  roomType = pendingRoom || (isRegionBossDepth(depth) ? "boss" : (isMiniBossDepth(depth) ? "miniboss" : "normal"));
   pendingRoom = null;
   runTrack[depth] = roomType;
+  // REGION transition: entering a new region fires a brief bilingual intro banner (lighter than
+  // the boss entrance). Tracked by region index so it shows once per region entry.
+  maybeRegionBanner();
   placePlayers(CONFIG.arenaW / 2, CONFIG.arenaH - 90);
   snapCamera(); // jump the follow camera to the new spawn so the room doesn't pan in
   roomFade = 1;
@@ -4549,6 +4787,18 @@ function genRoom() {
     waves = [["boss"]];
     spawnBoss();
     waveIdx = 1;
+  } else if (roomType === "miniboss") {
+    // MINI-BOSS / elite-gauntlet at the region midpoint: a tougher duel with a short pack of
+    // adds, a step below the region boss. Reuses the boss scaffold for the HP bar + entrance.
+    genArena(depth);
+    genTerrain(depth, 0.7);
+    spawnHazards(false);
+    // a light supporting wave from the region pool (so it reads as an elite gauntlet, not a vacuum)
+    waves = [regionWave(depth, 0.55)];
+    spawnMiniBoss();
+    queueWave(waves[0]);
+    waveIdx = 1;
+    toast("MINI-BOSS — 精英头目 — a region champion blocks the way", "#ffcc44");
   } else {
     genArena(depth);
     genTerrain(depth, 1);
@@ -4587,13 +4837,14 @@ const DOOR_REWARDS = {
 };
 const SPECIAL_ROOMS = ["shop", "treasure", "fountain"]; // combat-free rooms
 
-function openDoors(quiet) {
+function openDoors(quiet, richBoon) {
   const A = CONFIG;
   const n = randi(2, 3);
   const nextD = depth + 1;
   const rewards = [];
-  // slot 0 is ALWAYS a combat door — a fight is always available
-  rewards.push(Math.random() < 0.6 ? "boon" : pick(["hp", "energy", "cores"]));
+  // slot 0 is ALWAYS a combat door — a fight is always available. MILESTONE rooms (region
+  // boss / mini-boss) GUARANTEE a boon door to reinforce the milestone feel.
+  rewards.push(richBoon ? "boon" : (Math.random() < 0.6 ? "boon" : pick(["hp", "energy", "cores"])));
   const others = ["boon", "hp", "energy", "cores"].filter((r) => r !== rewards[0]);
   while (rewards.length < n) {
     const r = pick(others);
@@ -4606,7 +4857,13 @@ function openDoors(quiet) {
   }
   // at most ONE special (combat-free) room per door set, never twice in a row
   const inSpecial = SPECIAL_ROOMS.indexOf(roomType) !== -1;
-  if (!inSpecial && !isBossDepth(nextD) && nextD - lastSpecialDepth >= 2) {
+  // PACING: a "prep" rest stop tends to appear in the room JUST BEFORE a region boss — so the
+  // player can heal/shop before the milestone fight. (nextD is normal, but the one after it is
+  // the region boss.) Offers a fountain (heal) or shop, biased to whichever is overdue.
+  const preBoss = !isBossDepth(nextD) && isRegionBossDepth(nextD + 1);
+  if (!inSpecial && preBoss && nextD - lastSpecialDepth >= 1) {
+    rewards[rewards.length - 1] = (nextD - lastShopDepth >= 3 && Math.random() < 0.5) ? "shop" : "fountain";
+  } else if (!inSpecial && !isBossDepth(nextD) && nextD - lastSpecialDepth >= 2) {
     if (nextD - lastShopDepth >= 4 && (nextD - lastShopDepth >= 5 || Math.random() < 0.55)) {
       // SHOP door every ~4-5 depths
       rewards[rewards.length - 1] = "shop";
@@ -4832,7 +5089,8 @@ function enterHub() {
   slowmoT = 0; styleN = 0; styleT = 0; styleRank = -1; styleBestRoom = -1; stylePop = 0;
   coreFloatN = 0; coreFloatT = 0;
   roomType = "normal"; challengeT = 0; challengeFailed = false; fountainUsed = false;
-  eliteRoom = false; eliteSpawned = false;
+  eliteRoom = false; eliteSpawned = false; miniBossActive = false;
+  lastRegionIdx = -1; regionBanner = null; // region structure resets in the hub
   runHeat = { ehp: 0, edmg: 0, elite: 0, enrage: 0, shopUp: 0, lowhp: 0 };
   runHeatPts = 0; coreFrac = 0;
   roomFade = 1;
@@ -4846,6 +5104,7 @@ function startRun() {
   lastShopDepth = 0; lastFountainDepth = 0; lastSpecialDepth = 0;
   pendingRoom = null;
   runTrack = []; slowmoT = 0;
+  lastRegionIdx = -1; regionBanner = null; miniBossActive = false; // fresh region structure
   // fresh run-clear / endless state + run timer
   runCleared = false; continuedEndless = false; finalKillT = 0; runTime = 0; victoryStats = null;
   stats.runs++;
@@ -7609,7 +7868,13 @@ const BOSS_PHASES = {
   hexweaver:  { t2: 0.66, t3: 0.33 },
   abyss:      { t2: 0.66, t3: 0.33 }, // final boss: even thirds, big escalation each
 };
-function bossPhaseThresholds(e) { return BOSS_PHASES[e.kind] || { t2: 0.66, t3: 0.33 }; }
+// Mini-bosses run a LIGHTER 2-phase arc: one transition at 50% HP (no desperate P3), so the
+// duel still escalates once but stays a step below a full 3-phase region boss.
+const MINIBOSS_PHASES = { t2: 0.5, t3: -1 };
+function bossPhaseThresholds(e) {
+  if (e && e.miniboss) return MINIBOSS_PHASES;
+  return BOSS_PHASES[e.kind] || { t2: 0.66, t3: 0.33 };
+}
 /* Resolve current phase from HP and fire the one-shot transition tell on crossing.
    Returns the current phase number (1/2/3). Monotonic on the way down — never
    un-shifts even if HP is restored, so the tell can't replay. */
@@ -8579,6 +8844,7 @@ function step(dt) {
 
   for (const t of toasts) t.t -= dt;
   toasts = toasts.filter((t) => t.t > 0);
+  updateRegionBanner(dt); // lightweight region-intro banner fade (independent of the AI gate)
 
   if (state !== "play" && state !== "hub") {
     updateParts(dt);
@@ -8698,8 +8964,25 @@ function step(dt) {
       if (roomType === "boss" && lastBossKind) {
         stats.boss[lastBossKind] = (stats.boss[lastBossKind] | 0) + 1;
       }
+      // MILESTONE REWARDS (region boss / mini-boss): richer than a normal room — a chunk of
+      // bonus cores now, and the door set is guaranteed to offer a BOON (reinforcing the
+      // milestone feel). Region boss > mini-boss. Reuses the core/boon systems (no new economy).
+      let milestoneBoon = false;
+      if (roomType === "boss") {
+        const got = coreGain(28 + depth * 4);
+        if (got > 0) toast("REGION CLEAR — 区域通关 +" + got + " ◆", "#ffcc44");
+        burst(player.x, player.y, "#ffcc44", 28, 260, 0.7, 3);
+        milestoneBoon = true;
+        saveMeta();
+      } else if (roomType === "miniboss") {
+        const got = coreGain(14 + depth * 2);
+        if (got > 0) toast("MINI-BOSS DOWN — 头目击破 +" + got + " ◆", "#ffcc44");
+        burst(player.x, player.y, "#ffcc44", 20, 220, 0.6, 3);
+        milestoneBoon = true;
+        saveMeta();
+      }
       saveStats();
-      openDoors();
+      openDoors(false, milestoneBoon);
     }
   }
 
@@ -9040,7 +9323,9 @@ const BIOMES = [
 ];
 function biomeIdxForDepth(d) {
   if (d <= 0) return 0;
-  return Math.min(BIOMES.length - 1, Math.floor((d - 1) / 4) + 1);
+  // REGIONS now drive the biome theme: each region maps to a biome palette index. (The
+  // biome/terrain/obstacle tables are unchanged; regions just pick which one applies.)
+  return clamp(regionForDepth(d).biome, 0, BIOMES.length - 1);
 }
 function biomeForDepth(d) { return BIOMES[biomeIdxForDepth(d)]; }
 /* deck-plate accents (subtle, biome-tinted): drawn only on cells within the visible window.
@@ -12142,6 +12427,7 @@ function drawFountain() {
 const TRACK_ICONS = {
   normal:    ["✦", "#8fa8d8"],
   boss:      ["☠", "#ff3366"],
+  miniboss:  ["✦", "#ffcc44"], // region-midpoint elite (gold)
   shop:      ["$", "#ffd966"],
   treasure:  ["◆", "#cc88ff"],
   fountain:  ["+", "#66ffe0"],
@@ -12163,7 +12449,8 @@ function drawDepthTrack(u) {
       const ic = TRACK_ICONS[runTrack[d]] || TRACK_ICONS.normal;
       glyph = ic[0]; col = ic[1];
     } else if (d > depth) {
-      if (isBossDepth(d)) { glyph = "☠"; col = "rgba(255,51,102,0.75)"; }
+      if (isRegionBossDepth(d)) { glyph = "☠"; col = "rgba(255,51,102,0.75)"; }
+      else if (isMiniBossDepth(d)) { glyph = "✦"; col = "rgba(255,204,68,0.7)"; } // upcoming mini-boss
       else if (d === shopGuess) { glyph = "$"; col = "rgba(255,217,102,0.55)"; }
     }
     if (cur) {
@@ -12184,6 +12471,17 @@ function drawDepthTrack(u) {
   ctx.fillStyle = "rgba(94,230,255,0.8)";
   ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
   ctx.fillText(String(depth), x0 + (depth - from) * cellW, y0 + 17 * u);
+  // REGION name + progress (room idx / band length) above the track, tinted to the region.
+  const r = regionForDepth(depth), pg = regionProgress(depth), lp = loopForDepth(depth);
+  ctx.textAlign = "left";
+  glow(r.tint, 6);
+  ctx.fillStyle = r.tint;
+  ctx.font = "bold " + 11 * u + "px 'Courier New', monospace";
+  ctx.fillText(r.zh + " " + r.en + (lp > 0 ? " ·L" + (lp + 1) : ""), x0 - 9 * u, y0 - 14 * u);
+  noglow();
+  ctx.fillStyle = "rgba(180,200,240,0.65)";
+  ctx.font = (9) * u + "px 'Courier New', monospace";
+  ctx.fillText(pg.idx + "/" + pg.len, x0 - 9 * u + (depth - from + 1) * cellW + 4, y0 - 14 * u);
   ctx.restore();
 }
 
@@ -12399,6 +12697,35 @@ function drawBossEntrance() {
     ctx.font = 11 * u + "px 'Courier New', monospace";
     ctx.fillText(touchUI ? "tap to skip 点击跳过" : "any input to skip 任意键跳过", cw / 2, ch - bar / 2);
   }
+  ctx.restore();
+}
+
+/* lightweight REGION-INTRO banner — reuses the boss-entrance banner LOOK (bilingual two-line,
+   tinted glow) but lighter: no letterbox, no AI gate, fades in/out near the top of the screen.
+   Fired by maybeRegionBanner() when the run crosses into a new region. */
+function drawRegionBanner() {
+  const rb = regionBanner;
+  if (!rb) return;
+  const u = us();
+  const a = clamp(Math.min(rb.t / 0.35, (rb.dur - rb.t) / 0.6), 0, 1);
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  const y = ch * 0.24;
+  // a thin tinted bar behind the text for legibility
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  rrect(cw / 2 - Math.min(cw * 0.42, 360), y - 30 * u, Math.min(cw * 0.84, 720), 64 * u, 8); ctx.fill();
+  ctx.fillStyle = "rgba(180,200,240,0.6)";
+  ctx.font = "bold " + 10 * u + "px 'Courier New', monospace";
+  ctx.fillText("ENTERING REGION — 进入区域", cw / 2, y - 18 * u);
+  glow(rb.col, 16);
+  ctx.fillStyle = rb.col;
+  ctx.font = "bold " + 26 * u + "px 'Courier New', monospace";
+  ctx.fillText(rb.zh, cw / 2, y + 4 * u);
+  noglow();
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "bold " + 15 * u + "px 'Courier New', monospace";
+  ctx.fillText(rb.en, cw / 2, y + 26 * u);
   ctx.restore();
 }
 
@@ -12744,6 +13071,7 @@ function drawTitle() {
   const help = touchUI ? [
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
+    "深渊分为多个区域：每区中点 MINI-BOSS 头目，区终 REGION BOSS，奖励更丰厚 — the abyss is split into REGIONS: a MINI-BOSS at each region's midpoint, a REGION BOSS at its end (richer rewards)",
     "左半屏虚拟摇杆移动 — left-half joystick to move",
     "点按右半屏挥砍（自动瞄准） — tap right half to slash (auto-aim)",
     "持法杖施法·持枪械开火·持弓射箭(长弓蓄力) — STAFF casts · GUN fires · BOW looses arrows (hold to draw the LONGBOW)",
@@ -12760,6 +13088,7 @@ function drawTitle() {
   ] : [
     "HOW TO PLAY / 操作说明",
     "目标：清理房间，选择奖励之门与祝福 — clear rooms, pick reward doors & boons",
+    "深渊分为多个区域：每区中点 MINI-BOSS 头目，区终 REGION BOSS，奖励更丰厚 — the abyss is split into REGIONS: a MINI-BOSS at each region's midpoint, a REGION BOSS at its end (richer rewards)",
     "WASD/方向键移动 · 鼠标瞄准 — WASD/arrows move · mouse aim",
     "J 近战／法杖施法／枪械开火／弓箭(长弓蓄力) · 右Ctrl 光弹 — J slash / cast / fire gun / loose arrow (hold = draw LONGBOW) · R-Ctrl bolt",
     "K 冰冻新星 · 空格冲刺（无敌帧） — K freeze nova · Space dash (i-frames)",
@@ -13766,6 +14095,7 @@ function render(frameDt) {
   if (state === "play" || state === "hub") {
     drawHUD();
     drawTouchControls();
+    if (regionBanner && !bossEntrance) drawRegionBanner();
     if (bossEntrance) drawBossEntrance();
     if (paused) drawPause();
   } else if (state === "title") {
