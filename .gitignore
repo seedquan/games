@@ -1,0 +1,5 @@
+.DS_Store
+node_modules/
+
+# Local (per-machine) agent state; shared agent files are tracked.
+.claude/settings.local.json
