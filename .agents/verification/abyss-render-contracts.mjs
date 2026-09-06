@@ -312,3 +312,25 @@ test('east rig renders eleven connected parts with one held weapon and feedback 
  assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
  box.advanceRunAnimation(p,24,0,.1);assert.ok(Math.abs(p.artRunPhase-.55)<1e-8);
 });
+
+test('north rig is opt-in and renders eleven parts with shared weapon feedback',()=>{
+ const {box,calls}=harness();box.abyssArt.rigNorth={ready:true,image:{}};
+ assert.equal(box.previewRigKey(6),null);box.southRigPreviewEnabled=true;
+ assert.equal(box.previewRigKey(6),'rigNorth');
+ const p=player();p.aimDraw=-Math.PI/2;p.artRunPhase=.2;p.artRunBlend=1;
+ box.drawTexturedAndroid(p);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
+ assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
+ box.abyssArt.rigNorth.ready=false;assert.equal(box.previewRigKey(6),null);
+});
+test('north stance cancels negative world Y travel at three actor scales',()=>{
+ const {box}=harness();box.abyssArt.rigNorth={ready:true,image:{}};
+ for(const radius of [12,13,18]) {
+  const scale=radius*4.4/160,points=[];
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{if(key==='footL')points.push({x:ex*scale,y:ey*scale});};
+  const duty=box.southRigStep(0,-1,1,scale).duty;
+  for(let i=0;i<20;i++){const phase=duty*i/20;box.drawNorthRig(phase,1,scale);points.at(-1).y-=phase*96;}
+  for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8);
+ }
+});
