@@ -451,3 +451,27 @@ test('southwest stance cancels negative X and positive Y and preserves leg lengt
   for(const blend of [0,.25,.5,.75,1])for(let i=0;i<120;i++)box.drawSouthWestRig(i/120,blend,scale);
  }
 });
+
+test('all eight weapon grips follow the rendered palm through pose, scale and recoil',()=>{
+ const keys=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
+ const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+ const point=(m,x,y)=>[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
+ for(let dir=0;dir<8;dir++)for(const phase of [0,.27,.71])for(const blend of [0,1])for(const radius of [12,18]) {
+  const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
+  const parts=vm.runInContext(keys[dir].toUpperCase()+'_RIG_PARTS.foreR',box);
+  const p=player();Object.assign(p,{aimDraw:dir*Math.PI/4+.07,r:radius,artRunPhase:phase,artRunBlend:blend,recoilT:.09});
+  p.weapon=phase===.27?{id:'lbow',isBow:true}:phase===.71?{id:'qbow',isBow:true}:{id:'blade'};
+  box.drawTexturedAndroid(p);
+  let m=[1,0,0,1,0,0],stack=[],palm,grip;
+  for(const [op,...v] of calls){
+   if(op==='save')stack.push([...m]);else if(op==='restore')m=stack.pop();
+   else if(op==='translate')m=mul(m,[1,0,0,1,v[0],v[1]]);
+   else if(op==='rotate')m=mul(m,[Math.cos(v[0]),Math.sin(v[0]),-Math.sin(v[0]),Math.cos(v[0]),0,0]);
+   else if(op==='scale')m=mul(m,[v[0],0,0,v[1],0,0]);
+   else if(op==='drawImage'&&v[1]===parts[0]/2&&v[2]===parts[1]/2)palm=point(m,parts[8]-parts[4],parts[9]-parts[5]);
+   else if(op==='weapon')grip=point(m,v[1]+(p.weapon.isBow?(p.weapon.id==='lbow'?10:9):0),v[2]);
+  }
+  assert.ok(palm&&grip,keys[dir]+' must render a palm and a weapon');
+  assert.ok(Math.hypot(palm[0]-grip[0],palm[1]-grip[1])<1e-8,keys[dir]+' grip detached from rendered palm');
+ }
+});

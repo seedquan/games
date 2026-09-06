@@ -10006,7 +10006,7 @@ const SOUTH_RIG_PARTS = {
   upperL: [532,35,146,163,610,100,582,182],
   foreL: [902,54,92,278,935,81,958,221],
   upperR: [1215,27,140,171,1292,100,1304,185],
-  foreR: [179,402,92,269,235,427,217,565],
+  foreR: [179,402,92,269,235,427,217,565,220,625],
   thighL: [506,384,127,286,580,414,560,616],
   shinL: [885,385,107,281,939,422,953,635],
   footL: [1226,521,114,164,1287,549,1270,657],
@@ -10028,7 +10028,7 @@ function southRigStep(phase, side, blend, worldScale = 13*4.4/160) {
   return { travel: travel*blend, lift: lift*blend, contact, duty };
 }
 function drawSouthRigPart(image, key, x, y, endX, endY, widthScale, parts = SOUTH_RIG_PARTS) {
-  const [sx,sy,sw,sh,px,py,qx,qy] = parts[key];
+  const [sx,sy,sw,sh,px,py,qx,qy,gx,gy] = parts[key];
   const nativeAngle = Math.atan2(qy-py,qx-px);
   const targetAngle = Math.atan2(endY-y,endX-x);
   const lengthScale = Math.hypot(endX-x,endY-y)/Math.hypot(qx-px,qy-py);
@@ -10036,6 +10036,14 @@ function drawSouthRigPart(image, key, x, y, endX, endY, widthScale, parts = SOUT
   ctx.scale(lengthScale,widthScale); ctx.rotate(-nativeAngle);
   ctx.drawImage(image,sx/2,sy/2,sw/2,sh/2,sx-px,sy-py,sw,sh);
   ctx.restore();
+  if (gx !== undefined) {
+    // Carry the authored palm through the exact same anisotropic part transform.
+    const dx=gx-px,dy=gy-py,c=Math.cos(nativeAngle),n=Math.sin(nativeAngle);
+    const along=(dx*c+dy*n)*lengthScale,across=(-dx*n+dy*c)*widthScale;
+    return {x:x+along*Math.cos(targetAngle)-across*Math.sin(targetAngle),
+            y:y+along*Math.sin(targetAngle)+across*Math.cos(targetAngle)};
+  }
+  return null;
 }
 function drawSouthRig(phase, blend, worldScale = 13*4.4/160) {
   const asset = abyssArt.rigSouth;
@@ -10062,19 +10070,19 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160) {
     const sx=80+side*18,sy=43+bounce;
     const ex=80+side*(25-5*blend+step.lift*2),ey=64+bounce+step.travel*3;
     const wx=80+side*(31-8*blend+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
-    drawSouthRigPart(image,'fore'+suffix,ex,ey,wx,wy,.145);
-    drawSouthRigPart(image,'upper'+suffix,sx,sy,ex,ey,.17);
+    const grip=drawSouthRigPart(image,'fore'+suffix,ex,ey,wx,wy,.145);
+    drawSouthRigPart(image,'upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
-  drawArm(-1);drawArm(1);
+  drawArm(-1);const grip=drawArm(1);
   drawSouthRigPart(image,'core',80,hipY,80,hipY-75,.22);
-  return true;
+  return grip;
 }
 const EAST_RIG_PARTS = {
   core:[180,16,180,356,275,330,280,40],
   upperL:[548,48,113,180,600,105,590,208],
   foreL:[892,48,112,284,935,80,952,225],
   upperR:[1207,42,118,188,1268,110,1273,210],
-  foreR:[207,388,106,280,255,420,254,560],
+  foreR:[207,388,106,280,255,420,254,560,264,620],
   thighL:[528,370,123,298,600,407,590,628],
   shinL:[873,366,115,303,930,408,937,630],
   footL:[1185,447,193,166,1245,481,1337,580],
@@ -10116,13 +10124,13 @@ function drawSideRig(phase,blend,worldScale,assetKey,parts,direction) {
     const sx=79-side*6,sy=44+side*2+bounce;
     const ex=sx+2+2*blend+step.travel*9,ey=66+bounce-step.lift*4;
     const wx=sx+3+9*blend+step.travel*12,wy=85-5*blend+bounce-step.lift*8;
-    part('fore'+suffix,ex,ey,wx,wy,.14);
-    part('upper'+suffix,sx,sy,ex,ey,.17);
+    const grip=part('fore'+suffix,ex,ey,wx,wy,.14);
+    part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
   leg(-1);arm(-1);leg(1);
   part('core',80,82+bounce,81,9+bounce,.18);
-  arm(1);
-  return true;
+  const grip=arm(1);
+  return grip;
 }
 
 const WEST_RIG_PARTS = {
@@ -10130,7 +10138,7 @@ const WEST_RIG_PARTS = {
   upperL:[547,63,120,196,607,122,597,232],
   foreL:[904,80,98,276,951,117,961,251],
   upperR:[1232,65,136,202,1288,123,1325,240],
-  foreR:[220,393,108,267,275,433,266,555],
+  foreR:[220,393,108,267,275,433,266,555,279,612],
   thighL:[543,348,138,296,618,390,619,591],
   shinL:[898,372,114,268,948,409,956,604],
   footL:[1188,490,181,141,1308,524,1214,606],
@@ -10150,7 +10158,7 @@ const NORTH_RIG_PARTS = {
   upperL:[596,48,117,235,656,125,639,250],
   foreL:[878,61,104,286,920,96,944,235],
   upperR:[1204,49,134,235,1263,123,1284,252],
-  foreR:[226,377,95,273,269,411,258,553],
+  foreR:[226,377,95,273,269,411,258,553,270,606],
   thighL:[534,346,134,306,613,384,595,609],
   shinL:[881,370,107,279,936,400,937,610],
   thighR:[218,656,138,300,281,694,282,909],
@@ -10180,17 +10188,17 @@ function drawNorthRig(phase,blend,worldScale=13*4.4/160) {
     const sx=80+side*18,sy=44+bounce;
     const ex=80+side*(25-5*blend+step.lift*2),ey=65+bounce-step.travel*3;
     const wx=80+side*(30-7*blend+step.lift*2),wy=83+bounce-step.travel*7-step.lift*3;
-    part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);
+    const grip=part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
-  arm(-1);arm(1);part('core',80,hipY,80,hipY-77,.22);
-  return true;
+  arm(-1);const grip=arm(1);part('core',80,hipY,80,hipY-77,.22);
+  return grip;
 }
 const NORTHEAST_RIG_PARTS = {
   core:[198,12,184,333,285,317,283,30],
   upperL:[571,43,123,248,632,118,618,255],
   foreL:[896,41,116,294,947,66,968,213],
   upperR:[1206,39,146,250,1268,114,1301,254],
-  foreR:[210,360,111,278,261,388,253,539],
+  foreR:[210,360,111,278,261,388,253,539,266,590],
   thighL:[526,337,142,297,608,373,588,593],
   shinL:[895,350,113,270,952,377,956,585],
   footL:[1227,457,127,185,1284,483,1277,617],
@@ -10219,10 +10227,10 @@ function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction) {
     const sx=80+side*15,sy=44+side*3+bounce;
     const ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce-step.travel*5*q;
     const wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce-step.travel*10*q-step.lift*4;
-    part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);
+    const grip=part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
-  leg(-1);arm(-1);leg(1);part('core',80,86+bounce,80,9+bounce,.22);arm(1);
-  return true;
+  leg(-1);arm(-1);leg(1);part('core',80,86+bounce,80,9+bounce,.22);const grip=arm(1);
+  return grip;
 }
 
 const NORTHWEST_RIG_PARTS = {
@@ -10230,7 +10238,7 @@ const NORTHWEST_RIG_PARTS = {
   upperL:[580,70,176,254,667,156,673,296],
   foreL:[878,108,194,281,1020,151,938,298],
   upperR:[1215,72,172,280,1301,151,1316,310],
-  foreR:[163,447,177,268,291,497,218,635],
+  foreR:[163,447,177,268,291,497,218,635,205,677],
   thighL:[548,400,155,247,649,443,621,614],
   shinL:[909,401,137,284,959,444,990,647],
   footL:[1203,513,198,184,1326,548,1355,675],
@@ -10249,7 +10257,7 @@ const SOUTHEAST_RIG_PARTS = {
   upperL:[540,113,172,221,583,153,683,301],
   foreL:[916,145,138,272,956,184,1005,326],
   upperR:[1308,108,163,251,1370,156,1440,329],
-  foreR:[188,430,124,252,248,465,251,598],
+  foreR:[188,430,124,252,248,465,251,598,257,646],
   thighL:[532,404,168,270,582,445,649,626],
   shinL:[902,424,136,246,941,460,1000,640],
   footL:[1307,488,137,186,1353,523,1401,643],
@@ -10275,10 +10283,10 @@ function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction) {
     const sx=80+side*15,sy=44+side*3+bounce;
     const ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce+step.travel*5*q;
     const wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce+step.travel*10*q-step.lift*4;
-    part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);
+    const grip=part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
-  leg(-1);arm(-1);leg(1);part('core',80,86+bounce,80,10+bounce,.20);arm(1);
-  return true;
+  leg(-1);arm(-1);leg(1);part('core',80,86+bounce,80,10+bounce,.20);const grip=arm(1);
+  return grip;
 }
 function drawSouthEastRig(phase,blend,worldScale=13*4.4/160) {
   return drawFrontDiagonalRig(phase,blend,worldScale,'rigSouthEast',SOUTHEAST_RIG_PARTS,1);
@@ -10289,7 +10297,7 @@ const SOUTHWEST_RIG_PARTS = {
   upperL:[584,80,186,246,658,159,732,287],
   foreL:[863,122,179,274,1005,159,914,310],
   upperR:[1231,96,177,230,1302,174,1372,286],
-  foreR:[151,453,210,240,320,497,211,620],
+  foreR:[151,453,210,240,320,497,211,620,199,648],
   thighL:[540,387,173,300,650,442,591,626],
   shinL:[888,423,135,237,945,480,978,632],
   footL:[1210,461,160,218,1304,519,1256,644],
@@ -10409,9 +10417,10 @@ function drawTexturedAndroid(p) {
                 p.y + bob - Math.sin(p.aimDraw) * pose.recoil * 1.5);
   const bodyAlpha = ctx.globalAlpha;
   const frame = Math.min(7, Math.floor((p.artRunPhase || 0) * 8));
+  let grip=null;
   if (rig) {
     ctx.save();ctx.translate(-size/2,-size*.8);ctx.scale(size/160,size/160);
-    drawPreviewRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160);ctx.restore();
+    grip=drawPreviewRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160);ctx.restore();
   } else if (runAsset && runBlend < .99) {
     const blended = blendedAndroidFrame(asset.image,facing,runAsset.image,frame,runBlend);
     ctx.drawImage(blended,0,0,160,160,-size/2,-size*.8,size,size);
@@ -10421,8 +10430,11 @@ function drawTexturedAndroid(p) {
     ctx.drawImage(asset.image,(facing%4)*160,Math.floor(facing/4)*160,160,160,-size/2,-size*.8,size,size);
   }
   ctx.globalAlpha = bodyAlpha;
+  if (grip) ctx.translate((grip.x-80)*size/160,(grip.y-128)*size/160);
   ctx.rotate(p.aimDraw);
-  if (pose.visible) drawHeldWeapon(W,p.r*.7,-p.r*.1,pose.recoil,blink,pose.draw);
+  // The bow grip lies on its curved limb, unlike the other weapons' origin hilt.
+  const bowGrip=W.isBow ? (W.id==='lbow'?10:9) : 0;
+  if (pose.visible) drawHeldWeapon(W,grip?-bowGrip:p.r*.7,grip?0:-p.r*.1,pose.recoil,blink,pose.draw);
   ctx.restore();
   drawAndroidFeedback(p);
   return true;
