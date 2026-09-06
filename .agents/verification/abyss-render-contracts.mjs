@@ -428,3 +428,26 @@ test('southeast stance cancels both positive world axes and preserves leg length
   for(const blend of [0,.25,.5,.75,1])for(let i=0;i<120;i++)box.drawSouthEastRig(i/120,blend,scale);
  }
 });
+
+test('southwest rig stays opt-in and renders one articulated body plus shared weapon',()=>{
+ const {box,calls}=harness();box.abyssArt.rigSouthWest={ready:true,image:{}};
+ assert.equal(box.previewRigKey(3),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(3),'rigSouthWest');
+ const p=player();p.aimDraw=3*Math.PI/4;p.artRunPhase=.2;p.artRunBlend=1;box.drawTexturedAndroid(p);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
+ box.abyssArt.rigSouthWest.ready=false;assert.equal(box.previewRigKey(3),null);
+});
+test('southwest stance cancels negative X and positive Y and preserves leg lengths',()=>{
+ const {box}=harness();box.abyssArt.rigSouthWest={ready:true,image:{}};
+ for(const radius of [12,13,18]) {
+  const scale=radius*4.4/160,points=[];
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
+   if(key==='footL')points.push({x:ex*scale,y:ey*scale});
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+  };
+  const duty=box.southRigStep(0,-1,1,scale).duty;
+  for(let i=0;i<20;i++){const phase=duty*i/20;box.drawSouthWestRig(phase,1,scale);points.at(-1).x-=phase*96*Math.SQRT1_2;points.at(-1).y+=phase*96*Math.SQRT1_2;}
+  for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8);
+  for(const blend of [0,.25,.5,.75,1])for(let i=0;i<120;i++)box.drawSouthWestRig(i/120,blend,scale);
+ }
+});
