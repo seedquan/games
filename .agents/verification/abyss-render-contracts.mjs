@@ -277,3 +277,29 @@ test('chaser facing follows co-op target but locks to committed lunge and frozen
 test('unloaded chaser atlas preserves procedural fallback',()=>{
  const {box,calls}=harness();assert.equal(box.drawTexturedEnemy({type:'chaser'},false),false);assert.equal(calls.length,0);
 });
+
+test('east rig remains opt-in and falls back while unavailable',()=>{
+ const {box}=harness();box.abyssArt.rigEast={ready:true,image:{}};
+ assert.equal(box.previewRigKey(0),null);box.southRigPreviewEnabled=true;
+ assert.equal(box.previewRigKey(0),'rigEast');assert.equal(box.previewRigKey(4),null);
+ box.abyssArt.rigEast.ready=false;assert.equal(box.previewRigKey(0),null);
+});
+test('east rig knees preserve both bone lengths across the full gait',()=>{
+ const {box}=harness();
+ for(let i=0;i<120;i++)for(const side of [-1,1]) {
+  const phase=i/120,step=box.southRigStep(phase,side,1);
+  const hx=80+side*3,hy=82+side*2-Math.abs(Math.sin(phase*Math.PI*2))*1.6;
+  const ax=80+side*3+step.travel*18,ay=126+side*2-step.lift*19;
+  const k=box.eastRigKnee(hx,hy,ax,ay);
+  assert.ok(Math.abs(Math.hypot(k.x-hx,k.y-hy)-25)<1e-8);
+  assert.ok(Math.abs(Math.hypot(k.x-ax,k.y-ay)-27)<1e-8);
+ }
+});
+test('east rig renders eleven connected parts with one held weapon and feedback pass',()=>{
+ const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
+ const p=player();p.artRunPhase=.3;p.artRunBlend=1;box.drawTexturedAndroid(p);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
+ assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
+ box.advanceRunAnimation(p,24,0,.1);assert.ok(Math.abs(p.artRunPhase-.55)<1e-8);
+});
