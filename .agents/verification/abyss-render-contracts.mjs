@@ -334,3 +334,27 @@ test('north stance cancels negative world Y travel at three actor scales',()=>{
   for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8);
  }
 });
+
+test('west rig uses its own atlas without mirroring asymmetric artwork',()=>{
+ const {box,calls}=harness();const image={west:true};box.abyssArt.rigWest={ready:true,image};
+ assert.equal(box.previewRigKey(4),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(4),'rigWest');
+ const p=player();p.aimDraw=Math.PI;p.artRunPhase=.3;p.artRunBlend=1;box.drawTexturedAndroid(p);
+ const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,11);
+ for(const d of draws)assert.equal(d[1],image);
+ for(const c of calls.filter(c=>c[0]==='scale'))assert.ok(c[1]>0&&c[2]>0,'artwork must not be mirrored');
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
+ box.abyssArt.rigWest.ready=false;assert.equal(box.previewRigKey(4),null);
+});
+test('west stance cancels negative world X travel and retains fixed leg lengths',()=>{
+ const {box}=harness();box.abyssArt.rigWest={ready:true,image:{}};
+ for(const radius of [12,13,18]) {
+  const scale=radius*4.4/160,points=[];
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
+   if(key==='footL')points.push({x:ex*scale,y:ey*scale});
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+  };
+  const duty=box.southRigStep(0,-1,1,scale).duty;
+  for(let i=0;i<20;i++){const phase=duty*i/20;box.drawWestRig(phase,1,scale);points.at(-1).x-=phase*96;}
+  for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8);
+ }
+});
