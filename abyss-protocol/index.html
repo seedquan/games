@@ -209,11 +209,21 @@ const store = {
 
 /* ---------------- canvas / view ---------------- */
 const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
+const worldCtx = canvas.getContext("2d");
+let ctx = worldCtx;
 const arcadeLink = document.getElementById("arcade");
 let cw = 0, ch = 0, dpr = 1;
 // Opt-in local telemetry: no network, storage, or normal-game overlay.
 const profileQuery = new URLSearchParams(location.search);
+const sharpUIEnabled = profileQuery.has("sharpUI");
+const uiCanvas = sharpUIEnabled ? document.createElement('canvas') : null;
+const uiContext = uiCanvas ? uiCanvas.getContext('2d') : null;
+let uiDpr = 1;
+if (uiCanvas) {
+  uiCanvas.id = 'ui-layer'; uiCanvas.setAttribute('aria-hidden','true');
+  uiCanvas.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:1';
+  document.body.append(uiCanvas);
+}
 const artAnimationPreview = profileQuery.has("animationPreview");
 const guardianReviewEnabled = artAnimationPreview && profileQuery.has("guardianPreview");
 let artPreviewMove = null, artPreviewExitArmed = true;
@@ -241,7 +251,7 @@ function recordFrameProfile(now, interval, renderMs) {
     fps: +(1000 / mean(p.intervals)).toFixed(1),
     p95: +sorted[Math.floor(sorted.length * .95)].toFixed(1),
     renderMs: +mean(p.render).toFixed(2), shadows: p.shadows,
-    dpr, width: canvas.width, height: canvas.height, state, effects: ffx.level,
+    dpr, width: canvas.width, height: canvas.height, uiDpr: uiCanvas ? uiDpr : dpr, uiSeparate: !!uiCanvas, state, effects: ffx.level,
     shadowsDisabled: p.disableShadows, samples: p.intervals.length,
     viewport: [cw, ch], enemies: enemies.length,
     projectiles: bullets.length + pbolts.length + ebolts.length + spells.length + glaives.length,
@@ -297,6 +307,21 @@ function observeRasterBudget(frameMs) {
 function chooseRenderDpr(width, height, deviceDpr, pixelBudget) {
   return Math.min(deviceDpr || 1, 1.5, Math.sqrt(pixelBudget / Math.max(1, width * height)));
 }
+function chooseUiDpr(width,height,deviceDpr) {
+  return Math.min(deviceDpr || 1,1.5,Math.sqrt(8000000/Math.max(1,width*height)));
+}
+function resizeUiLayer() {
+  if (!uiCanvas) return;
+  uiDpr = chooseUiDpr(cw,ch,window.devicePixelRatio || 1);
+  uiCanvas.width = Math.round(cw*uiDpr); uiCanvas.height = Math.round(ch*uiDpr);
+  uiCanvas.style.width = cw+'px'; uiCanvas.style.height = ch+'px';
+}
+function beginUiLayer() {
+  if (!uiContext) return;
+  uiContext.setTransform(uiDpr,0,0,uiDpr,0,0);
+  uiContext.clearRect(0,0,cw,ch);
+  ctx = uiContext;
+}
 function resize() {
   cw = window.innerWidth; ch = window.innerHeight;
   dpr = chooseRenderDpr(cw, ch, window.devicePixelRatio || 1, rasterBudget.pixels);
@@ -304,6 +329,7 @@ function resize() {
   canvas.height = Math.round(ch * dpr);
   canvas.style.width = cw + "px";
   canvas.style.height = ch + "px";
+  resizeUiLayer();
   computeView();
   vigGrad = null;
   lowHpGrad = null;
@@ -14984,6 +15010,7 @@ function uiClick(x, y) {
 
 /* ---------------- §U RENDER: MAIN ---------------- */
 function render(frameDt) {
+  ctx = worldCtx;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   // advance the scrolling follow camera (1P/2P fit + boss focus), then derive the transform.
   // updateCamera() calls computeView() internally (clamps the view to arena bounds).
@@ -15139,6 +15166,7 @@ function render(frameDt) {
     ctx.fillRect(0, 0, cw, ch);
   }
 
+  beginUiLayer();
   if (state === "play" || state === "hub") {
     drawHUD();
     drawTouchControls();
@@ -15180,6 +15208,7 @@ function render(frameDt) {
     ctx.fillText("MUTED [M]", cw - 10, ch - 10);
   }
 
+  ctx = worldCtx;
   arcadeLink.style.display = (state === "title" || state === "summary") ? "block" : "none";
   updateFsBtn();
 }
