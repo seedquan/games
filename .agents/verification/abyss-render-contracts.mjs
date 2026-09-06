@@ -641,3 +641,28 @@ test('stationary textured pylon does not bob and mortar charge stays live',()=>{
  assert.equal(calls.filter(c=>c[0]==='stroke').length,1);
  calls.length=0;e.state='chase';box.drawTexturedEnemy(e,false);assert.equal(calls.filter(c=>c[0]==='stroke').length,0);
 });
+
+test('all twelve ordinary enemy types resolve to embedded textures',()=>{
+ const {box}=harness();
+ for(const type of ['chaser','shooter','tank','swarmer','bomber','shield','medic','phantom','blinker','bulwark','lobber','totem']) {
+  const key=box.enemyTextureKey({type});assert.ok(key,type);
+  assert.ok(html.includes('"'+key+'":"data:image/webp;base64,'),type);
+ }
+});
+test('swarm heading follows travel, holds when stopped and locks while frozen',()=>{
+ const {box,calls}=harness();box.abyssArt.swarmer={ready:true,image:{}};
+ const e={type:'swarmer',x:0,y:0,r:8,vx:0,vy:100};box.drawTexturedEnemy(e,false);
+ assert.equal(e.artHeading,Math.PI/2);assert.ok(calls.some(c=>c[0]==='rotate'&&c[1]===Math.PI/2));
+ e.vy=0;box.drawTexturedEnemy(e,false);assert.equal(e.artHeading,Math.PI/2);
+ e.vx=-100;e.frozenT=1;box.drawTexturedEnemy(e,false);assert.equal(e.artHeading,Math.PI/2);
+ e.frozenT=0;box.drawTexturedEnemy(e,false);assert.equal(e.artHeading,Math.PI);
+});
+test('textured bulwark shield uses live angle, health and frozen state',()=>{
+ const {box,calls}=harness();box.abyssArt.bulwark={ready:true,image:{}};
+ box.clamp=(v,a,b)=>Math.max(a,Math.min(b,v));box.glow=()=>{};box.noglow=()=>{};
+ box.shieldActive=e=>e.shieldHp>0&&!e.frozenT;
+ const e={type:'bulwark',x:0,y:0,r:18,shieldA:1.2,shieldHp:50,shieldMax:50};
+ box.drawTexturedEnemy(e,false);assert.ok(calls.some(c=>c[0]==='rotate'&&c[1]===1.2));assert.equal(box.ctx.lineWidth,6);
+ e.frozenT=1;box.drawTexturedEnemy(e,false);assert.equal(box.ctx.lineWidth,3);
+ e.frozenT=0;e.shieldHp=0;box.drawTexturedEnemy(e,false);assert.equal(box.ctx.lineWidth,3);
+});
