@@ -129,3 +129,19 @@ test('reduced effects omit secondary bloom while retaining a bounded world-light
  const start=html.indexOf('function bloomCircle('),end=html.indexOf('function drawMotes()',start);
  vm.runInContext(html.slice(start,end),box);box.fx.level='reduced';box.bloomCircle(1,2,30,'#fff',.5);assert.equal(calls.length,0);
 });
+
+test('floor cache reuses one bounded surface and invalidates only when its painted content changes',()=>{
+ const start=html.indexOf('let arenaFloorCache ='),end=html.indexOf('function drawArenaFloorSource(',start);
+ let allocations=0,paints=0,walls=0,draws=0;
+ const world={drawImage(){draws++;}},target={setTransform(){}},surface={getContext:()=>target};
+ const box={ctx:world,CONFIG:{arenaW:2500,arenaH:1408},state:'hub',depth:0,biomeIdxForDepth:d=>d,ffx:{level:'reduced'},touchUI:false,abyssArt:{station:{ready:false},abyss:{ready:true}},profileQuery:{get:()=>null},document:{createElement:()=>{allocations++;return surface;}},Math,clamp:(x,a,b)=>Math.max(a,Math.min(b,x)),aOX:0,aOY:0,aS:1,cw:1280,ch:720,drawArenaFloorSource:full=>{assert.equal(full,true);paints++;},drawArenaWalls:()=>walls++};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ box.drawArenaFloor();box.aOX=-150;box.aS=1.55;box.drawArenaFloor();
+ assert.equal(allocations,1);assert.equal(paints,1);assert.equal(draws,2);assert.equal(walls,2);assert.equal(box.ctx,world);
+ box.abyssArt.station.ready=true;box.drawArenaFloor();assert.equal(paints,2);
+ box.ffx.level='off';box.drawArenaFloor();assert.equal(paints,3);
+ box.state='play';box.depth=1;box.drawArenaFloor();assert.equal(paints,4);
+ box.CONFIG.arenaW=8000;box.CONFIG.arenaH=4000;box.drawArenaFloor();assert.ok(surface.width*surface.height<=4000000);assert.equal(allocations,1);
+ box.drawArenaFloorSource=()=>{throw Error('paint failed');};box.depth=4;
+ assert.throws(()=>box.drawArenaFloor(),/paint failed/);assert.equal(box.ctx,world);
+});
