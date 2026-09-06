@@ -52,7 +52,7 @@ test('radial lights reuse bounded cached sprites across positions and radii',()=
 test('profiling resets samples when scene or canvas size changes',()=>{
  const start=html.indexOf('function recordFrameProfile(');
  const end=html.indexOf('\nlet aS =',start);
- const box={document:{hidden:false},frameProfile:{intervals:[],render:[],lastPublish:0},state:'hub',paused:false,canvas:{width:1000,height:800,dataset:{}},ffx:{level:'reduced'},dpr:1,cw:1000,ch:800,enemies:[],bullets:[],pbolts:[],ebolts:[],spells:[],glaives:[],radialLightCache:new Map()};
+ const box={document:{hidden:false},frameProfile:{intervals:[],render:[],lastPublish:0},state:'hub',paused:false,canvas:{width:1000,height:800,dataset:{}},ffx:{level:'reduced'},uiCanvas:null,uiDpr:1,dpr:1,cw:1000,ch:800,enemies:[],bullets:[],pbolts:[],ebolts:[],spells:[],glaives:[],radialLightCache:new Map()};
  vm.createContext(box);vm.runInContext(html.slice(start,end),box);
  for(let i=0;i<150;i++)box.recordFrameProfile(i*17,17,.2);
  assert.equal(JSON.parse(box.canvas.dataset.frameProfile).state,'hub');
@@ -64,4 +64,21 @@ test('profiling resets samples when scene or canvas size changes',()=>{
  box.canvas.width=900;box.recordFrameProfile(5200,17,.2);
  assert.equal(box.canvas.dataset.frameProfile,undefined);
  assert.equal(box.frameProfile.intervals.length,1);
+ box.uiCanvas={width:1920,height:1080};box.recordFrameProfile(5217,17,.2);
+ assert.equal(box.frameProfile.intervals.length,1);
+});
+
+
+test('UI resolution stays independent of adaptive world resolution and bounds retina memory',()=>{
+ const start=html.indexOf('function chooseUiDpr('),end=html.indexOf('function resize()',start);
+ const uiCanvas={style:{}},operations=[];
+ const uiContext={setTransform:(...v)=>operations.push(['transform',...v]),clearRect:(...v)=>operations.push(['clear',...v])};
+ const box={Math,uiCanvas,uiContext,ctx:{id:'world'},uiDpr:1,cw:3440,ch:1440,dpr:.49,window:{devicePixelRatio:1}};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);box.resizeUiLayer();box.beginUiLayer();
+ assert.equal(uiCanvas.width,3440);assert.equal(uiCanvas.height,1440);assert.equal(box.uiDpr,1);
+ assert.equal(box.ctx,uiContext);assert.deepEqual(operations,[['transform',1,0,0,1,0,0],['clear',0,0,3440,1440]]);
+ box.dpr=.44;box.resizeUiLayer();assert.equal(uiCanvas.width,3440);
+ const d=box.chooseUiDpr(3840,2160,2);assert.ok(3840*2160*d*d<=8000001);
+ assert.equal(box.chooseUiDpr(390,844,3),1.5);
+ box.uiCanvas=null;box.uiContext=null;const before=operations.length;box.beginUiLayer();assert.equal(operations.length,before);
 });
