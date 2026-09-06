@@ -478,9 +478,9 @@ test('all eight weapon grips follow the rendered palm through pose, scale and re
 
 test('rig feet plant along actual travel for every facing and movement direction',()=>{
  const names=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
- for(const name of names)for(let dir=0;dir<16;dir++)for(const radius of [12,18]) {
+ for(const name of names)for(let dir=0;dir<16;dir++)for(const radius of [12,18])for(const amount of [0,.5,1]) {
   const {box}=harness();box.abyssArt['rig'+name]={ready:true,image:{}};
-  const motion={x:Math.cos(dir*Math.PI/8),y:Math.sin(dir*Math.PI/8)},scale=radius*4.4/160,points=[];
+  const motion={x:amount*Math.cos(dir*Math.PI/8),y:amount*Math.sin(dir*Math.PI/8)},scale=radius*4.4/160,points=[];
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
    if(!['South','North'].includes(name)&&(key.startsWith('thigh')||key.startsWith('shin')))
@@ -499,7 +499,27 @@ test('rig phase advances forward while displacement supplies backward or strafe 
  const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
  const p=player();box.advanceRunAnimation(p,-24,0,.1);
  assert.ok(Math.abs(p.artRunPhase-.25)<1e-8);assert.equal(p.artMotion.x,-1);assert.equal(p.artMotion.y,0);
- box.advanceRunAnimation(p,0,-24,.1);assert.ok(Math.abs(p.artRunPhase-.5)<1e-8);assert.equal(p.artMotion.x,0);assert.equal(p.artMotion.y,-1);
+ box.advanceRunAnimation(p,0,-24,.1);assert.ok(Math.abs(p.artRunPhase-.5)<1e-8);assert.ok(Math.abs(p.artMotion.x+Math.exp(-2.4))<1e-8);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
  box.advanceRunAnimation(p,0,0,.1);assert.equal(p.artRunPhase,.5);
- p.dashT=1;box.advanceRunAnimation(p,24,0,.01);assert.equal(p.artRunPhase,.5);assert.equal(p.artMotion.y,-1);
+ p.dashT=1;box.advanceRunAnimation(p,24,0,.01);assert.equal(p.artRunPhase,.5);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
+});
+
+test('direction reversal narrows the stride continuously and converges independent of update rate',()=>{
+ const setup=()=>{const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};const p=player();box.advanceRunAnimation(p,2,0,1/120);return {box,p};};
+ const {box,p}=setup();box.advanceRunAnimation(p,-2,0,1/120);
+ assert.ok(p.artMotion.x>.6&&p.artMotion.x<1,'first reverse update must not snap to opposite foot targets');
+ assert.equal(p.artMotion.y,0);
+ const values=[];
+ for(const hz of [30,60,120,240]){
+  const {box,p}=setup();for(let i=0;i<hz/2;i++)box.advanceRunAnimation(p,-240/hz,0,1/hz);
+  values.push(p.artMotion.x);assert.ok(Math.abs(p.artMotion.x+1)<.006);
+ }
+ assert.ok(Math.max(...values)-Math.min(...values)<1e-10);
+});
+test('fully stopped characters restart in the new direction without stale stride or NaNs',()=>{
+ const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};const p=player();
+ box.advanceRunAnimation(p,20,0,.1);box.advanceRunAnimation(p,0,0,.5);
+ assert.equal(p.artMotion,null);assert.equal(p.artRunBlend,0);
+ box.advanceRunAnimation(p,0,-20,.1);assert.equal(p.artMotion.x,0);assert.equal(p.artMotion.y,-1);
+ box.advanceRunAnimation(p,0,0,0);assert.ok(Number.isFinite(p.artRunPhase));assert.equal(p.artMotion.y,-1);
 });
