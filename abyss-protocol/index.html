@@ -10404,6 +10404,20 @@ function enemyLabelTop(e) {
   const key = enemyTextureKey(e);
   return abyssArt[key]?.ready ? e.y - e.r * (key === 'core' ? 3.1 : 3.25) * .8 - 2 : e.y - e.r;
 }
+// Calibrated from both rendered boot soles at mid-stance in the 160px rig space.
+// Columns: idle ground, running drop, extra vertical-stride drop, diagonal basis.
+const RIG_GROUND_LEVELS = {
+  rigEast:[145.5,5.5,14,0],rigWest:[142.5,5.5,14,0],
+  rigSouth:[139,12,0,0],rigNorth:[145,10,0,0],
+  rigSouthEast:[144,9,5,1],rigSouthWest:[144,9,5,1],
+  rigNorthEast:[142.5,11,4,1],rigNorthWest:[142,11,4,1]
+};
+function rigGroundLevel(key,blend,motion) {
+  const [idle,drop,vertical,diagonal]=RIG_GROUND_LEVELS[key];
+  const y=Math.abs(motion?.y ?? (diagonal?Math.SQRT1_2:0));
+  const extra=diagonal?Math.max(0,(y-Math.SQRT1_2)/(1-Math.SQRT1_2)):y;
+  return idle-(drop+vertical*extra)*blend;
+}
 function drawTexturedAndroid(p) {
   const asset = abyssArt.player;
   if (!asset.ready) return false;
@@ -10417,10 +10431,11 @@ function drawTexturedAndroid(p) {
   const runBlend = runAsset ? Math.min(1, p.artRunBlend) : 0;
   const bob = (Math.sin(p.walkT * 2) * moving * 1.25 + Math.sin(timeNow * 3) * (1-moving) * .35) * (rig ? 0 : 1-runBlend);
   const size = p.r * 4.4;
+  const groundY=rig?rigGroundLevel(rig,p.artRunBlend||0,p.artMotion):128;
   ctx.save();
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(0,0,0,.45)';
-  ctx.beginPath(); ctx.ellipse(p.x,p.y+p.r*.6,p.r*1.05,p.r*.43,0,0,TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(p.x,p.y+(rig?0:p.r*.6),p.r*(rig ? .85 : 1.05),p.r*(rig ? .32 : .43),0,0,TAU); ctx.fill();
   if (numPlayers > 1 || p.hp / p.maxHp < .3) {
     ctx.strokeStyle = p.hp / p.maxHp < .3 ? '#ff6677' : p.col;
     ctx.lineWidth = 1.5;
@@ -10433,7 +10448,7 @@ function drawTexturedAndroid(p) {
   const frame = Math.min(7, Math.floor((p.artRunPhase || 0) * 8));
   let grip=null;
   if (rig) {
-    ctx.save();ctx.translate(-size/2,-size*.8);ctx.scale(size/160,size/160);
+    ctx.save();ctx.translate(-size/2,-groundY*size/160);ctx.scale(size/160,size/160);
     grip=drawPreviewRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160,p.artMotion);ctx.restore();
   } else if (runAsset && runBlend < .99) {
     const blended = blendedAndroidFrame(asset.image,facing,runAsset.image,frame,runBlend);
@@ -10444,7 +10459,7 @@ function drawTexturedAndroid(p) {
     ctx.drawImage(asset.image,(facing%4)*160,Math.floor(facing/4)*160,160,160,-size/2,-size*.8,size,size);
   }
   ctx.globalAlpha = bodyAlpha;
-  if (grip) ctx.translate((grip.x-80)*size/160,(grip.y-128)*size/160);
+  if (grip) ctx.translate((grip.x-80)*size/160,(grip.y-groundY)*size/160);
   ctx.rotate(p.aimDraw);
   // The bow grip lies on its curved limb, unlike the other weapons' origin hilt.
   const bowGrip=W.isBow ? (W.id==='lbow'?10:9) : 0;
