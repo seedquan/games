@@ -175,3 +175,17 @@ test('camera clamps continuously at an edge and centers an arena smaller than it
  const samples=[];for(let offset=-100;offset<=200;offset++)samples.push(box.frameArenaAxis(offset,2000,16,1000,32,32));
  for(let i=1;i<samples.length;i++)assert.ok(Math.abs(samples[i]-samples[i-1])<=1);
 });
+
+test('camera shake honors off, bounds reduced motion and decays before stopping',()=>{
+ const start=html.indexOf('function cameraShakeOffset('),end=html.indexOf('function shake(',start);
+ const box={Math};vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ for(let t=0;t<2;t+=.01) {
+  assert.deepEqual(Array.from(box.cameraShakeOffset(t,'off',1,1,100)),[0,0,0]);
+  const reduced=box.cameraShakeOffset(t,'reduced',1,1,100);
+  assert.ok(Math.abs(reduced[0])<=3 && Math.abs(reduced[1])<=3);assert.equal(reduced[2],0);
+ }
+ const before=box.cameraShakeOffset(.2,'full',0,.12,10);
+ const after=box.cameraShakeOffset(.2,'full',0,.001,10);
+ assert.ok(Math.hypot(...after)<Math.hypot(...before)/100);
+ assert.ok(box.cameraShakeOffset(.2,'full',0,0,10).every(v=>v===0));
+});
