@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="尘湾岛：一座宽阔、圆润可爱的迷你海岛。四位居民，共同的家，独立的记忆与目标。">
+  <title>尘湾 · WESTWORLD LAB</title>
+  <script>
+    (() => {
+      const param = new URLSearchParams(window.location.search).get("clawpilotTheme");
+      const theme =
+        param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <style>/* APP_STYLE */</style>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="../" aria-label="返回游戏大厅"><span class="brand-mark" aria-hidden="true">✳</span><span>WESTWORLD<span class="brand-sub">BEHAVIORAL LABORATORY</span></span></a>
+    <div class="header-right"><span class="live-label"><i></i> 封闭世界 · 开放结局</span><button id="theme" class="icon-button" aria-label="切换明暗主题" title="切换明暗主题">◐</button><button id="help" class="subtle-button">世界规则 <span aria-hidden="true">↗</span></button></div>
+  </header>
+  <main>
+    <section class="intro">
+      <div><p class="eyebrow">EXPERIMENT 001 <span>/</span> DUSTHAVEN, THE FRONTIER</p><h1>尘湾<span class="title-dot">.</span><span class="title-en">一个世界，四段未知的故事。</span></h1><p class="intro-copy">你决定世界发生什么。至于他们如何回应，留给他们自己。</p></div>
+      <div class="world-clock"><span class="eyebrow" id="round-label">WORLD TIME / ROUND 000</span><strong id="clock">第 1 天 · 08:00</strong><span id="weather-summary">晴朗 · 适合探索的一天</span></div>
+    </section>
+
+    <section class="transport" aria-label="实验控制">
+      <div class="transport-main"><button id="play" class="primary-button"><span aria-hidden="true">▶</span> 运行世界</button><button id="step" class="secondary-button" title="每位居民各行动一次，世界推进 20 分钟">推进一轮 <span aria-hidden="true">↦</span></button><label class="speed-label" for="speed">规则速度<select id="speed"><option value="1">1×</option><option value="3">3×</option><option value="8">8×</option></select></label><span class="run-state" id="run-state">时间已暂停</span></div>
+      <div class="transport-tools"><button id="model-open" class="model-button"><span class="status-dot"></span><span id="mode-label">规则演示</span><span aria-hidden="true">⌄</span></button><span class="separator"></span><button id="save" class="subtle-button">存档</button><button id="restore" class="subtle-button">读档</button><button id="export" class="subtle-button">导出</button><button id="import-open" class="subtle-button" title="从导出的 JSON 恢复实验">导入</button><button id="reset" class="subtle-button" title="以相同种子重新开始">重置</button></div>
+    </section>
+    <div id="model-performance" class="model-performance" hidden>
+      <p id="model-progress" role="status"></p>
+      <p id="model-timing" class="small muted"></p>
+      <p class="control-hint">服务端时间点从本次调用开始计时，不应相加。子进程启动不代表 CLI 已就绪；CLI 首输出或 API 首字节都不是纯模型耗时。完整行动 JSON 返回后才执行；失败不会自动重试。</p>
+    </div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <section class="panel map-panel game-stage" aria-label="迷你海岛，可切换立体与平面视图">
+      <div class="panel-heading"><div><span class="eyebrow">DUSTHAVEN / OUR LITTLE ISLAND</span><h2>尘湾岛 <span class="count-badge" id="scene-status">晴朗 · ROUND 000 · 规则演示</span></h2></div><button id="perspective" class="pill-button" aria-pressed="false">◎ 上帝视角</button></div>
+      <div class="map-subtitle"><span id="map-caption">点击建筑选择投放地点，点击小人观察居民。</span><div class="scene-zoom-controls"><div class="scene-view-controls"><select id="scene-view" aria-label="画面维度"><option value="3d">3D Mini</option><option value="2d">平面海岛</option></select><button id="scene-rotate-left" aria-label="向左旋转视角">↶</button><button id="scene-rotate-right" aria-label="向右旋转视角">↷</button></div><div class="scene-scale-controls"><button id="scene-zoom-out" aria-label="缩小地图" disabled>−</button><span id="scene-zoom-label">1×</span><button id="scene-zoom-in" aria-label="放大地图">＋</button><button id="scene-fit">全景</button></div></div></div>
+      <div id="town-viewport" class="town-viewport" tabindex="0" aria-label="小镇场景，放大后可拖动或使用方向键滚动">
+        <div id="world-map" class="world-map">
+          <div id="town-landscape" class="town-layer"></div>
+          <canvas id="town-canvas" class="town-canvas" aria-hidden="true"></canvas>
+          <div id="town-places" class="town-layer" aria-label="可选择的地点"></div>
+          <div id="town-residents" class="town-layer" aria-label="可观察的居民"></div>
+        </div>
+      </div>
+      <div class="scene-inspection"><p id="scene-site" role="status"></p><span id="population">4 / 4 活跃</span></div>
+      <p id="scene-dialogue" class="scene-dialogue" aria-live="polite" hidden></p>
+    </section>
+    <div class="workspace">
+      <aside class="god-column">
+        <section class="panel god-panel">
+          <div class="panel-heading"><div><span class="eyebrow">THE OBSERVER</span><h2>上帝的手</h2></div><span class="heading-symbol" aria-hidden="true">✧</span></div>
+          <p class="muted small">改变条件，而不是替居民做决定。</p>
+          <div class="control-section"><div class="section-label"><h3>01 <span>改变天气</span></h3><span id="weather-code" class="mono">CLEAR</span></div><div id="weather-controls" class="weather-grid"></div><p id="weather-description" class="control-hint"></p></div>
+          <div class="control-section"><div class="section-label"><h3>02 <span>投放物资</span></h3><span aria-hidden="true">↓</span></div><div id="item-controls" class="item-grid"></div><p id="item-description" class="control-hint"></p><label class="field-label" for="drop-location">投放地点 <span>也可点击地图</span></label><select id="drop-location"></select><div class="drop-row"><label for="drop-amount" class="sr-only">投放数量</label><input id="drop-amount" type="number" min="1" max="10" value="1"><button id="drop" class="secondary-button">放入这个世界 <span aria-hidden="true">↓</span></button></div></div>
+          <div class="control-section last"><div class="section-label"><h3>03 <span>风中的低语</span></h3><span aria-hidden="true">〰</span></div><label class="sr-only" for="whisper-agent">低语对象</label><select id="whisper-agent"></select><label class="sr-only" for="whisper">低语内容</label><textarea id="whisper" rows="3" maxlength="220" placeholder="例如：也许工坊里的水泵，能让枯井重新出水。"></textarea><button id="whisper-send" class="subtle-button full-width">让 TA 听见 <span aria-hidden="true">↗</span></button><p class="control-hint">低语只是信息，不是命令。居民可以忽略，也可能误信。</p></div>
+        </section>
+        <div class="observer-note"><span aria-hidden="true">◎</span><p>你看见一切。<br>他们只看见自己所在的地方。</p></div>
+      </aside>
+
+      <div class="world-column">
+        <section class="panel narrative-panel">
+          <div class="panel-heading"><div><span class="eyebrow">THE UNWRITTEN STORY</span><h2>世界正在发生</h2></div><span class="count-badge" id="event-count">2 条记录</span></div>
+          <div class="feed-toolbar"><div class="tabs" id="feed-tabs" aria-label="事件筛选"><button data-filter="all" class="active" aria-pressed="true">全部</button><button data-filter="residents" aria-pressed="false">居民</button><button data-filter="dialogue" aria-pressed="false">交流</button><button data-filter="god" aria-pressed="false">干预</button></div><label class="follow-label"><input type="checkbox" id="follow" checked> 跟随最新</label></div>
+          <div id="feed" class="feed" tabindex="0" aria-label="世界事件记录"></div>
+          <div class="feed-footer"><span class="status-dot"></span><span id="source-note">规则演示 · 行为来自预设策略，不是真实 AI</span><span class="mono" id="seed-label">SEED 2049</span></div>
+        </section>
+        <section class="panel experiment-panel">
+          <div class="panel-heading"><div><span class="eyebrow">ASK BETTER QUESTIONS</span><h2>不是看它说什么，是看它做了什么。</h2></div><span class="heading-symbol" aria-hidden="true">↗</span></div>
+          <div id="scenario-controls" class="scenario-grid"></div>
+          <div id="experiment-question" class="experiment-question"></div>
+          <div class="metrics" id="metrics"></div>
+          <p class="evaluation-note">行为实验 ≠ AGI 认证。意图文本是简短的行动说明，不是模型内部思维。相同种子可复现初始环境，不保证模型输出一致。</p>
+        </section>
+      </div>
+
+      <aside class="resident-column">
+        <section class="panel residents-panel">
+          <div class="panel-heading"><div><span class="eyebrow">FOUR SEPARATE LIVES</span><h2>这里的居民</h2></div><span class="count-badge">04</span></div>
+          <div id="resident-list" class="resident-list"></div>
+        </section>
+        <section class="panel inspector-panel">
+          <div id="inspector-heading"></div>
+          <div class="tabs inspector-tabs" id="inspector-tabs"><button data-tab="state" class="active" aria-pressed="true">状态</button><button data-tab="memory" aria-pressed="false">记忆</button><button data-tab="perception" aria-pressed="false">感知</button></div>
+          <div id="inspector-body"></div>
+        </section>
+        <div class="boundary-note"><span class="eyebrow">THE KNOWLEDGE BOUNDARY</span><p>独立目标 · 独立记忆 · 局部感知</p><p>居民不会获得其他人的私有状态、你的控制面板，或未知装置的隐藏效果。</p></div>
+      </aside>
+    </div>
+    <footer class="site-footer"><span>WESTWORLD LAB <span class="footer-cross">✳</span> 尘湾实验室</span><span>不是一个写好结局的故事。是一个可以提问的世界。</span><span class="mono">LOCAL FIRST / V.01</span></footer>
+  </main>
+
+  <dialog id="model-dialog">
+    <form method="dialog" class="dialog-close"><button class="icon-button" aria-label="关闭">×</button></form>
+    <span class="eyebrow">CONNECT A REAL MIND</span><h2>给居民接入真实 AI</h2>
+    <p>每次只让一位居民读取自己的感知和记忆，再选择一个行动。工具执行与物理结果由世界引擎裁定，而不是让模型编造。</p>
+    <div class="connection-card"><span class="status-dot"></span><strong id="bridge-status">正在检测本地桥接…</strong></div>
+    <p class="small muted">本地启动：<code>cd westworld &amp;&amp; npm start</code><br>随后打开 <code>http://127.0.0.1:4320/westworld/</code>。选择 Copilot 时需安装并登录 CLI；选择 API 时需配置服务端凭据。账号须有对应模型权限。</p>
+    <label class="field-label" for="model-profile">批量设置所有居民</label><select id="model-profile" disabled><option value="fast">等待本地桥接提供配置</option></select>
+    <p class="control-hint">默认快速模式使用 low 推理强度，深度模式使用 high；本地环境变量可覆盖模型与强度。实际速度、决策质量和费用取决于模型。修改配置后需重新勾选授权，不会自动试用或回退。</p>
+    <div id="resident-model-config"></div>
+    <p class="control-hint">每位居民可独立选择 Provider / Model / 推理强度。额外配置通过服务端 <code>WESTWORLD_PROFILES_FILE</code> 加载；密钥只从服务端环境变量读取。页面不接收密钥、地址或任意 CLI 参数。</p>
+    <label class="field-label" for="budget">本次连接最多调用</label><select id="budget"><option value="4">4 次 / 约 1 轮</option><option value="8">8 次 / 约 2 轮</option><option value="12" selected>12 次 / 约 3 轮</option><option value="24">24 次 / 约 6 轮</option></select>
+    <p class="control-hint">每位活跃居民每轮 1 次；服务总计最多 24 次，失败也计数。8 轮实验通常需要 32 次，可保存进度、手动重启服务后续跑。</p>
+    <label class="check-row"><input type="checkbox" id="fresh-model" checked><span>使用相同种子重新开始，避免混入规则演示记忆</span></label>
+    <label class="check-row consent"><input type="checkbox" id="model-consent"><span>我同意按上述居民配置调用 Copilot 或外部 Provider，并由对应账号计费。Copilot 每次 CLI 设 30 credits 软上限（可能超出）；API 使用服务端设置的输出 token 上限，不承诺固定费用。发送的内容包含居民感知、记忆及我输入的低语。</span></label>
+    <p class="small muted">不会读取项目文件或提供系统工具。调用失败立即暂停，不自动重复消耗额度，也不偷偷退回规则模式。速度按钮不会提高模型并发。</p>
+    <div class="dialog-actions"><button id="demo-mode" class="secondary-button">使用免费规则演示</button><button id="model-enable" class="primary-button" disabled>启用真实 AI</button></div>
+  </dialog>
+  <dialog id="import-dialog" aria-labelledby="import-title">
+    <form method="dialog" class="dialog-close"><button class="icon-button" aria-label="关闭">×</button></form>
+    <span class="eyebrow">CONTINUE AN EXPERIMENT</span><h2 id="import-title">从记录中继续这个世界</h2>
+    <p>选择尘湾导出的 JSON 文件（最多 10 MB）。文件仅在本页读取，预览和恢复不会发起模型请求。</p>
+    <label class="field-label" for="import-file">实验存档</label><input id="import-file" type="file" accept=".json,application/json">
+    <p id="import-preview" class="notice import-preview" role="status">选择之前导出的 JSON 文件，查看将恢复的进度。</p>
+    <p class="small muted">确认后替换当前世界和自动进度；独立手动存档不会被覆盖。需要保留当前实验，请先取消并存档或导出。恢复后时间暂停，AI 必须重新授权连接。</p>
+    <p class="small muted">导入会检查格式与状态约束，但文件可被编辑，不能证明记录来自真实模型，也不是完整回放。</p>
+    <div class="dialog-actions"><button id="import-cancel" class="secondary-button">保留当前世界</button><button id="import-confirm" class="primary-button" disabled>恢复这个实验</button></div>
+  </dialog>
+  <dialog id="reset-dialog">
+    <form method="dialog" class="dialog-close"><button class="icon-button" aria-label="关闭">×</button></form>
+    <span class="eyebrow">A NEW BEGINNING</span><h2 id="reset-title">重新开始这个世界</h2><p>当前世界将被替换。需要保留实验记录，请先导出；手动存档不会被覆盖。新世界将暂停，并回到免费规则模式。</p><label class="field-label" for="seed-input">世界种子</label><input id="seed-input" type="number" min="1" max="999999999" value="2049"><div class="dialog-actions"><button id="reset-cancel" class="secondary-button">保留当前世界</button><button id="reset-confirm" class="primary-button">生成新世界</button></div>
+  </dialog>
+  <dialog id="help-dialog">
+    <form method="dialog" class="dialog-close"><button class="icon-button" aria-label="关闭">×</button></form>
+    <span class="eyebrow">THE RULES OF THIS WORLD</span><h2>可观察，而非全知的居民</h2>
+    <div class="help-section"><h3>01 · 时间与生存</h3><p>一轮是四位居民依次行动一次，对应 20 分钟。每轮消耗饱腹、水分与精力；长期缺粮缺水会失去行动能力。关闭或隐藏页面会暂停。</p></div>
+    <div class="help-section"><h3>02 · 物理与工具</h3><p>沿相邻道路移动；领取物资后才能使用。清水恢复 36 水分，干粮恢复 32 饱腹。背包每种最多 12 份。斧头在山脊采木，水泵在水井取水，种子在农场生长；锤子配合 3 木材和 2 石料建公共遮蔽所。斧头与水泵的原料源在此版本不耗尽。</p></div>
+    <div class="help-section"><h3>03 · 独立决策</h3><p>每位居民独立收到个人目标、状态、当前地点、同处邻居、自己的最近 12 条记忆和旧观察。地图拓扑是已知的，远处实时物资与其他居民的内心不可见。低语和交谈只是可能不可靠的信息。</p></div>
+    <div class="help-section"><h3>04 · 诚实评估</h3><p>默认是手写规则基线，不是真实模型。连接 AI 后只展示简短行动意图、执行结果、实际模型输入；不展示或声称读取隐藏思维。模型不能创造新动作或世界法则。实验目标在第 8 轮判定，只能说明该条件下的行为，不代表 AGI。</p></div>
+    <div class="help-section"><h3>05 · 存档与审计</h3><p>自动恢复使用最近进度，手动存档独立保留。导出的 JSON 可通过“导入”预览并恢复，保留轮次、记忆与行动来源；文件最多 10 MB，只在本页读取。加载后暂停，AI 必须手动重新连接。记录保留最近 800 条事件与 200 次观察—行动—结果，超出保留窗口后不是完整回放。文件可编辑，不是来源真实性证明；同种子并不保证模型输出相同。</p></div>
+    <p class="small muted">快捷键：空格运行 / 暂停。所有角色和故事均为原创，世界事件只发生在本页的虚拟环境。</p>
+  </dialog>
+  <script>/* APP_SCRIPT */</script>
+<!-- THIRD_PARTY_LICENSE -->
+</body>
+</html>

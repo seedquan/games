@@ -3,3 +3,6 @@ node_modules/
 
 # Local (per-machine) agent state; shared agent files are tracked.
 .claude/settings.local.json
+
+# Local model-profile config; commit only profiles.example.json.
+westworld/profiles.json

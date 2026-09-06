@@ -28,8 +28,8 @@ npm run build      # regenerate index.html from src/
 npm test           # node --test test/*.test.mjs
 npm start          # local server on http://127.0.0.1:4317/terrarium/
 
-# westworld (dependency-free; no install needed)
-cd westworld
+# westworld (has npm dependencies: three, esbuild)
+cd westworld && npm ci
 npm run build      # regenerate index.html from src/
 npm test           # node --test test/*.test.mjs
 npm start          # local server on http://127.0.0.1:4320/westworld/

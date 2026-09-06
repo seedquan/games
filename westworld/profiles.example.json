@@ -1,0 +1,46 @@
+[
+  {
+    "id": "copilot-mini-low",
+    "label": "Mini / low",
+    "provider": "copilot",
+    "providerLabel": "Copilot",
+    "adapter": "copilot",
+    "model": "gpt-5.4-mini",
+    "effort": "low"
+  },
+  {
+    "id": "copilot-56-low",
+    "label": "GPT-5.6 / low",
+    "provider": "copilot",
+    "providerLabel": "Copilot",
+    "adapter": "copilot",
+    "model": "gpt-5.6-sol",
+    "effort": "low"
+  },
+  {
+    "id": "openai-low",
+    "label": "OpenAI / low",
+    "provider": "openai",
+    "providerLabel": "OpenAI API",
+    "adapter": "openai-compatible",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "model": "gpt-5.4",
+    "effort": "low",
+    "maxOutputTokens": 2048,
+    "tokenLimitField": "max_completion_tokens"
+  },
+  {
+    "id": "openai-high",
+    "label": "OpenAI / high",
+    "provider": "openai",
+    "providerLabel": "OpenAI API",
+    "adapter": "openai-compatible",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "apiKeyEnv": "OPENAI_API_KEY",
+    "model": "gpt-5.4",
+    "effort": "high",
+    "maxOutputTokens": 4096,
+    "tokenLimitField": "max_completion_tokens"
+  }
+]
