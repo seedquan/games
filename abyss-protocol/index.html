@@ -264,12 +264,29 @@ function viewBand() {
   return { x, y, w, h, cx: x + w / 2, cy: y + h / 2 };
 }
 
+const rasterBudget = { pixels: 1500000, elapsed: 0, frames: 0, slow: 0 };
+function observeRasterBudget(frameMs) {
+  const b = rasterBudget;
+  if (document.hidden || frameMs <= 0 || frameMs > 200) {
+    b.elapsed = b.frames = b.slow = 0;
+    return;
+  }
+  b.elapsed += frameMs; b.frames++;
+  if (frameMs > 22) b.slow++;
+  if (b.elapsed < 3000) return;
+  // At most two downward steps per load; no oscillation or physics/input changes.
+  if (b.frames >= 45 && b.slow > b.frames * .08 && b.pixels > 960000) {
+    b.pixels = Math.max(960000, b.pixels * .8);
+    resize();
+  }
+  b.elapsed = b.frames = b.slow = 0;
+}
 function chooseRenderDpr(width, height, deviceDpr, pixelBudget) {
   return Math.min(deviceDpr || 1, 1.5, Math.sqrt(pixelBudget / Math.max(1, width * height)));
 }
 function resize() {
   cw = window.innerWidth; ch = window.innerHeight;
-  dpr = chooseRenderDpr(cw, ch, window.devicePixelRatio || 1, 1500000);
+  dpr = chooseRenderDpr(cw, ch, window.devicePixelRatio || 1, rasterBudget.pixels);
   canvas.width = Math.round(cw * dpr);
   canvas.height = Math.round(ch * dpr);
   canvas.style.width = cw + "px";
@@ -15125,6 +15142,7 @@ function loop(now) {
   let dt = (now - lastT) / 1000;
   lastT = now;
   if (dt > 0.2) dt = 0.2;
+  observeRasterBudget(dt * 1000);
   pollGamepads();      // refresh pad state for this frame
   pollGamepadUI(dt);   // menu / state transitions via gamepad
   if (!paused) {
