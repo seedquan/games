@@ -145,3 +145,32 @@ test('floor cache reuses one bounded surface and invalidates only when its paint
  box.drawArenaFloorSource=()=>{throw Error('paint failed');};box.depth=4;
  assert.throws(()=>box.drawArenaFloor(),/paint failed/);assert.equal(box.ctx,world);
 });
+
+test('camera keeps full player sprite inside HUD-safe bounds at every arena corner',()=>{
+ const start=html.indexOf('function frameArenaAxis('),end=html.indexOf('// Reads numPlayers',start);
+ for(const [cw,ch] of [[390,844],[844,390],[1280,720],[2646,1108]])for(const zoom of [.65,1,1.55,2]) {
+  const u=Math.max(.72,Math.min(1.25,Math.min(cw,ch)/640));
+  const vb={x:16,y:46*u,w:cw-32,h:ch-124*u};vb.cx=vb.x+vb.w/2;vb.cy=vb.y+vb.h/2;
+  const A={arenaW:2200,arenaH:1800},cam={zoom};
+  const box={CONFIG:A,cam,viewBand:()=>vb,clamp:(v,a,b)=>Math.max(a,Math.min(b,v))};
+  vm.createContext(box);vm.runInContext(start>=0?html.slice(start,end):'',box);
+  for(const radius of [12,13,18])for(const x of [12+radius,A.arenaW-12-radius])for(const y of [12+radius,A.arenaH-12-radius]) {
+   cam.cx=x;cam.cy=y;box.computeView();
+   const size=radius*4.4;
+   assert.ok((x-size/2)*zoom+box.aOX>=vb.x-.001,'left sprite clipped');
+   assert.ok((x+size/2)*zoom+box.aOX<=vb.x+vb.w+.001,'right sprite clipped');
+   assert.ok((y-size*.8)*zoom+box.aOY>=vb.y-.001,'head clipped');
+   assert.ok((y+size*.2)*zoom+box.aOY<=vb.y+vb.h+.001,'feet clipped');
+   const screenX=x*zoom+box.aOX,screenY=y*zoom+box.aOY;
+   assert.ok(Math.abs((screenX-box.aOX)/box.aS-x)<1e-8);
+   assert.ok(Math.abs((screenY-box.aOY)/box.aS-y)<1e-8);
+  }
+ }
+});
+test('camera clamps continuously at an edge and centers an arena smaller than its view',()=>{
+ const start=html.indexOf('function frameArenaAxis('),end=html.indexOf('function computeView()',start);
+ const box={clamp:(v,a,b)=>Math.max(a,Math.min(b,v))};vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ assert.equal(box.frameArenaAxis(999,100,0,1000,30,30),450);
+ const samples=[];for(let offset=-100;offset<=200;offset++)samples.push(box.frameArenaAxis(offset,2000,16,1000,32,32));
+ for(let i=1;i<samples.length;i++)assert.ok(Math.abs(samples[i]-samples[i-1])<=1);
+});
