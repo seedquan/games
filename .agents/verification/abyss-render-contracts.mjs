@@ -121,3 +121,32 @@ test('preview movement is confined to player one in the hub',()=>{
  box.state='play';assert.equal(read(0),'{"x":0,"y":0}');
  box.state='hub';box.artAnimationPreview=false;assert.equal(read(0),'{"x":0,"y":0}');
 });
+
+test('north run clip keeps the authored back direction and preserves reverse gait wrapping',()=>{
+ const {box,calls}=harness();box.artAnimationPreview=true;
+ box.abyssArt.runNorth={ready:true,image:{id:'north'}};
+ const p=player();p.aimDraw=-Math.PI/2;p.artRunBlend=1;p.artRunPhase=.875;
+ box.drawTexturedAndroid(p);const draw=calls.find(c=>c[0]==='drawImage');
+ assert.equal(draw[1].id,'north');assert.equal(draw[2],480);assert.equal(draw[3],160);
+ box.advanceRunAnimation(p,0,28,.1);assert.ok(Math.abs(p.artRunPhase-.625)<1e-8);
+ assert.equal(box.runAnimationAsset(p,5),null);
+});
+
+test('stopping a preview at the portal cannot unintentionally start a run',()=>{
+ const {box}=harness();box.artAnimationPreview=true;box.artPreviewExitArmed=true;
+ box.artPreviewMove={x:0,y:-1};box.HUB={exitY:100,exitH:36};
+ const p={y:110,r:12};assert.equal(box.previewAllowsDescent(p),false);
+ box.artPreviewMove=null;assert.equal(box.previewAllowsDescent(p),false);
+ p.y=200;assert.equal(box.previewAllowsDescent(p),true);
+ p.y=110;assert.equal(box.previewAllowsDescent(p),true);
+ box.artAnimationPreview=false;box.artPreviewExitArmed=false;assert.equal(box.previewAllowsDescent(p),true);
+});
+
+test('northeast clip uses its own unmirrored atlas and stays gated in ordinary sessions',()=>{
+ const {box,calls}=harness();box.artAnimationPreview=true;
+ box.abyssArt.runNorthEast={ready:true,image:{id:'northeast'}};
+ const p=player();p.aimDraw=-Math.PI/4;p.artRunBlend=1;p.artRunPhase=.375;
+ box.drawTexturedAndroid(p);const draw=calls.find(c=>c[0]==='drawImage');
+ assert.equal(p.artFacing,7);assert.equal(draw[1].id,'northeast');assert.equal(draw[2],480);assert.equal(draw[3],0);
+ box.artAnimationPreview=false;assert.equal(box.runAnimationAsset(p,7),null);
+});
