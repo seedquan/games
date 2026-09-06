@@ -254,3 +254,26 @@ test('south rig phase uses its calibrated stride while other direction clips ret
  p.artRunPhase=0;p.aimDraw=0;box.advanceRunAnimation(p,14,0,.01);
  assert.ok(Math.abs(p.artRunPhase-.125)<1e-9);
 });
+
+test('chaser atlas draws one body from each of its eight direction cells',()=>{
+ const {box,calls}=harness();box.abyssArt.chaser={ready:true,image:{}};
+ for(let i=0;i<8;i++) {
+  calls.length=0;
+  const e={type:'chaser',x:0,y:0,r:14,state:'seek',_tgt:{x:Math.cos(i*Math.PI/4)*100,y:Math.sin(i*Math.PI/4)*100}};
+  assert.equal(box.drawTexturedEnemy(e,false),true);
+  const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,1);
+  assert.deepEqual(draws[0].slice(2,6),[(i%4)*128,Math.floor(i/4)*128,128,128]);
+ }
+});
+test('chaser facing follows co-op target but locks to committed lunge and frozen pose',()=>{
+ const {box}=harness();box.player={x:-100,y:0};
+ const e={x:0,y:0,state:'seek',_tgt:{x:100,y:0},dirX:0,dirY:1};
+ assert.equal(box.enemyArtFacing(e),0);
+ for(const state of ['wind','lunge']) {e.state=state;assert.equal(box.enemyArtFacing(e),2);}
+ e.frozenT=1;e.dirY=-1;assert.equal(box.enemyArtFacing(e),2);
+ e.frozenT=0;assert.equal(box.enemyArtFacing(e),6);
+ e.state='seek';e._tgt=null;assert.equal(box.enemyArtFacing(e),4);
+});
+test('unloaded chaser atlas preserves procedural fallback',()=>{
+ const {box,calls}=harness();assert.equal(box.drawTexturedEnemy({type:'chaser'},false),false);assert.equal(calls.length,0);
+});
