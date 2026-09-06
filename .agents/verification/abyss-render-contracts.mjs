@@ -576,3 +576,11 @@ test('full-circle melee recovery does not flip at the aim angle wrap boundary',(
  const angles=[];for(const aim of [-.00001,.00001]){p.aimDraw=aim;angles.push(box.rigAttackPose(p,{id:'maul'},{recoil:0,draw:0}).angle);}
  assert.ok(Math.abs(angles[1]-angles[0])<.0001);
 });
+
+test('attack arc uses the drawing actor rather than the previous co-op actor context',()=>{
+ const start=html.indexOf('function meleeArcNow('),end=html.indexOf('\nfunction ',start+20);
+ const box={TAU:Math.PI*2,CONFIG:{meleeArc:2},Math,weaponDefP:p=>p?.weapon||{id:'maul'},boonPow:()=>99};vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ assert.ok(Math.abs(box.meleeArcNow({weapon:{id:'blade',arcMul:.8},boonPow:{arc:2}})-2*1.7*.8)<1e-8);
+ assert.equal(box.meleeArcNow({weapon:{id:'maul',arcMul:1}}),Math.PI*2);
+ assert.equal(box.meleeArcNow(),Math.PI*2);
+});

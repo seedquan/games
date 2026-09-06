@@ -2914,9 +2914,11 @@ function critRoll() {
   return Math.random() < Math.min(0.9, (weaponDefP().critBase || 0) + boonPow("crit") * 0.15 + pd);
 }
 function meleeRangeNow() { return (CONFIG.meleeRange + Math.min(64, boonPow("arc") * 12)) * weaponDefP().rangeMul; }
-function meleeArcNow() {
-  if (weaponDefP().id === "maul") return TAU; // maul: full 360° slam
-  return CONFIG.meleeArc * Math.min(2.4, 1 + boonPow("arc") * 0.35) * weaponDefP().arcMul;
+function meleeArcNow(p) {
+  const W=weaponDefP(p);
+  if (W.id === "maul") return TAU; // maul: full 360° slam
+  const power=p ? (p.boonPow?.arc||0) : boonPow("arc");
+  return CONFIG.meleeArc * Math.min(2.4, 1 + power * 0.35) * W.arcMul;
 }
 
 function applyBoon(id, rar, who) {
@@ -10419,7 +10421,7 @@ function rigAttackPose(p,W,pose) {
     const ease=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
     amount=ease(progress/.12)*ease((1-progress)/.28);
     angle=p.slashAng;
-    if(W.id!=='lance')sweep=(p.slashSide||1)*meleeArcNow()*(Math.min(1,progress*2.4)-.5);
+    if(W.id!=='lance')sweep=(p.slashSide||1)*meleeArcNow(p)*(Math.min(1,progress*2.4)-.5);
   } else amount=Math.max(0,pose.recoil)*.7+Math.min(1,pose.draw)*.6;
   if(amount<=0)return null;
   amount=Math.min(1,amount);
