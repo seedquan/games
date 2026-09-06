@@ -116,3 +116,16 @@ test('combat scenario uses real spawners, resets waves and leaves ordinary mode 
  assert.equal(box.players[0].hp,100000);assert.equal(box.spawnQ.length,0);assert.equal(box.waves.length,0);assert.equal(box.state,'play');assert.equal(box.frameProfile.sampleKey,null);
  box.boss={hp:1000,maxHp:1000};box.startCombatPreview('core3');assert.equal(box.depth,24);assert.equal(box.boss.hp,300);
 });
+
+test('reduced effects omit secondary bloom while retaining a bounded world-light budget',()=>{
+ const bloomStart=html.indexOf('get bloom()'),bloomEnd=html.indexOf('\n  get scanlines()',bloomStart);
+ const capStart=html.indexOf('get lightCap()'),capEnd=html.indexOf('\n  trauma(',capStart);
+ const box={FX_LIGHT_CAP:36};vm.createContext(box);
+ vm.runInContext('globalThis.fx={level:"reduced",'+html.slice(bloomStart,bloomEnd)+html.slice(capStart,capEnd)+'};',box);
+ assert.equal(box.fx.bloom,false);assert.equal(box.fx.lightCap,8);
+ box.fx.level='full';assert.equal(box.fx.bloom,true);assert.equal(box.fx.lightCap,36);
+ box.fx.level='off';assert.equal(box.fx.bloom,false);assert.equal(box.fx.lightCap,0);
+ const calls=[];box.ffx=box.fx;box.ctx={save:()=>calls.push('save')};box.drawRadialLight=()=>calls.push('light');
+ const start=html.indexOf('function bloomCircle('),end=html.indexOf('function drawMotes()',start);
+ vm.runInContext(html.slice(start,end),box);box.fx.level='reduced';box.bloomCircle(1,2,30,'#fff',.5);assert.equal(calls.length,0);
+});

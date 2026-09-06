@@ -50,3 +50,24 @@ Profiling resets its rolling sample on scene, pause, effect-level, or backing-si
 changes, and reports viewport size and entity counts to prevent mixed samples.
 15 focused tests passed, including cache reuse, eviction bounds, alpha
 restoration and profiling sample resets. No additional FPS improvement is claimed before browser sampling.
+
+## Dense combat follow-up
+
+The isolated 48-enemy scenario exposed a remaining raster bottleneck at
+3440x1440: 39 remaining enemies / 23–26 projectiles sampled 37.9–38.5 FPS,
+P95 33.8–33.9 ms, even after world resolution settled at 1514x634. Disabling the
+separate UI layer still produced ~38 FPS at the same viewport. In the same live
+room later, off effects reached 60 FPS (29 enemies / 6 projectiles), while
+returning to reduced dropped to 49 FPS (28 enemies / 6 projectiles). These are
+randomized exploratory samples, not a controlled deterministic benchmark.
+
+Reduced still enabled every secondary additive bloom halo and up to 22 world
+lights. Restrict those secondary halos to full and lower reduced world lights to
+8; actual projectile/actor shapes, warnings, hits and collision logic are intact.
+Full retains its existing appearance and off retains no world lights. This is a
+bounded rendering-quality adjustment, not a simulation load reduction.
+
+32 focused checks pass, including preset-specific bloom/light behavior and no
+secondary light draw in reduced. Syntax and whitespace pass. Public combat
+re-measurement and visual comparison follow deployment; do not claim 60 FPS
+until those measurements exist.
