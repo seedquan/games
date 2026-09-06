@@ -10043,28 +10043,28 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160) {
   const hipY=82+bounce;
   const drawLeg = side => {
     const step=southRigStep(phase,side,blend,worldScale), suffix=side<0?'L':'R';
-    const hipX=80+side*9;
-    const ankleX=80+side*(11+step.lift*1.5);
-    const ankleY=127-15*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL-step.lift*12;
-    const kneeX=80+side*(10+step.lift*3);
+    const hipX=80+side*12;
+    const ankleX=80+side*(22-11*blend+step.lift*1.5);
+    const ankleY=124-12*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL-step.lift*12;
+    const kneeX=80+side*(18-8*blend+step.lift*3);
     const kneeY=hipY+(ankleY-hipY)*.51+step.lift*2;
     drawSouthRigPart(image,'foot'+suffix,ankleX,ankleY,ankleX+side,ankleY+13-step.lift*3,.13);
-    drawSouthRigPart(image,'shin'+suffix,kneeX,kneeY,ankleX,ankleY,.12);
-    drawSouthRigPart(image,'thigh'+suffix,hipX,hipY,kneeX,kneeY,.14);
+    drawSouthRigPart(image,'shin'+suffix,kneeX,kneeY,ankleX,ankleY,.14);
+    drawSouthRigPart(image,'thigh'+suffix,hipX,hipY,kneeX,kneeY,.17);
   };
   // The leg farther up the floor is painted first; parts overlap at their joints.
   const left=southRigStep(phase,-1,blend,worldScale), right=southRigStep(phase,1,blend,worldScale);
   if (left.travel<right.travel) { drawLeg(-1);drawLeg(1); } else { drawLeg(1);drawLeg(-1); }
   const drawArm = side => {
     const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend,worldScale);
-    const sx=80+side*15,sy=43+bounce;
-    const ex=80+side*(20+step.lift*2),ey=64+bounce+step.travel*3;
-    const wx=80+side*(23+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
+    const sx=80+side*18,sy=43+bounce;
+    const ex=80+side*(25-5*blend+step.lift*2),ey=64+bounce+step.travel*3;
+    const wx=80+side*(31-8*blend+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
     drawSouthRigPart(image,'fore'+suffix,ex,ey,wx,wy,.145);
     drawSouthRigPart(image,'upper'+suffix,sx,sy,ex,ey,.17);
   };
   drawArm(-1);drawArm(1);
-  drawSouthRigPart(image,'core',80,hipY,80,hipY-67,.2);
+  drawSouthRigPart(image,'core',80,hipY,80,hipY-75,.22);
   return true;
 }
 const EAST_RIG_PARTS = {
@@ -10101,9 +10101,9 @@ function drawEastRig(phase,blend,worldScale=13*4.4/160) {
   const bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend;
   const leg=side=>{
     const step=southRigStep(phase,side,blend,worldScale),suffix=side<0?'L':'R';
-    const hx=80+side*3,hy=82+side*2+bounce;
-    const ax=80+side*3+step.travel*SOUTH_RIG_FOOT_TRAVEL;
-    const ay=126+side*2-step.lift*19;
+    const hx=80-side*3,hy=82+side*2+bounce;
+    const ax=(side>0?76:88)*(1-blend)+(80-side*3)*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL;
+    const ay=(side>0?135:128)*(1-blend)+(126+side*2)*blend-step.lift*19;
     const knee=eastRigKnee(hx,hy,ax,ay);
     part('foot'+suffix,ax,ay,ax+13,ay+6-step.lift*4,.13);
     part('shin'+suffix,knee.x,knee.y,ax,ay,.13);
@@ -10111,14 +10111,14 @@ function drawEastRig(phase,blend,worldScale=13*4.4/160) {
   };
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
-    const sx=80+side*5,sy=47+side*2+bounce;
-    const ex=sx+4+step.travel*9,ey=66+bounce-step.lift*4;
-    const wx=sx+12+step.travel*12,wy=80+bounce-step.lift*8;
+    const sx=79-side*6,sy=44+side*2+bounce;
+    const ex=sx+2+2*blend+step.travel*9,ey=66+bounce-step.lift*4;
+    const wx=sx+3+9*blend+step.travel*12,wy=85-5*blend+bounce-step.lift*8;
     part('fore'+suffix,ex,ey,wx,wy,.14);
     part('upper'+suffix,sx,sy,ex,ey,.17);
   };
   leg(-1);arm(-1);leg(1);
-  part('core',80,82+bounce,81,18+bounce,.18);
+  part('core',80,82+bounce,81,9+bounce,.18);
   arm(1);
   return true;
 }
