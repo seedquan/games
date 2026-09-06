@@ -2669,11 +2669,13 @@ const ffx = {
     this.setLevel(order[(order.indexOf(this.level) + 1) % order.length]);
     audio.uiSnd();
   },
-  get bloom() { return this.level !== "off"; },
+  // Separate additive halos multiply raster work in projectile-heavy rooms.
+  // Reduced retains the primary emissive shapes and bounded world lights.
+  get bloom() { return this.level === "full"; },
   get scanlines() { return this.level === "full"; },
   get ambient() { return this.level !== "off"; },
   get shakeScale() { return this.level === "off" ? 0.35 : this.level === "reduced" ? 0.7 : 1; },
-  get lightCap() { return this.level === "full" ? FX_LIGHT_CAP : this.level === "reduced" ? 22 : 0; },
+  get lightCap() { return this.level === "full" ? FX_LIGHT_CAP : this.level === "reduced" ? 8 : 0; },
   trauma(v) { this.traumaV = Math.min(1, this.traumaV + v * this.shakeScale); },
   spawnLight(x, y, r, col, a) {
     if (this.level === "off") return;
