@@ -10247,15 +10247,49 @@ function drawTexturedFloor(biIdx,x,y,w,h) {
   ctx.save(); ctx.globalAlpha=.72; ctx.fillStyle=asset.pattern; ctx.fillRect(x,y,w,h); ctx.restore();
 }
 
+// Static floor layers are painted once at native world resolution, bounded to
+// four million pixels (16 MB RGBA). Camera movement and raster downshifts reuse
+// the same image. Actors, telegraphs, dynamic light and terrain stay live.
+let arenaFloorCache = null;
 function drawArenaFloor() {
+  if (profileQuery.get('floorCache') === '0') {
+    drawArenaFloorSource();drawArenaWalls();return;
+  }
+  const A=CONFIG,biIdx=state==='hub'?0:biomeIdxForDepth(depth);
+  const asset=abyssArt[biIdx===1||biIdx===4?'abyss':'station'];
+  const key=[A.arenaW,A.arenaH,biIdx,ffx.level,touchUI,!!asset?.ready].join(':');
+  if (!arenaFloorCache || arenaFloorCache.key!==key) {
+    const surface=arenaFloorCache?.surface || document.createElement('canvas');
+    const scale=Math.min(1,Math.sqrt(4000000/(A.arenaW*A.arenaH)));
+    surface.width=Math.max(1,Math.floor(A.arenaW*scale));
+    surface.height=Math.max(1,Math.floor(A.arenaH*scale));
+    const target=surface.getContext('2d');
+    const previous=ctx;
+    try {
+      ctx=target;
+      target.setTransform(surface.width/A.arenaW,0,0,surface.height/A.arenaH,0,0);
+      drawArenaFloorSource(true);
+    } finally { ctx=previous; }
+    arenaFloorCache={key,surface};
+  }
+  const surface=arenaFloorCache.surface;
+  const x0=clamp(-aOX/aS-8,0,A.arenaW),y0=clamp(-aOY/aS-8,0,A.arenaH);
+  const x1=clamp((cw-aOX)/aS+8,0,A.arenaW),y1=clamp((ch-aOY)/aS+8,0,A.arenaH);
+  if(x1>x0&&y1>y0) {
+    const sx=surface.width/A.arenaW,sy=surface.height/A.arenaH;
+    ctx.drawImage(surface,x0*sx,y0*sy,(x1-x0)*sx,(y1-y0)*sy,x0,y0,x1-x0,y1-y0);
+  }
+  drawArenaWalls();
+}
+function drawArenaFloorSource(fullArena = false) {
   const A = CONFIG;
   const biIdx = state === "hub" ? 0 : biomeIdxForDepth(depth);
   const bi = BIOMES[biIdx];
   const detail = ffx.level !== "off" && !touchUI; // floor flourishes gate with EFFECTS/touch
   // floor — fill only the visible window (arena is bigger than the screen now).
   // Compute the visible rect LOCALLY (don't clobber the shared _viewRect used for cull margins).
-  const vx0 = (0 - aOX) / aS - 8, vy0 = (0 - aOY) / aS - 8;
-  const vx1 = (cw - aOX) / aS + 8, vy1 = (ch - aOY) / aS + 8;
+  const vx0 = fullArena ? 0 : (0 - aOX) / aS - 8, vy0 = fullArena ? 0 : (0 - aOY) / aS - 8;
+  const vx1 = fullArena ? A.arenaW : (cw - aOX) / aS + 8, vy1 = fullArena ? A.arenaH : (ch - aOY) / aS + 8;
   const fx0 = clamp(vx0, 0, A.arenaW), fy0 = clamp(vy0, 0, A.arenaH);
   const fx1 = clamp(vx1, 0, A.arenaW), fy1 = clamp(vy1, 0, A.arenaH);
   ctx.fillStyle = bi.floor;
@@ -10320,7 +10354,10 @@ function drawArenaFloor() {
   g.addColorStop(1, "rgba(0,0,0,0)");
   ctx.fillStyle = g;
   ctx.fillRect(fx0, fy0, fx1 - fx0, fy1 - fy0);
-  // walls
+}
+
+function drawArenaWalls() {
+  const A=CONFIG;
   const w = A.wall;
   glow(state === "hub" ? "#44ddaa" : "#3355ff", 14);
   ctx.strokeStyle = state === "hub" ? "rgba(80,230,180,0.7)" : "rgba(90,110,255,0.65)";
