@@ -36,3 +36,32 @@ test('sustained slow frames reduce raster budget; stable frames and hidden tabs 
  for(let i=0;i<1000;i++)box.observeRasterBudget(40);
  assert.equal(resizes,old);
 });
+test('radial lights reuse bounded cached sprites across positions and radii',()=>{
+ const start=html.indexOf('const radialLightCache =');assert.notEqual(start,-1);
+ const end=html.indexOf('/* additive bloom helper',start);
+ let builds=0,draws=0;
+ const tileCtx={createRadialGradient:()=>{builds++;return {addColorStop(){}};},fillRect(){}};
+ const box={Math,Map,document:{createElement:()=>({getContext:()=>tileCtx})},ctx:{globalAlpha:.5,drawImage(){draws++;}}};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ for(let i=0;i<200;i++)box.drawRadialLight(i,i,30+i,'#5ee6ff',.4);
+ assert.equal(builds,1);assert.equal(draws,200);assert.equal(box.ctx.globalAlpha,.5);
+ for(let i=0;i<100;i++)box.drawRadialLight(0,0,50,`rgb(${i},0,0)`,.5);
+ assert.ok(vm.runInContext('radialLightCache.size',box)<=64);
+ const before=draws;box.drawRadialLight(0,0,0,'#fff',1);box.drawRadialLight(0,0,20,'#fff',0);assert.equal(draws,before);
+});
+test('profiling resets samples when scene or canvas size changes',()=>{
+ const start=html.indexOf('function recordFrameProfile(');
+ const end=html.indexOf('\nlet aS =',start);
+ const box={document:{hidden:false},frameProfile:{intervals:[],render:[],lastPublish:0},state:'hub',paused:false,canvas:{width:1000,height:800,dataset:{}},ffx:{level:'reduced'},dpr:1,cw:1000,ch:800,enemies:[],bullets:[],pbolts:[],ebolts:[],spells:[],glaives:[],radialLightCache:new Map()};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ for(let i=0;i<150;i++)box.recordFrameProfile(i*17,17,.2);
+ assert.equal(JSON.parse(box.canvas.dataset.frameProfile).state,'hub');
+ box.state='play';box.recordFrameProfile(2600,17,.2);
+ assert.equal(box.canvas.dataset.frameProfile,undefined);
+ assert.equal(box.frameProfile.intervals.length,1);
+ for(let i=1;i<150;i++)box.recordFrameProfile(2600+i*17,17,.2);
+ assert.equal(JSON.parse(box.canvas.dataset.frameProfile).state,'play');
+ box.canvas.width=900;box.recordFrameProfile(5200,17,.2);
+ assert.equal(box.canvas.dataset.frameProfile,undefined);
+ assert.equal(box.frameProfile.intervals.length,1);
+});

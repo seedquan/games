@@ -38,3 +38,15 @@ a three-second window with >8% frames above 22 ms reduces the pixel budget by
 20%, stopping at 0.96 MP. Hidden-tab samples are discarded; there is no automatic
 up/down oscillation during a run. This changes only rendering resolution.
 The additional controller regression passes (13 tests total).
+
+## Cached radial lighting
+
+Repeated radial gradients now use reusable 128×128 canvas sprites keyed by
+color, capped at 64 entries (4 MiB of pixel storage). Radius and opacity remain
+per-draw values; additive blending is preserved. This removes repeated gradient
+construction without reducing game simulation or input frequency.
+
+Profiling resets its rolling sample on scene, pause, effect-level, or backing-size
+changes, and reports viewport size and entity counts to prevent mixed samples.
+15 focused tests passed, including cache reuse, eviction bounds, alpha
+restoration and profiling sample resets. No additional FPS improvement is claimed before browser sampling.
