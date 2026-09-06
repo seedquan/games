@@ -82,3 +82,16 @@ test('UI resolution stays independent of adaptive world resolution and bounds re
  assert.equal(box.chooseUiDpr(390,844,3),1.5);
  box.uiCanvas=null;box.uiContext=null;const before=operations.length;box.beginUiLayer();assert.equal(operations.length,before);
 });
+
+test('compact pause targets fit portrait and landscape viewports at touch size',()=>{
+ const start=html.indexOf('function pauseLayout('),end=html.indexOf('function drawPause()',start);
+ const box={Math};vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ for(const [w,h] of [[320,568],[390,844],[844,390],[390,390]]) {
+  const l=box.pauseLayout(w,h,1);assert.ok(l.bh>=44);
+  for(let i=0;i<4;i++) {
+   const x=l.bx+(i%l.cols)*(l.bw+l.gap),y=l.by+Math.floor(i/l.cols)*(l.bh+l.gap);
+   assert.ok(x>=16&&x+l.bw<=w-15);assert.ok(y>0&&y+l.bh<h-40);
+  }
+ }
+ assert.equal(box.pauseLayout(3440,1440,1.25).cols,1);
+});
