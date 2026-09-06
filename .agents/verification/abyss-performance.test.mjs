@@ -52,10 +52,11 @@ test('radial lights reuse bounded cached sprites across positions and radii',()=
 test('profiling resets samples when scene or canvas size changes',()=>{
  const start=html.indexOf('function recordFrameProfile(');
  const end=html.indexOf('\nlet aS =',start);
- const box={document:{hidden:false},frameProfile:{intervals:[],render:[],lastPublish:0},state:'hub',paused:false,canvas:{width:1000,height:800,dataset:{}},ffx:{level:'reduced'},uiCanvas:null,uiDpr:1,dpr:1,cw:1000,ch:800,enemies:[],bullets:[],pbolts:[],ebolts:[],spells:[],glaives:[],radialLightCache:new Map()};
+ const box={androidRigsReady:()=>true,document:{hidden:false},frameProfile:{intervals:[],render:[],lastPublish:0},state:'hub',paused:false,canvas:{width:1000,height:800,dataset:{}},ffx:{level:'reduced'},uiCanvas:null,uiDpr:1,dpr:1,cw:1000,ch:800,enemies:[],bullets:[],pbolts:[],ebolts:[],spells:[],glaives:[],radialLightCache:new Map()};
  vm.createContext(box);vm.runInContext(html.slice(start,end),box);
  for(let i=0;i<150;i++)box.recordFrameProfile(i*17,17,.2);
  assert.equal(JSON.parse(box.canvas.dataset.frameProfile).state,'hub');
+ assert.equal(JSON.parse(box.canvas.dataset.frameProfile).rigsReady,true);
  box.state='play';box.recordFrameProfile(2600,17,.2);
  assert.equal(box.canvas.dataset.frameProfile,undefined);
  assert.equal(box.frameProfile.intervals.length,1);
