@@ -604,3 +604,40 @@ test('normal gameplay enables the entire eight-direction rig set atomically',()=
   assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  }
 });
+
+test('textured bomber keeps live fuse countdown and unloaded fallback',()=>{
+ const {box,calls}=harness();
+ const e={type:'bomber',state:'fuse',x:20,y:30,r:12,t:.4,phase:0};
+ assert.equal(box.drawTexturedEnemy(e,false),false);assert.equal(calls.length,0);
+ box.abyssArt.bomber={ready:true,image:{}};
+ assert.equal(box.drawTexturedEnemy(e,false),true);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ const arc=calls.find(c=>c[0]==='arc');assert.ok(Math.abs(arc[5]-(-Math.PI/2+Math.PI*2*.6))<1e-8);
+ calls.length=0;e.state='chase';box.drawTexturedEnemy(e,false);
+ assert.equal(calls.filter(c=>c[0]==='arc').length,0);
+});
+
+test('medic beam survives textured bodies and only runs in the ground pass',()=>{
+ const calls=[];
+ const ctx=new Proxy({}, {get(o,k){return k in o ? o[k] : (...args)=>calls.push([k,...args]);}});
+ const box={ctx,Math,TAU:Math.PI*2,timeNow:0,player:null,spriteDetail:()=>false,
+ clamp:(v,a,b)=>Math.max(a,Math.min(b,v)),glow:()=>{},noglow:()=>{},
+ drawTexturedEnemy:()=>true,enemyLabelTop:()=>-26};
+ vm.createContext(box);const start=html.indexOf('function drawEnemy(');
+ vm.runInContext(html.slice(start,html.indexOf('/* the held weapon',start)),box);
+ const e={type:'medic',state:'chase',x:0,y:0,r:11,col:'#6fc',hp:24,maxHp:24,healTgt:{x:100,y:80,hp:10}};
+ box.drawEnemy(e,'telegraph');assert.ok(calls.some(c=>c[0]==='lineTo'&&c[1]===100&&c[2]===80));
+ calls.length=0;box.drawEnemy(e,'body');assert.ok(!calls.some(c=>c[0]==='lineTo'));
+ calls.length=0;e.healTgt.hp=0;box.drawEnemy(e,'telegraph');assert.ok(!calls.some(c=>c[0]==='lineTo'));
+});
+
+test('stationary textured pylon does not bob and mortar charge stays live',()=>{
+ const {box,calls}=harness();box.abyssArt.totem={ready:true,image:{}};box.abyssArt.lobber={ready:true,image:{}};
+ const e={type:'totem',x:0,y:0,r:15,phase:1};
+ box.drawTexturedEnemy(e,false);const y=calls.find(c=>c[0]==='drawImage')[3];
+ calls.length=0;box.timeNow=2;box.drawTexturedEnemy(e,false);
+ assert.equal(calls.find(c=>c[0]==='drawImage')[3],y);
+ calls.length=0;e.type='lobber';e.state='lob';e.t=.1;box.drawTexturedEnemy(e,false);
+ assert.equal(calls.filter(c=>c[0]==='stroke').length,1);
+ calls.length=0;e.state='chase';box.drawTexturedEnemy(e,false);assert.equal(calls.filter(c=>c[0]==='stroke').length,0);
+});
