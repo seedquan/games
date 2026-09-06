@@ -10312,7 +10312,7 @@ function drawSouthWestRig(phase,blend,worldScale=13*4.4/160,motion) {
 }
 
 function drawPreviewRig(key,phase,blend,worldScale,motion) {
-  return (key==='rigSouthWest'?drawSouthWestRig:key==='rigSouthEast'?drawSouthEastRig:key==='rigNorthWest'?drawNorthWestRig:key==='rigNorthEast'?drawNorthEastRig:key==='rigNorth'?drawNorthRig:key==='rigEast'?drawEastRig:key==='rigWest'?drawWestRig:drawSouthRig)(phase,blend,worldScale,motion);
+  return (key==='rigSouthWest'?drawSouthWestRig:key==='rigSouthEast'?drawSouthEastRig:key==='rigNorthWest'?drawNorthWestRig:key==='rigNorthEast'?drawNorthEastRig:key==='rigNorth'?drawNorthRig:key==='rigEast'?drawEastRig:key==='rigWest'?drawWestRig:drawSouthRig)(phase,blend,worldScale,motion ?? undefined);
 }
 
 function drawSouthRigReview() {

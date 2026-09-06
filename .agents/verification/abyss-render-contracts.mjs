@@ -523,3 +523,15 @@ test('fully stopped characters restart in the new direction without stale stride
  box.advanceRunAnimation(p,0,-20,.1);assert.equal(p.artMotion.x,0);assert.equal(p.artMotion.y,-1);
  box.advanceRunAnimation(p,0,0,0);assert.ok(Number.isFinite(p.artRunPhase));assert.equal(p.artMotion.y,-1);
 });
+
+test('all rigs render after movement settles and clears the motion vector',()=>{
+ const keys=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
+ for(let dir=0;dir<8;dir++){
+  const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
+  const p=player();p.aimDraw=dir*Math.PI/4;
+  box.advanceRunAnimation(p,20,0,.1);box.advanceRunAnimation(p,0,0,.5);
+  assert.equal(p.artMotion,null);assert.doesNotThrow(()=>box.drawTexturedAndroid(p));
+  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
+  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
+ }
+});
