@@ -215,6 +215,7 @@ let cw = 0, ch = 0, dpr = 1;
 // Opt-in local telemetry: no network, storage, or normal-game overlay.
 const profileQuery = new URLSearchParams(location.search);
 const artAnimationPreview = profileQuery.has("animationPreview");
+let artPreviewMove = null;
 const frameProfile = profileQuery.has("profile") ? {
   intervals: [], render: [], shadows: 0, lastPublish: 0,
   disableShadows: profileQuery.get("shadows") === "off",
@@ -5644,6 +5645,7 @@ function p1ArrowsActive() { return !p2UsesKeyboard(); }
 
 /* movement vector for a specific player from its assigned device(s) */
 function moveInputFor(p) {
+  if (artAnimationPreview && state === 'hub' && p.idx === 0 && artPreviewMove) return artPreviewMove;
   let mx = 0, my = 0;
   const pad = padForPlayer(p.idx);
   if (p.idx === 0) {
@@ -7587,6 +7589,7 @@ function readPlayerControls(p) {
 }
 
 function updatePlayer(p, dt) {
+  if (state !== 'hub') artPreviewMove = null;
   ctxP = p;
   if (p.downed) { updateDowned(p, dt); return; }
   const c = readPlayerControls(p);
@@ -7613,6 +7616,7 @@ function updatePlayer(p, dt) {
     if (near) p.aim = angTo(p.x, p.y, near.x, near.y);
     else p.aim = Math.atan2(p.lastDir.y, p.lastDir.x);
   }
+  if (artAnimationPreview && artPreviewMove && p.idx === 0 && state === 'hub') p.aim = Math.atan2(artPreviewMove.y, artPreviewMove.x);
   // timers
   p.slashCD = Math.max(0, p.slashCD - dt);
   p.slashT = Math.max(0, p.slashT - dt);
@@ -9863,6 +9867,30 @@ for (const [key, src] of Object.entries(ABYSS_ART_DATA)) {
     image.onload = image.onerror = null;
   };
   image.src = src;
+}
+if (artAnimationPreview) {
+  const panel = document.createElement('aside');
+  panel.setAttribute('aria-label', '跑步动画预览');
+  panel.style.cssText = 'position:fixed;z-index:100;right:18px;top:55px;padding:12px;background:#102033ed;border:1px solid #53768c;border-radius:8px;color:#d8e9f4;font:13px system-ui;max-width:300px';
+  panel.innerHTML = '<div>跑步预览 · 仅枢纽</div><div style="display:flex;gap:6px;margin:8px 0"><button type="button">持续向东</button><button type="button">持续向南</button><button type="button">停止</button></div><output>进入枢纽后开始</output>';
+  const buttons = panel.querySelectorAll('button');
+  buttons.forEach(b => b.style.cssText = 'padding:7px;background:#234056;color:#edf7ff;border:1px solid #60899c;border-radius:4px;cursor:pointer');
+  const setMove = move => { if (state === 'hub') artPreviewMove = move; };
+  buttons[0].onclick = () => setMove({ x: 1, y: 0 });
+  buttons[1].onclick = () => setMove({ x: 0, y: 1 });
+  buttons[2].onclick = () => { artPreviewMove = null; };
+  panel.addEventListener('pointerdown', e => e.stopPropagation());
+  panel.addEventListener('keydown', e => e.stopPropagation());
+  document.body.append(panel);
+  window.addEventListener('blur', () => { artPreviewMove = null; });
+  window.addEventListener('keydown', () => { artPreviewMove = null; });
+  // Visible diagnostics allow repeatable preview checks without touching game state from DevTools.
+  setInterval(() => {
+    const p = players[0];
+    buttons[0].disabled = buttons[1].disabled = state !== 'hub';
+    panel.querySelector('output').textContent = state !== 'hub' || !p ? '进入枢纽后开始' :
+      '朝向 ' + (p.artFacing ?? '-') + ' · 第 ' + (1 + Math.floor((p.artRunPhase || 0) * 8)) + ' 帧 · 跑步 ' + Math.round((p.artRunBlend || 0) * 100) + '%';
+  }, 150);
 }
 function textureFacing(angle, previous) {
   const step = Math.PI / 4;

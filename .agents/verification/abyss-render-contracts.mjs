@@ -113,3 +113,11 @@ test('run previews retain unloaded and unconverted direction fallbacks',()=>{
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
  assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
 });
+test('preview movement is confined to player one in the hub',()=>{
+ const box={artAnimationPreview:true,state:'hub',artPreviewMove:{x:1,y:0},keys:{},joy:{id:-1},padForPlayer:()=>null,p1ArrowsActive:()=>true,p2UsesKeyboard:()=>false,Math};
+ vm.createContext(box);const start=html.indexOf('function moveInputFor(');vm.runInContext(html.slice(start,html.indexOf('/* legacy alias',start)),box);
+ const read=idx=>JSON.stringify(box.moveInputFor({idx}));
+ assert.equal(read(0),' {"x":1,"y":0}'.trim());assert.equal(read(1),'{"x":0,"y":0}');
+ box.state='play';assert.equal(read(0),'{"x":0,"y":0}');
+ box.state='hub';box.artAnimationPreview=false;assert.equal(read(0),'{"x":0,"y":0}');
+});

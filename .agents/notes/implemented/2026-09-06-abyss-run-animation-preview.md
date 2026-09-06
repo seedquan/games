@@ -22,3 +22,10 @@ hurt, parry and co-op feedback remain in their existing renderer paths.
 idle blending and unavailable-clip fallback. Inline syntax and whitespace checks
 pass. Browser animation and frame-rate validation are still required. This does
 not complete full directional animation, all-enemy textures, or art acceptance.
+
+Preview follow-up: add visible East/South/Stop controls for sustained in-game
+movement using browser tools that only expose short key presses. These controls
+only affect player one in the hub, release on keyboard input/window blur, and
+clear on leaving the hub. A visible frame/blend readout supports live checks.
+18 focused tests pass; the added scope regression checks normal mode, combat,
+and player two are unaffected. The controls are absent from ordinary sessions.
