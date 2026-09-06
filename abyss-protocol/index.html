@@ -202,9 +202,10 @@ const angDiff = (a, b) => {
 };
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
+const combatPreviewEnabled = new URLSearchParams(location.search).has("combatPreview");
 const store = {
-  get(k) { try { return localStorage.getItem("abyssprotocol." + k); } catch (e) { return this._m && this._m[k]; } },
-  set(k, v) { try { localStorage.setItem("abyssprotocol." + k, v); } catch (e) { (this._m = this._m || {})[k] = v; } },
+  get(k) { if (combatPreviewEnabled) return this._m && this._m[k]; try { return localStorage.getItem("abyssprotocol." + k); } catch (e) { return this._m && this._m[k]; } },
+  set(k, v) { if (combatPreviewEnabled) { (this._m = this._m || {})[k] = v; return; } try { localStorage.setItem("abyssprotocol." + k, v); } catch (e) { (this._m = this._m || {})[k] = v; } },
 };
 
 /* ---------------- canvas / view ---------------- */
@@ -228,7 +229,7 @@ const artAnimationPreview = profileQuery.has("animationPreview");
 const southRigPreviewEnabled = artAnimationPreview && profileQuery.has("rigPreview");
 const guardianReviewEnabled = artAnimationPreview && profileQuery.has("guardianPreview");
 let artPreviewMove = null, artPreviewExitArmed = true;
-const frameProfile = profileQuery.has("profile") ? {
+const frameProfile = (profileQuery.has("profile") || combatPreviewEnabled) ? {
   intervals: [], render: [], shadows: 0, lastPublish: 0,
   disableShadows: profileQuery.get("shadows") === "off",
 } : null;
@@ -9923,6 +9924,57 @@ if (artAnimationPreview) {
       '朝向 ' + (p.artFacing ?? '-') + ' · 第 ' + (1 + Math.floor((p.artRunPhase || 0) * 8)) + ' 帧 · 跑步 ' + Math.round((p.artRunBlend || 0) * 100) + '%';
   }, 150);
 }
+// Visible, opt-in profiling scenarios run the real combat systems with an
+// in-memory save store. Increased player HP keeps a sample alive without
+// skipping damage, collisions, enemy AI or projectile effects.
+let combatPreviewScenario = '';
+function startCombatPreview(kind) {
+  if (!combatPreviewEnabled || !['crowd','core1','core2','core3'].includes(kind)) return;
+  numPlayers=1;curWeapon='blade';
+  enterHub();startRun();
+  depth=kind==='crowd'?12:FINAL_DEPTH;
+  pendingRoom=kind==='crowd'?'normal':'boss';
+  genRoom();
+  placePlayers(CONFIG.arenaW/2,CONFIG.arenaH/2+160);
+  for(const p of players) p.hp=p.maxHp=100000;
+  if(kind==='crowd') {
+    enemies=[];spawnQ=[];waves=[];waveIdx=0;boss=null;bossEntrance=null;
+    eliteRoom=false;eliteSpawned=false;
+    const types=Object.keys(ENEMY_DEFS);
+    for(let i=0;i<48;i++) {
+      const angle=i/48*TAU,radius=150+(i%3)*55;
+      spawnEnemy(types[i%types.length],player.x+Math.cos(angle)*radius,player.y+Math.sin(angle)*radius);
+    }
+  } else if(boss) {
+    boss.x=player.x;boss.y=player.y-260;
+    boss.hp=boss.maxHp*(kind==='core3'?.3:kind==='core2'?.63:1);
+  }
+  snapCamera();
+  combatPreviewScenario=kind;
+  state='play';paused=false;
+  if(frameProfile) frameProfile.sampleKey=null;
+}
+if(combatPreviewEnabled) {
+  const panel=document.createElement('aside');
+  panel.setAttribute('aria-label','战斗性能测试');
+  panel.style.cssText='position:fixed;z-index:100;top:54px;right:16px;width:270px;padding:12px;background:#0b1929ed;border:1px solid #52768b;border-radius:8px;color:#d7eaf3;font:13px system-ui';
+  panel.innerHTML='<div>战斗性能测试 · 独立临时存档</div><p style="margin:6px 0">耐久强化，保留实际伤害与敌人 AI。随机场景，结果不代表整局帧率。</p><div style="display:flex;gap:6px;flex-wrap:wrap"><button>48 敌混战</button><button>核心 P1</button><button>核心 P2</button><button>核心 P3</button><button>停止测试</button></div><output style="display:block;margin-top:8px">选择场景开始</output>';
+  const buttons=panel.querySelectorAll('button');
+  buttons.forEach((b,i)=>{
+    b.style.cssText='padding:8px;border:1px solid #56778c;border-radius:4px;background:#203b50;color:#edf6fa;cursor:pointer';
+    b.onclick=()=>{if(i===4){combatPreviewScenario='';enterHub();}else startCombatPreview(['crowd','core1','core2','core3'][i]);};
+  });
+  panel.addEventListener('pointerdown',e=>e.stopPropagation());
+  panel.addEventListener('keydown',e=>e.stopPropagation());
+  document.body.append(panel);
+  setInterval(()=>{
+    const data=canvas.dataset.frameProfile;
+    const profile=data?JSON.parse(data):null;
+    panel.querySelector('output').textContent=combatPreviewScenario?
+      combatPreviewScenario+' · 敌人 '+enemies.length+' · 弹体 '+(bullets.length+pbolts.length+ebolts.length+spells.length+glaives.length)+' · '+(profile?profile.fps+' FPS / P95 '+profile.p95+' ms':'采样中'):'选择场景开始';
+  },250);
+}
+
 // Reuse one tiny premultiplied-alpha surface for transitions between body poses.
 // Adding weighted images here avoids the opacity dip of two source-over draws.
 let androidTransitionSurface = null;
