@@ -43,3 +43,24 @@ pass; all 12 assets are data URLs and the HTML contains no external URLs. The ne
 public preview still needs live browser validation after Pages deploys. West
 iterations were rejected for direction reversal or repeated leg poses; full
 eight-direction gait and production art acceptance remain open.
+
+Transition opacity / guardian body follow-up: two source-over draws at 50% each
+leave overlapping opaque body pixels at 75% opacity. Crossfades now combine the
+weighted poses using additive premultiplied alpha on one reusable 160×160 canvas,
+then draw the result once with the actor's existing hurt alpha. The surface is
+allocated only on the first preview transition; ordinary play never needs it.
+
+The guardian image is now a transparent body without a painted barrier. The live
+shield body uses it in ordinary play, while both textured and vector fallback
+paths share the existing directional barrier renderer. Shield health, hit flash,
+freeze, shock and exposure still control visibility through shieldActive. No
+combat logic changed. An optional `animationPreview=1&guardianPreview=1` gallery
+shows intact, depleted and frozen specimens through the actual renderer, without
+adding them to the combat entity list or touching saves.
+
+23 focused checks pass, including constant overlapping transition opacity,
+surface reuse, guardian shield direction, depleted/frozen/shocked/exposed states
+and balanced canvas scopes. Inline syntax, whitespace and offline checks pass.
+Live browser validation follows Pages deployment. Southeast generation attempts
+still repeat a forward leg or lose alpha; none was integrated. Full directional
+gait and production acceptance remain open.
