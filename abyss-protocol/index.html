@@ -341,28 +341,26 @@ function fitZoom(spanW, spanH) {
   const vb = viewBand();
   return Math.min(vb.w / Math.max(1, spanW), vb.h / Math.max(1, spanH));
 }
-/* derive the legacy aS/aOX/aOY transform from cam; clamp so the WHOLE screen stays in-bounds
-   (not just the HUD-inset band) — nothing past the arena edges is ever shown anywhere. */
+// Sprite bodies extend beyond their collision circles. Frame the arena plus a
+// fixed visual gutter inside the HUD-safe band; physics and input stay in world space.
+function frameArenaAxis(offset, extent, screenStart, screenEnd, before, after) {
+  const minimum=screenEnd-extent-after,maximum=screenStart+before;
+  return minimum>maximum ? (minimum+maximum)/2 : clamp(offset,minimum,maximum);
+}
 function computeView() {
   const A = CONFIG;
   const vb = viewBand();
   aS = clamp(cam.zoom, 0.05, 8);
-  // place the camera's world centre at the view-band centre (screen px)
-  let ox = vb.cx - cam.cx * aS;
-  let oy = vb.cy - cam.cy * aS;
-  // clamp the offsets so the full screen window [0,cw]x[0,ch] stays within [0,arena].
-  // world->screen: screen = world*aS + offset, so the screen edge 0 maps to world (-offset/aS)
-  // and edge cw to world (cw-offset)/aS. Require those within [0, arenaW] (resp. H).
-  const wScreenW = A.arenaW * aS, wScreenH = A.arenaH * aS;
-  if (wScreenW <= cw) ox = (cw - wScreenW) / 2;        // arena narrower than screen -> centre
-  else ox = clamp(ox, cw - wScreenW, 0);               // else keep edges covered
-  if (wScreenH <= ch) oy = (ch - wScreenH) / 2;
-  else oy = clamp(oy, ch - wScreenH, 0);
-  aOX = ox; aOY = oy;
-  // back-solve the (clamped) world centre actually shown so cam stays consistent for follow
+  const ox = vb.cx - cam.cx * aS;
+  const oy = vb.cy - cam.cy * aS;
+  // Fixed world-space padding does not pump with gait, aim, enemies or camera zoom.
+  // The existing dark starfield forms the station exterior beyond the floor edge.
+  aOX=frameArenaAxis(ox,A.arenaW*aS,vb.x,vb.x+vb.w,32*aS,32*aS);
+  aOY=frameArenaAxis(oy,A.arenaH*aS,vb.y,vb.y+vb.h,64*aS,32*aS);
   cam.cx = (vb.cx - aOX) / aS;
   cam.cy = (vb.cy - aOY) / aS;
 }
+
 // Reads numPlayers if initialized; returns 1 during early module init (TDZ-safe).
 function nPlayersSafe() { try { return numPlayers; } catch (e) { return 1; } }
 window.addEventListener("resize", resize);
