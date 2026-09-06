@@ -215,7 +215,7 @@ const arcadeLink = document.getElementById("arcade");
 let cw = 0, ch = 0, dpr = 1;
 // Opt-in local telemetry: no network, storage, or normal-game overlay.
 const profileQuery = new URLSearchParams(location.search);
-const sharpUIEnabled = profileQuery.has("sharpUI");
+const sharpUIEnabled = profileQuery.get("sharpUI") !== "0";
 const uiCanvas = sharpUIEnabled ? document.createElement('canvas') : null;
 const uiContext = uiCanvas ? uiCanvas.getContext('2d') : null;
 let uiDpr = 1;
@@ -14913,70 +14913,81 @@ function drawBuildColumn(p, x, y, w, h, u) {
   ctx.restore();
 }
 
+function pauseLayout(width,height,scale) {
+  const compact = width < 600 || height < 560;
+  const cols = compact && height < 560 ? 2 : 1;
+  const gap = compact ? 8 : 10*scale;
+  const panelWidth = compact ? Math.min(width-32,600) : 300*scale;
+  const bw = (panelWidth-gap*(cols-1))/cols;
+  const titleY = compact ? (height < 560 ? Math.max(28,height*.1) : height*.25) : height*.42;
+  return { cols,gap,bw,bh:compact?44:32*scale,bx:(width-panelWidth)/2,by:compact?titleY+92:height*.64,titleY };
+}
 function drawPause() {
   dimScreen(0.55);
   uiRects = [];
-  const u = us();
+  const compact = cw < 600 || ch < 560;
+  const u = compact ? 1 : us();
+  const layout = pauseLayout(cw,ch,u);
   if (showBuild) { drawBuildPanel(u); return; }   // BUILD 概览 overview replaces the pause menu
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
   glow("#5ee6ff", 18);
   ctx.fillStyle = "#5ee6ff";
   ctx.font = "bold " + 34 * u + "px 'Courier New', monospace";
-  ctx.fillText("PAUSED", cw / 2, ch * 0.42);
+  ctx.fillText(compact ? "已暂停" : "PAUSED", cw / 2, layout.titleY);
   noglow();
   // hint for the BUILD overview key
   ctx.fillStyle = "rgba(255,204,68,0.7)";
   ctx.font = 12 * u + "px 'Courier New', monospace";
-  ctx.fillText(touchUI ? "" : "B — BUILD 概览 (build overview)", cw / 2, ch * 0.37);
+  ctx.fillText(touchUI ? "" : compact ? "B 查看当前配置" : "B — BUILD 概览 (build overview)", cw / 2, compact ? layout.titleY-28 : ch * 0.37);
   ctx.fillStyle = "rgba(190,210,255,0.7)";
   ctx.font = 14 * u + "px 'Courier New', monospace";
-  ctx.fillText(touchUI ? "点按继续 — tap to resume" : "P/Esc/点击 继续 · M 静音 — P / Esc / click to resume · M mute", cw / 2, ch * 0.52);
+  ctx.fillText(compact ? (touchUI ? "点按空白处继续" : "P / Esc 继续 · M 静音") : touchUI ? "点按继续 — tap to resume" : "P/Esc/点击 继续 · M 静音 — P / Esc / click to resume · M mute", cw / 2, compact ? layout.titleY+36 : ch * 0.52);
   if (!touchUI) {
     ctx.fillStyle = "rgba(190,210,255,0.55)";
     ctx.font = 12 * u + "px 'Courier New', monospace";
-    ctx.fillText("J 斩击 · 右Ctrl 光弹 · K 冰冻 · 空格冲刺 · F 全屏 — J slash · R-Ctrl bolt · K freeze · Space dash · F fullscreen", cw / 2, ch * 0.58);
+    ctx.fillText(compact ? "J 斩击 · K 冰冻 · 空格冲刺" : "J 斩击 · 右Ctrl 光弹 · K 冰冻 · 空格冲刺 · F 全屏 — J slash · R-Ctrl bolt · K freeze · Space dash · F fullscreen", cw / 2, compact ? layout.titleY+64 : ch * 0.58);
   }
   // selectable settings buttons (gamepad d-pad/stick navigates, × confirms)
-  const bw = 300 * u, bh = 32 * u, bx = cw / 2 - bw / 2, bgap = 10 * u;
-  let by = ch * 0.64;
+  const { bw, bh, bx, by, gap: bgap, cols } = layout;
   const items = [];
   // 0: FX / EFFECTS setting toggle (bloom · scanlines · shake intensity)
   const fxLabel = { full: "FULL — 全开", reduced: "REDUCED — 降低", off: "OFF — 关闭" }[ffx.level];
   const fxCol = ffx.level === "full" ? "#5ee6ff" : ffx.level === "reduced" ? "#ffcc44" : "#ff7755";
-  items.push({ act: "fxtoggle", label: "EFFECTS / 特效: " + fxLabel, col: fxCol });
+  items.push({ act: "fxtoggle", label: compact ? "特效：" + ({full:"全开",reduced:"降低",off:"关闭"}[ffx.level]) : "EFFECTS / 特效: " + fxLabel, col: fxCol });
   // 1: manual fullscreen toggle
-  items.push({ act: "fstoggle", label: (isFullscreen() ? "退出全屏 — Exit Fullscreen" : "全屏 — Fullscreen") + " ⛶", col: "#5ee6ff" });
+  items.push({ act: "fstoggle", label: compact ? (isFullscreen() ? "退出全屏" : "全屏") : (isFullscreen() ? "退出全屏 — Exit Fullscreen" : "全屏 — Fullscreen") + " ⛶", col: "#5ee6ff" });
   // 2: auto-fullscreen-on-start preference
-  items.push({ act: "fsauto", label: "启动时自动全屏 — Auto-Fullscreen: " + (FS.auto ? "ON 开" : "OFF 关"), col: FS.auto ? "#66ffaa" : "#ff7755" });
+  items.push({ act: "fsauto", label: compact ? "自动全屏：" + (FS.auto ? "开" : "关") : "启动时自动全屏 — Auto-Fullscreen: " + (FS.auto ? "ON 开" : "OFF 关"), col: FS.auto ? "#66ffaa" : "#ff7755" });
   // 3: BUILD overview panel (only meaningful mid-run, but harmless in hub)
-  if (state === "play" || state === "hub") items.push({ act: "buildtoggle", label: "BUILD 概览 — Build Overview", col: "#ffcc44" });
+  if (state === "play" || state === "hub") items.push({ act: "buildtoggle", label: compact ? "当前配置" : "BUILD 概览 — Build Overview", col: "#ffcc44" });
   pauseItemCount = items.length;
   const gp = anyGamepad();
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    const yy = by + i * (bh + bgap);
+    const yy = by + Math.floor(i/cols) * (bh + bgap);
+    const xx = bx + (i%cols) * (bw + bgap);
     const hot = gp && menuHighlight === i;
     ctx.fillStyle = hot ? "rgba(30,40,80,0.9)" : "rgba(10,14,34,0.8)";
-    rrect(bx, yy, bw, bh, 6); ctx.fill();
+    rrect(xx, yy, bw, bh, 6); ctx.fill();
     ctx.strokeStyle = it.col; ctx.lineWidth = hot ? 3 : 2;
-    rrect(bx, yy, bw, bh, 6); ctx.stroke();
+    rrect(xx, yy, bw, bh, 6); ctx.stroke();
     ctx.fillStyle = it.col;
     ctx.font = "bold " + 13 * u + "px 'Courier New', monospace";
-    ctx.fillText(it.label, cw / 2, yy + bh / 2 + 1);
-    uiRects.push({ x: bx, y: yy, w: bw, h: bh, act: it.act, i });
+    ctx.fillText(it.label, xx+bw/2, yy + bh / 2 + 1, bw-16);
+    uiRects.push({ x: xx, y: yy, w: bw, h: bh, act: it.act, i });
   }
-  let cueY = by + items.length * (bh + bgap) + 4 * u;
+  let cueY = by + Math.ceil(items.length/cols) * (bh + bgap) + 4 * u;
   ctx.fillStyle = "rgba(190,210,255,0.5)";
   ctx.font = 11 * u + "px 'Courier New', monospace";
-  ctx.fillText(touchUI ? "tap EFFECTS to cycle · tap FULLSCREEN to toggle" : "F 切换全屏 · 暂停时 F 仍切特效 — F toggles fullscreen (in pause, F still cycles EFFECTS)", cw / 2, cueY);
+  ctx.fillText(compact ? "点按选项调整设置" : touchUI ? "tap EFFECTS to cycle · tap FULLSCREEN to toggle" : "F 切换全屏 · 暂停时 F 仍切特效 — F toggles fullscreen (in pause, F still cycles EFFECTS)", cw / 2, cueY);
   cueY += 16 * u;
   // gamepad cue when present
   if (gp) {
     ctx.fillStyle = "rgba(94,230,255,0.65)";
     ctx.font = 11 * u + "px 'Courier New', monospace";
-    ctx.fillText("方向键选择 · × 确认 — d-pad select · × confirm", cw / 2, cueY);
+    ctx.fillText(compact ? "方向键选择 · × 确认" : "方向键选择 · × 确认 — d-pad select · × confirm", cw / 2, cueY);
     cueY += 16 * u;
-    ctx.fillText(GAMEPAD_HELP, cw / 2, cueY);
+    ctx.fillText(compact ? "左摇杆移动 · 右摇杆瞄准" : GAMEPAD_HELP, cw / 2, cueY);
     cueY += 16 * u;
   }
   // at the hub, allow toggling 1P/2P from the pause menu (only between runs)
