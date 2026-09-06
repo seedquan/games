@@ -9,7 +9,7 @@ function harness(ready=true) {
   const calls=[];
   const ctx=new Proxy({globalAlpha:1}, {get(o,k){return k in o ? o[k] : (...args)=>calls.push([k,...args]);}});
   const box={ctx,artAnimationPreview:false,southRigPreviewEnabled:false,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
-    weaponDefP:p=>p.weapon,drawHeldWeapon:(...args)=>calls.push(['weapon',...args]),
+    meleeArcNow:()=>Math.PI,weaponDefP:p=>p.weapon,drawHeldWeapon:(...args)=>calls.push(['weapon',...args]),
     drawAndroidFeedback:p=>calls.push(['feedback',p]),Math,Object,Number};
   vm.createContext(box);vm.runInContext(source,box);
   return {box,calls};
@@ -460,6 +460,7 @@ test('all eight weapon grips follow the rendered palm through pose, scale and re
   const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
   const parts=vm.runInContext(keys[dir].toUpperCase()+'_RIG_PARTS.foreR',box);
   const p=player();Object.assign(p,{aimDraw:dir*Math.PI/4+.07,r:radius,artRunPhase:phase,artRunBlend:blend,recoilT:.09});
+  if(phase===0){p.slashT=.15;p.slashDur=.25;p.slashAng=p.aimDraw;p.slashSide=-1;}
   p.weapon=phase===.27?{id:'lbow',isBow:true}:phase===.71?{id:'qbow',isBow:true}:{id:'blade'};
   box.drawTexturedAndroid(p);
   let m=[1,0,0,1,0,0],stack=[],palm,grip;
@@ -548,4 +549,30 @@ test('articulated ground shadow remains on the actor plane through movement and 
  }
  const {box,calls}=harness();const p=player();box.drawTexturedAndroid(p);
  assert.equal(calls.find(c=>c[0]==='ellipse')[2],p.y+p.r*.6,'original sprite shadow remains unchanged');
+});
+
+test('melee pose follows committed sweep timing, thrust direction and recovery',()=>{
+ const {box}=harness(),p=player(),pose={recoil:0,draw:0};Object.assign(p,{slashDur:.25,slashT:.15,slashAng:1,slashSide:-1});
+ const a=box.rigAttackPose(p,{id:'blade'},pose);assert.ok(a.amount>.99);assert.ok(Math.abs(a.angle-(1-Math.PI*(.4*2.4-.5)))<1e-8);
+ assert.equal(box.rigAttackPose(p,{id:'lance'},pose).angle,1);
+ p.slashT=.25;assert.equal(box.rigAttackPose(p,{id:'blade'},pose),null);
+ p.slashT=0;assert.equal(box.rigAttackPose(p,{id:'blade'},pose),null);
+ p.glaiveOut=true;assert.equal(box.rigAttackPose(p,{id:'glaive'},{recoil:1,draw:0}),null);
+});
+test('combat arm solve stays connected and finite across all aim angles',()=>{
+ const {box}=harness();
+ for(const direction of [-1,1])for(let i=0;i<360;i++){
+  const p=box.rigArmAction(95,44,100,65,106,84,{amount:1,angle:i*Math.PI/180},direction);
+  assert.ok(Math.abs(Math.hypot(p.ex-95,p.ey-44)-22)<1e-8);
+  assert.ok(Math.abs(Math.hypot(p.wx-p.ex,p.wy-p.ey)-22)<1e-8);
+ }
+ const rest=box.rigArmAction(95,44,100,65,106,84,{amount:0,angle:Math.PI},1);
+ assert.equal(rest.ex,100);assert.equal(rest.ey,65);assert.equal(rest.wx,106);assert.equal(rest.wy,84);
+});
+
+test('full-circle melee recovery does not flip at the aim angle wrap boundary',()=>{
+ const {box}=harness();box.meleeArcNow=()=>Math.PI*2;
+ const p=player();Object.assign(p,{slashT:.04,slashDur:.25,slashAng:0,slashSide:1});
+ const angles=[];for(const aim of [-.00001,.00001]){p.aimDraw=aim;angles.push(box.rigAttackPose(p,{id:'maul'},{recoil:0,draw:0}).angle);}
+ assert.ok(Math.abs(angles[1]-angles[0])<.0001);
 });

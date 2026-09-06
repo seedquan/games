@@ -9902,7 +9902,7 @@ if (artAnimationPreview) {
   const panel = document.createElement('aside');
   panel.setAttribute('aria-label', '跑步动画预览');
   panel.style.cssText = 'position:fixed;z-index:100;right:18px;top:55px;padding:12px;background:#102033ed;border:1px solid #53768c;border-radius:8px;color:#d8e9f4;font:13px system-ui;max-width:300px';
-  panel.innerHTML = '<div>跑步预览 · 仅枢纽</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0"><button type="button">持续向东</button><button type="button">持续向南</button><button type="button">持续向北</button><button type="button">持续向东北</button><button type="button">持续向西</button><button type="button">持续向西北</button><button type="button">持续向东南</button><button type="button">持续向西南</button><button type="button">朝东向北横移</button><button type="button">朝东向西倒退</button><button type="button">停止</button></div><output>进入枢纽后开始</output>';
+  panel.innerHTML = '<div>跑步预览 · 仅枢纽</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0"><button type="button">持续向东</button><button type="button">持续向南</button><button type="button">持续向北</button><button type="button">持续向东北</button><button type="button">持续向西</button><button type="button">持续向西北</button><button type="button">持续向东南</button><button type="button">持续向西南</button><button type="button">朝东向北横移</button><button type="button">朝东向西倒退</button><button type="button">挥击预览</button><button type="button">停止</button></div><output>进入枢纽后开始</output>';
   const buttons = panel.querySelectorAll('button');
   buttons.forEach(b => b.style.cssText = 'padding:7px;background:#234056;color:#edf7ff;border:1px solid #60899c;border-radius:4px;cursor:pointer');
   const setMove = move => { if (state === 'hub') artPreviewMove = move; };
@@ -9916,7 +9916,8 @@ if (artAnimationPreview) {
   buttons[7].onclick = () => setMove({ x: -Math.SQRT1_2, y: Math.SQRT1_2 });
   buttons[8].onclick = () => setMove({x:0,y:-1,aim:0});
   buttons[9].onclick = () => setMove({x:-1,y:0,aim:0});
-  buttons[10].onclick = () => { artPreviewMove = null; };
+  buttons[10].onclick = () => { if(state==='hub'&&players[0]){artPreviewMove=null;trySlash(players[0]);} };
+  buttons[11].onclick = () => { artPreviewMove = null; };
   panel.addEventListener('pointerdown', e => e.stopPropagation());
   panel.addEventListener('keydown', e => e.stopPropagation());
   document.body.append(panel);
@@ -9925,7 +9926,7 @@ if (artAnimationPreview) {
   // Visible diagnostics allow repeatable preview checks without touching game state from DevTools.
   setInterval(() => {
     const p = players[0];
-    buttons[0].disabled = buttons[1].disabled = buttons[2].disabled = buttons[3].disabled = buttons[4].disabled = buttons[5].disabled = buttons[6].disabled = buttons[7].disabled = buttons[8].disabled = buttons[9].disabled = state !== 'hub';
+    buttons[0].disabled = buttons[1].disabled = buttons[2].disabled = buttons[3].disabled = buttons[4].disabled = buttons[5].disabled = buttons[6].disabled = buttons[7].disabled = buttons[8].disabled = buttons[9].disabled = buttons[10].disabled = state !== 'hub';
     panel.querySelector('output').textContent = state !== 'hub' || !p ? '进入枢纽后开始' :
       '朝向 ' + (p.artFacing ?? '-') + ' · 第 ' + (1 + Math.floor((p.artRunPhase || 0) * 8)) + ' 帧 · 跑步 ' + Math.round((p.artRunBlend || 0) * 100) + '%';
   }, 150);
@@ -10047,7 +10048,7 @@ function drawSouthRigPart(image, key, x, y, endX, endY, widthScale, parts = SOUT
   }
   return null;
 }
-function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1}) {
+function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1},action) {
   const asset = abyssArt.rigSouth;
   if (!asset?.ready) return false;
   const image=asset.image;
@@ -10070,13 +10071,15 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1})
   const drawArm = side => {
     const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend,worldScale);
     const sx=80+side*18,sy=43+bounce;
-    const ex=80+side*(25-5*blend+step.lift*2),ey=64+bounce+step.travel*3;
-    const wx=80+side*(31-8*blend+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
+    let ex=80+side*(25-5*blend+step.lift*2),ey=64+bounce+step.travel*3;
+    let wx=80+side*(31-8*blend+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
+    if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,1));
     const grip=drawSouthRigPart(image,'fore'+suffix,ex,ey,wx,wy,.145);
     drawSouthRigPart(image,'upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
-  drawArm(-1);const grip=drawArm(1);
+  drawArm(-1);
   drawSouthRigPart(image,'core',80,hipY,80,hipY-75,.22);
+  const grip=drawArm(1);
   return grip;
 }
 const EAST_RIG_PARTS = {
@@ -10106,7 +10109,7 @@ function eastRigKnee(hx,hy,ax,ay) {
   const bend=Math.sqrt(Math.max(0,upper*upper-along*along));
   return {x:hx+dx/distance*along+dy/distance*bend,y:hy+dy/distance*along-dx/distance*bend};
 }
-function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:direction,y:0}) {
+function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:direction,y:0},action) {
   const asset=abyssArt[assetKey];
   if (!asset?.ready) return false;
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,80+(x-80)*direction,y,80+(ex-80)*direction,ey,width,parts);
@@ -10124,8 +10127,9 @@ function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:d
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
     const sx=79-side*6,sy=44+side*2+bounce;
-    const ex=sx+2+2*blend+step.travel*9,ey=66+bounce-step.lift*4;
-    const wx=sx+3+9*blend+step.travel*12,wy=85-5*blend+bounce-step.lift*8;
+    let ex=sx+2+2*blend+step.travel*9,ey=66+bounce-step.lift*4;
+    let wx=sx+3+9*blend+step.travel*12,wy=85-5*blend+bounce-step.lift*8;
+    if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,direction));
     const grip=part('fore'+suffix,ex,ey,wx,wy,.14);
     part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
@@ -10148,12 +10152,12 @@ const WEST_RIG_PARTS = {
   shinR:[543,677,121,289,605,718,607,932],
   footR:[1188,490,181,141,1308,524,1214,606]
 };
-function drawEastRig(phase,blend,worldScale=13*4.4/160,motion) {
-  return drawSideRig(phase,blend,worldScale,'rigEast',EAST_RIG_PARTS,1,motion);
+function drawEastRig(phase,blend,worldScale=13*4.4/160,motion,action) {
+  return drawSideRig(phase,blend,worldScale,'rigEast',EAST_RIG_PARTS,1,motion,action);
 }
-function drawWestRig(phase,blend,worldScale=13*4.4/160,motion) {
+function drawWestRig(phase,blend,worldScale=13*4.4/160,motion,action) {
   // Reflect joint coordinates only. The West artwork is independently authored.
-  return drawSideRig(phase,blend,worldScale,'rigWest',WEST_RIG_PARTS,-1,motion);
+  return drawSideRig(phase,blend,worldScale,'rigWest',WEST_RIG_PARTS,-1,motion,action);
 }
 const NORTH_RIG_PARTS = {
   core:[210,12,176,335,298,320,298,22],
@@ -10168,7 +10172,7 @@ const NORTH_RIG_PARTS = {
   footL:[1215,724,100,183,1265,738,1265,899],
   footR:[1215,724,100,183,1265,738,1265,899]
 };
-function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1}) {
+function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1},action) {
   const asset=abyssArt.rigNorth;
   if (!asset?.ready) return false;
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,x,y,ex,ey,width,NORTH_RIG_PARTS);
@@ -10188,11 +10192,12 @@ function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1}) {
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
     const sx=80+side*18,sy=44+bounce;
-    const ex=80+side*(25-5*blend+step.lift*2),ey=65+bounce-step.travel*3;
-    const wx=80+side*(30-7*blend+step.lift*2),wy=83+bounce-step.travel*7-step.lift*3;
+    let ex=80+side*(25-5*blend+step.lift*2),ey=65+bounce-step.travel*3;
+    let wx=80+side*(30-7*blend+step.lift*2),wy=83+bounce-step.travel*7-step.lift*3;
+    if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,1));
     const grip=part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
-  arm(-1);const grip=arm(1);part('core',80,hipY,80,hipY-77,.22);
+  arm(-1);part('core',80,hipY,80,hipY-77,.22);const grip=arm(1);
   return grip;
 }
 const NORTHEAST_RIG_PARTS = {
@@ -10208,7 +10213,7 @@ const NORTHEAST_RIG_PARTS = {
   shinR:[530,657,103,274,582,684,582,900],
   footR:[876,720,144,196,940,748,927,889]
 };
-function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:direction*Math.SQRT1_2,y:-Math.SQRT1_2}) {
+function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:direction*Math.SQRT1_2,y:-Math.SQRT1_2},action) {
   const asset=abyssArt[assetKey];
   if(!asset?.ready)return false;
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,80+(x-80)*direction,y,80+(ex-80)*direction,ey,width*(direction<0?.85:1),parts);
@@ -10227,8 +10232,9 @@ function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mot
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
     const sx=80+side*15,sy=44+side*3+bounce;
-    const ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce-step.travel*5*q;
-    const wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce-step.travel*10*q-step.lift*4;
+    let ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce-step.travel*5*q;
+    let wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce-step.travel*10*q-step.lift*4;
+    if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,direction));
     const grip=part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
   leg(-1);arm(-1);leg(1);part('core',80,86+bounce,80,9+bounce,.22);const grip=arm(1);
@@ -10248,11 +10254,11 @@ const NORTHWEST_RIG_PARTS = {
   shinR:[560,693,156,295,610,742,660,954],
   footR:[869,802,188,190,998,838,1019,967]
 };
-function drawNorthEastRig(phase,blend,worldScale=13*4.4/160,motion) {
-  return drawRearDiagonalRig(phase,blend,worldScale,'rigNorthEast',NORTHEAST_RIG_PARTS,1,motion);
+function drawNorthEastRig(phase,blend,worldScale=13*4.4/160,motion,action) {
+  return drawRearDiagonalRig(phase,blend,worldScale,'rigNorthEast',NORTHEAST_RIG_PARTS,1,motion,action);
 }
-function drawNorthWestRig(phase,blend,worldScale=13*4.4/160,motion) {
-  return drawRearDiagonalRig(phase,blend,worldScale,'rigNorthWest',NORTHWEST_RIG_PARTS,-1,motion);
+function drawNorthWestRig(phase,blend,worldScale=13*4.4/160,motion,action) {
+  return drawRearDiagonalRig(phase,blend,worldScale,'rigNorthWest',NORTHWEST_RIG_PARTS,-1,motion,action);
 }
 const SOUTHEAST_RIG_PARTS = {
   core:[131,5,209,410,240,375,237,37],
@@ -10267,7 +10273,7 @@ const SOUTHEAST_RIG_PARTS = {
   shinR:[549,701,149,254,590,741,647,926],
   footR:[948,767,130,197,991,803,1031,931]
 };
-function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:direction*Math.SQRT1_2,y:Math.SQRT1_2}) {
+function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:direction*Math.SQRT1_2,y:Math.SQRT1_2},action) {
   const asset=abyssArt[assetKey];
   if(!asset?.ready)return false;
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,80+(x-80)*direction,y,80+(ex-80)*direction,ey,width,parts);
@@ -10283,15 +10289,16 @@ function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mo
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
     const sx=80+side*15,sy=44+side*3+bounce;
-    const ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce+step.travel*5*q;
-    const wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce+step.travel*10*q-step.lift*4;
+    let ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce+step.travel*5*q;
+    let wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce+step.travel*10*q-step.lift*4;
+    if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,direction));
     const grip=part('fore'+suffix,ex,ey,wx,wy,.145);part('upper'+suffix,sx,sy,ex,ey,.17);return grip;
   };
   leg(-1);arm(-1);leg(1);part('core',80,86+bounce,80,10+bounce,.20);const grip=arm(1);
   return grip;
 }
-function drawSouthEastRig(phase,blend,worldScale=13*4.4/160,motion) {
-  return drawFrontDiagonalRig(phase,blend,worldScale,'rigSouthEast',SOUTHEAST_RIG_PARTS,1,motion);
+function drawSouthEastRig(phase,blend,worldScale=13*4.4/160,motion,action) {
+  return drawFrontDiagonalRig(phase,blend,worldScale,'rigSouthEast',SOUTHEAST_RIG_PARTS,1,motion,action);
 }
 
 const SOUTHWEST_RIG_PARTS = {
@@ -10307,12 +10314,12 @@ const SOUTHWEST_RIG_PARTS = {
   shinR:[552,717,140,246,602,770,648,932],
   footR:[856,767,180,231,969,826,906,958]
 };
-function drawSouthWestRig(phase,blend,worldScale=13*4.4/160,motion) {
-  return drawFrontDiagonalRig(phase,blend,worldScale,'rigSouthWest',SOUTHWEST_RIG_PARTS,-1,motion);
+function drawSouthWestRig(phase,blend,worldScale=13*4.4/160,motion,action) {
+  return drawFrontDiagonalRig(phase,blend,worldScale,'rigSouthWest',SOUTHWEST_RIG_PARTS,-1,motion,action);
 }
 
-function drawPreviewRig(key,phase,blend,worldScale,motion) {
-  return (key==='rigSouthWest'?drawSouthWestRig:key==='rigSouthEast'?drawSouthEastRig:key==='rigNorthWest'?drawNorthWestRig:key==='rigNorthEast'?drawNorthEastRig:key==='rigNorth'?drawNorthRig:key==='rigEast'?drawEastRig:key==='rigWest'?drawWestRig:drawSouthRig)(phase,blend,worldScale,motion ?? undefined);
+function drawPreviewRig(key,phase,blend,worldScale,motion,action) {
+  return (key==='rigSouthWest'?drawSouthWestRig:key==='rigSouthEast'?drawSouthEastRig:key==='rigNorthWest'?drawNorthWestRig:key==='rigNorthEast'?drawNorthEastRig:key==='rigNorth'?drawNorthRig:key==='rigEast'?drawEastRig:key==='rigWest'?drawWestRig:drawSouthRig)(phase,blend,worldScale,motion ?? undefined,action);
 }
 
 function drawSouthRigReview() {
@@ -10404,6 +10411,29 @@ function enemyLabelTop(e) {
   const key = enemyTextureKey(e);
   return abyssArt[key]?.ready ? e.y - e.r * (key === 'core' ? 3.1 : 3.25) * .8 - 2 : e.y - e.r;
 }
+function rigAttackPose(p,W,pose) {
+  if(p.glaiveOut)return null;
+  let amount=0,angle=p.aimDraw,sweep=0;
+  if(p.slashT>0 && !W.isGun && !W.isCaster && !W.isBow) {
+    const progress=Math.max(0,Math.min(1,1-p.slashT/(p.slashDur||.25)));
+    const ease=t=>{t=Math.max(0,Math.min(1,t));return t*t*(3-2*t);};
+    amount=ease(progress/.12)*ease((1-progress)/.28);
+    angle=p.slashAng;
+    if(W.id!=='lance')sweep=(p.slashSide||1)*meleeArcNow()*(Math.min(1,progress*2.4)-.5);
+  } else amount=Math.max(0,pose.recoil)*.7+Math.min(1,pose.draw)*.6;
+  if(amount<=0)return null;
+  amount=Math.min(1,amount);
+  const turn=Math.atan2(Math.sin(angle-p.aimDraw),Math.cos(angle-p.aimDraw));
+  return {amount,angle:p.aimDraw+(turn+sweep)*amount};
+}
+function rigArmAction(sx,sy,ex,ey,wx,wy,action,direction) {
+  // A projected combat reach, solved as two connected 22px arm segments.
+  const tx=sx+Math.cos(action.angle)*direction*34,ty=sy+16+Math.sin(action.angle)*20;
+  const dx=tx-sx,dy=ty-sy,d=Math.hypot(dx,dy),bend=Math.sqrt(Math.max(0,22*22-d*d/4));
+  const elbowX=sx+dx*.5+dy/d*bend,elbowY=sy+dy*.5-dx/d*bend;
+  const a=action.amount;
+  return {ex:ex+(elbowX-ex)*a,ey:ey+(elbowY-ey)*a,wx:wx+(tx-wx)*a,wy:wy+(ty-wy)*a};
+}
 // Calibrated from both rendered boot soles at mid-stance in the 160px rig space.
 // Columns: idle ground, running drop, extra vertical-stride drop, diagonal basis.
 const RIG_GROUND_LEVELS = {
@@ -10427,6 +10457,7 @@ function drawTexturedAndroid(p) {
   const blink = p.hurtT > 0 && Math.floor(timeNow * 18) % 2 === 0;
   const moving = Math.min(1, p.moveAmt || 0);
   const rig = previewRigKey(facing);
+  const action=rig?rigAttackPose(p,W,pose):null;
   const runAsset = rig ? null : runAnimationAsset(p, facing);
   const runBlend = runAsset ? Math.min(1, p.artRunBlend) : 0;
   const bob = (Math.sin(p.walkT * 2) * moving * 1.25 + Math.sin(timeNow * 3) * (1-moving) * .35) * (rig ? 0 : 1-runBlend);
@@ -10449,7 +10480,7 @@ function drawTexturedAndroid(p) {
   let grip=null;
   if (rig) {
     ctx.save();ctx.translate(-size/2,-groundY*size/160);ctx.scale(size/160,size/160);
-    grip=drawPreviewRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160,p.artMotion);ctx.restore();
+    grip=drawPreviewRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160,p.artMotion,action);ctx.restore();
   } else if (runAsset && runBlend < .99) {
     const blended = blendedAndroidFrame(asset.image,facing,runAsset.image,frame,runBlend);
     ctx.drawImage(blended,0,0,160,160,-size/2,-size*.8,size,size);
@@ -10460,7 +10491,7 @@ function drawTexturedAndroid(p) {
   }
   ctx.globalAlpha = bodyAlpha;
   if (grip) ctx.translate((grip.x-80)*size/160,(grip.y-groundY)*size/160);
-  ctx.rotate(p.aimDraw);
+  ctx.rotate(action?.angle ?? p.aimDraw);
   // The bow grip lies on its curved limb, unlike the other weapons' origin hilt.
   const bowGrip=W.isBow ? (W.id==='lbow'?10:9) : 0;
   if (pose.visible) drawHeldWeapon(W,grip?-bowGrip:p.r*.7,grip?0:-p.r*.1,pose.recoil,blink,pose.draw);
