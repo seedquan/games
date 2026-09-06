@@ -2648,7 +2648,16 @@ function sparkLine(x1, y1, x2, y2, col, n) {
 function dnum(x, y, txt, col, big) {
   dnums.push({ x: x + rand(-8, 8), y: y - 10, vy: -64, t: 0.8, txt, col, big: !!big });
 }
-function shake(amp, t) { shakeA = Math.max(shakeA, amp); shakeT = Math.max(shakeT, t); ffx.trauma(amp * 0.012 * ffx.shakeScale); }
+function cameraShakeOffset(t, level, trauma, remaining, amplitude) {
+  if (level === "off") return [0, 0, 0];
+  const reduced = level === "reduced";
+  const tr = trauma * trauma;
+  const legacy = remaining > 0 ? amplitude * Math.min(1, remaining / 0.12) : 0;
+  const amp = Math.min(reduced ? 3 : 18, Math.max(legacy, tr * 26) * (reduced ? 0.3 : 1));
+  return [amp * Math.sin(t * 43), amp * Math.sin(t * 37 + 1.3),
+    reduced ? 0 : Math.sin(t * 29) * tr * 0.015];
+}
+function shake(amp, t) { shakeA = Math.max(shakeA, amp); shakeT = Math.max(shakeT, t); ffx.trauma(amp * 0.012); }
 function toast(txt, col) { toasts.push({ txt, col: col || "#5ee6ff", t: 2.2 }); }
 
 /* ---- §I2 VISUAL FX SYSTEM (bloom / lights / trauma / shockwaves / settings) ---- */
@@ -2673,7 +2682,7 @@ const ffx = {
   get bloom() { return this.level === "full"; },
   get scanlines() { return this.level === "full"; },
   get ambient() { return this.level !== "off"; },
-  get shakeScale() { return this.level === "off" ? 0.35 : this.level === "reduced" ? 0.7 : 1; },
+  get shakeScale() { return this.level === "off" ? 0 : this.level === "reduced" ? 0.3 : 1; },
   get lightCap() { return this.level === "full" ? FX_LIGHT_CAP : this.level === "reduced" ? 8 : 0; },
   trauma(v) { this.traumaV = Math.min(1, this.traumaV + v * this.shakeScale); },
   spawnLight(x, y, r, col, a) {
@@ -15555,14 +15564,8 @@ function render(frameDt) {
     ctx.fillRect(sx, sy, 2, 2);
   }
 
-  // world — trauma-curve screen shake (offset + slight rotation), legacy shakeA as floor
-  let sx2 = 0, sy2 = 0, srot = 0;
-  const tr = ffx.traumaV * ffx.traumaV; // squared trauma feels punchier
-  if (tr > 0.0008 || shakeT > 0) {
-    const amp = Math.max(shakeT > 0 ? shakeA : 0, tr * 26);
-    sx2 = rand(-amp, amp); sy2 = rand(-amp, amp);
-    srot = rand(-1, 1) * tr * 0.05;
-  }
+  // Continuous, time-based motion avoids frame-to-frame random camera jumps.
+  const [sx2, sy2, srot] = cameraShakeOffset(timeNow, ffx.level, ffx.traumaV, shakeT, shakeA);
   ctx.save();
   ctx.translate(aOX, aOY);
   if (srot) { // rotate about the view centre (screen px) for the trauma roll
