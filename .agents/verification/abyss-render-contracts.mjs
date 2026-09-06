@@ -535,3 +535,17 @@ test('all rigs render after movement settles and clears the motion vector',()=>{
   assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
  }
 });
+
+test('articulated ground shadow remains on the actor plane through movement and scaling',()=>{
+ const names=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
+ for(let dir=0;dir<8;dir++)for(const radius of [12,18])for(const blend of [0,.5,1]){
+  const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+names[dir]]={ready:true,image:{}};
+  const p=player();Object.assign(p,{aimDraw:dir*Math.PI/4,r:radius,artRunBlend:blend,artMotion:{x:0,y:-1}});
+  box.drawTexturedAndroid(p);const shadow=calls.find(c=>c[0]==='ellipse');
+  assert.equal(shadow[1],p.x);assert.equal(shadow[2],p.y);
+  assert.equal(shadow[3],p.r*.85);assert.equal(shadow[4],p.r*.32);
+  assert.ok(Number.isFinite(box.rigGroundLevel('rig'+names[dir],blend,p.artMotion)));
+ }
+ const {box,calls}=harness();const p=player();box.drawTexturedAndroid(p);
+ assert.equal(calls.find(c=>c[0]==='ellipse')[2],p.y+p.r*.6,'original sprite shadow remains unchanged');
+});
