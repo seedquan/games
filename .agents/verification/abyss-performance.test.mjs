@@ -64,6 +64,8 @@ test('profiling resets samples when scene or canvas size changes',()=>{
  box.canvas.width=900;box.recordFrameProfile(5200,17,.2);
  assert.equal(box.canvas.dataset.frameProfile,undefined);
  assert.equal(box.frameProfile.intervals.length,1);
+ box.uiCanvas={width:1920,height:1080};box.recordFrameProfile(5217,17,.2);
+ assert.equal(box.frameProfile.intervals.length,1);
 });
 
 

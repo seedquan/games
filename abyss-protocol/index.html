@@ -234,7 +234,7 @@ const frameProfile = profileQuery.has("profile") ? {
 function recordFrameProfile(now, interval, renderMs) {
   if (!frameProfile || document.hidden) return;
   const p = frameProfile;
-  const sampleKey = [state, paused, canvas.width, canvas.height, ffx.level].join(":");
+  const sampleKey = [state, paused, canvas.width, canvas.height, uiCanvas?.width || 0, uiCanvas?.height || 0, ffx.level].join(":");
   if (p.sampleKey !== sampleKey) {
     p.sampleKey = sampleKey;
     p.intervals.length = p.render.length = 0;
