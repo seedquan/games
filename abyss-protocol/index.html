@@ -9958,13 +9958,18 @@ const SOUTH_RIG_PARTS = {
   shinR: [513,683,110,280,573,719,554,933],
   footR: [903,816,112,167,949,840,970,953]
 };
-function southRigStep(phase, side, blend) {
+const SOUTH_RIG_CYCLE_DISTANCE = 96;
+const SOUTH_RIG_FOOT_TRAVEL = 18;
+function southRigStep(phase, side, blend, worldScale = 13*4.4/160) {
   const u = ((phase + (side > 0 ? .5 : 0)) % 1 + 1) % 1;
-  // A planted foot travels back through stance; swing returns it with clearance.
-  const contact = u < .5;
-  const travel = contact ? 1-u*4 : -1+(u-.5)*4;
-  const lift = contact ? 0 : Math.sin((u-.5)*Math.PI*2);
-  return { travel: travel*blend, lift: lift*blend, contact };
+  // Sprint has an aerial phase. During stance, local foot motion exactly
+  // cancels root displacement: 2 * travel * worldScale / duty = cycle distance.
+  const duty = 2*SOUTH_RIG_FOOT_TRAVEL*worldScale/SOUTH_RIG_CYCLE_DISTANCE;
+  const contact = u < duty;
+  const swing = contact ? 0 : (u-duty)/(1-duty);
+  const travel = contact ? 1-2*u/duty : -1+2*swing*swing*(3-2*swing);
+  const lift = contact ? 0 : Math.sin(swing*Math.PI);
+  return { travel: travel*blend, lift: lift*blend, contact, duty };
 }
 function drawSouthRigPart(image, key, x, y, endX, endY, widthScale) {
   const [sx,sy,sw,sh,px,py,qx,qy] = SOUTH_RIG_PARTS[key];
@@ -9976,17 +9981,17 @@ function drawSouthRigPart(image, key, x, y, endX, endY, widthScale) {
   ctx.drawImage(image,sx/2,sy/2,sw/2,sh/2,sx-px,sy-py,sw,sh);
   ctx.restore();
 }
-function drawSouthRig(phase, blend) {
+function drawSouthRig(phase, blend, worldScale = 13*4.4/160) {
   const asset = abyssArt.rigSouth;
   if (!asset?.ready) return false;
   const image=asset.image;
   const bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend;
   const hipY=82+bounce;
   const drawLeg = side => {
-    const step=southRigStep(phase,side,blend), suffix=side<0?'L':'R';
+    const step=southRigStep(phase,side,blend,worldScale), suffix=side<0?'L':'R';
     const hipX=80+side*9;
     const ankleX=80+side*(11+step.lift*1.5);
-    const ankleY=127+step.travel*6-step.lift*11;
+    const ankleY=127-15*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL-step.lift*12;
     const kneeX=80+side*(10+step.lift*3);
     const kneeY=hipY+(ankleY-hipY)*.51+step.lift*2;
     drawSouthRigPart(image,'foot'+suffix,ankleX,ankleY,ankleX+side,ankleY+13-step.lift*3,.13);
@@ -9994,10 +9999,10 @@ function drawSouthRig(phase, blend) {
     drawSouthRigPart(image,'thigh'+suffix,hipX,hipY,kneeX,kneeY,.14);
   };
   // The leg farther up the floor is painted first; parts overlap at their joints.
-  const left=southRigStep(phase,-1,blend), right=southRigStep(phase,1,blend);
+  const left=southRigStep(phase,-1,blend,worldScale), right=southRigStep(phase,1,blend,worldScale);
   if (left.travel<right.travel) { drawLeg(-1);drawLeg(1); } else { drawLeg(1);drawLeg(-1); }
   const drawArm = side => {
-    const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend);
+    const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend,worldScale);
     const sx=80+side*15,sy=43+bounce;
     const ex=80+side*(20+step.lift*2),ey=64+bounce+step.travel*3;
     const wx=80+side*(23+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
@@ -10045,7 +10050,9 @@ function advanceRunAnimation(p, dx, dy, dt) {
   const running = distance > dt * 12 && !(p.dashT > 0);
   if (running) {
     const direction = dx * Math.cos(p.aimDraw) + dy * Math.sin(p.aimDraw) < 0 ? -1 : 1;
-    p.artRunPhase = (((p.artRunPhase || 0) + direction * distance / 112) % 1 + 1) % 1;
+    const rig = southRigPreviewEnabled && textureFacing(p.aimDraw,p.artFacing) === 2 && abyssArt.rigSouth?.ready;
+    const stride = rig ? SOUTH_RIG_CYCLE_DISTANCE : 112;
+    p.artRunPhase = (((p.artRunPhase || 0) + direction * distance / stride) % 1 + 1) % 1;
   }
   const target = running ? 1 : 0;
   p.artRunBlend = target + ((p.artRunBlend || 0) - target) * Math.exp(-dt * 28);
@@ -10098,7 +10105,7 @@ function drawTexturedAndroid(p) {
   const frame = Math.min(7, Math.floor((p.artRunPhase || 0) * 8));
   if (rig) {
     ctx.save();ctx.translate(-size/2,-size*.8);ctx.scale(size/160,size/160);
-    drawSouthRig(p.artRunPhase || 0,p.artRunBlend || 0);ctx.restore();
+    drawSouthRig(p.artRunPhase || 0,p.artRunBlend || 0,size/160);ctx.restore();
   } else if (runAsset && runBlend < .99) {
     const blended = blendedAndroidFrame(asset.image,facing,runAsset.image,frame,runBlend);
     ctx.drawImage(blended,0,0,160,160,-size/2,-size*.8,size,size);
