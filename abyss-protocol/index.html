@@ -226,7 +226,8 @@ if (uiCanvas) {
   document.body.append(uiCanvas);
 }
 const artAnimationPreview = profileQuery.has("animationPreview");
-const southRigPreviewEnabled = artAnimationPreview && profileQuery.has("rigPreview");
+const rigArtEnabled = profileQuery.get("rigs") !== "0";
+const southRigPreviewEnabled = artAnimationPreview && profileQuery.has("rigPreview") && rigArtEnabled;
 const guardianReviewEnabled = artAnimationPreview && profileQuery.has("guardianPreview");
 let artPreviewMove = null, artPreviewExitArmed = true;
 const frameProfile = (profileQuery.has("profile") || combatPreviewEnabled) ? {
@@ -236,7 +237,7 @@ const frameProfile = (profileQuery.has("profile") || combatPreviewEnabled) ? {
 function recordFrameProfile(now, interval, renderMs) {
   if (!frameProfile || document.hidden) return;
   const p = frameProfile;
-  const sampleKey = [state, paused, canvas.width, canvas.height, uiCanvas?.width || 0, uiCanvas?.height || 0, ffx.level].join(":");
+  const sampleKey = [state, paused, canvas.width, canvas.height, uiCanvas?.width || 0, uiCanvas?.height || 0, ffx.level, androidRigsReady()].join(":");
   if (p.sampleKey !== sampleKey) {
     p.sampleKey = sampleKey;
     p.intervals.length = p.render.length = 0;
@@ -257,7 +258,7 @@ function recordFrameProfile(now, interval, renderMs) {
     shadowsDisabled: p.disableShadows, samples: p.intervals.length,
     viewport: [cw, ch], enemies: enemies.length,
     projectiles: bullets.length + pbolts.length + ebolts.length + spells.length + glaives.length,
-    cachedLightColors: radialLightCache.size,
+    cachedLightColors: radialLightCache.size, rigsReady: !!androidRigsReady(),
   });
 }
 let aS = 1, aOX = 0, aOY = 0;   // arena scale & offset (screen px) — derived from cam each frame
@@ -9886,7 +9887,7 @@ const ABYSS_ART_DATA = {"guardian":"data:image/webp;base64,UklGRg65AABXRUJQVlA4W
 const abyssArt = Object.create(null);
 for (const [key, src] of Object.entries(ABYSS_ART_DATA)) {
   if (key.startsWith("run") && !artAnimationPreview) continue;
-  if (key.startsWith("rig") && !southRigPreviewEnabled) continue;
+  if (key.startsWith("rig") && !rigArtEnabled) continue;
   const image = new Image();
   const asset = abyssArt[key] = { image, ready: false, failed: false, pattern: null };
   image.onload = () => {
@@ -10097,10 +10098,13 @@ const EAST_RIG_PARTS = {
   shinR:[538,675,110,293,589,710,593,936],
   footR:[865,773,190,179,923,811,1020,922]
 };
-function previewRigKey(facing) {
-  if (!southRigPreviewEnabled) return null;
-  const key = facing === 2 ? 'rigSouth' : facing === 0 ? 'rigEast' : facing === 6 ? 'rigNorth' : facing === 4 ? 'rigWest' : facing === 7 ? 'rigNorthEast' : facing === 5 ? 'rigNorthWest' : facing === 1 ? 'rigSouthEast' : facing === 3 ? 'rigSouthWest' : null;
-  return abyssArt[key]?.ready ? key : null;
+const ANDROID_RIG_KEYS = ['rigEast','rigSouthEast','rigSouth','rigSouthWest','rigWest','rigNorthWest','rigNorth','rigNorthEast'];
+function androidRigsReady() {
+  return rigArtEnabled && abyssArt.player?.ready && ANDROID_RIG_KEYS.every(key=>abyssArt[key]?.ready);
+}
+function androidRigKey(facing) {
+  // Activate the whole set together: never mix idle sprites and rigs while turning.
+  return androidRigsReady() ? ANDROID_RIG_KEYS[facing] || null : null;
 }
 // Two fixed-length bones keep the knee connected while the foot follows its arc.
 function eastRigKnee(hx,hy,ax,ay) {
@@ -10320,7 +10324,7 @@ function drawSouthWestRig(phase,blend,worldScale=13*4.4/160,motion,action) {
   return drawFrontDiagonalRig(phase,blend,worldScale,'rigSouthWest',SOUTHWEST_RIG_PARTS,-1,motion,action);
 }
 
-function drawPreviewRig(key,phase,blend,worldScale,motion,action) {
+function drawAndroidRig(key,phase,blend,worldScale,motion,action) {
   return (key==='rigSouthWest'?drawSouthWestRig:key==='rigSouthEast'?drawSouthEastRig:key==='rigNorthWest'?drawNorthWestRig:key==='rigNorthEast'?drawNorthEastRig:key==='rigNorth'?drawNorthRig:key==='rigEast'?drawEastRig:key==='rigWest'?drawWestRig:drawSouthRig)(phase,blend,worldScale,motion ?? undefined,action);
 }
 
@@ -10332,7 +10336,7 @@ function drawSouthRigReview() {
   const p=players[0],phase=p?.artRunPhase||0,blend=p?.artRunBlend||0;
   for(let i=0;i<3;i++) {
     ctx.save();ctx.translate(10+i*170,36);
-    drawPreviewRig(previewRigKey(textureFacing(p?.aimDraw||0,p?.artFacing)),i===0?phase:(i===1?0:.5),i===0?blend:1,undefined,p?.artMotion);
+    drawAndroidRig(androidRigKey(textureFacing(p?.aimDraw||0,p?.artFacing)),i===0?phase:(i===1?0:.5),i===0?blend:1,undefined,p?.artMotion);
     ctx.restore();
     ctx.fillStyle='#93b3c7';ctx.fillText(i===0?'实际运动相位':i===1?'左脚前落地':'右脚前落地',22+i*170,204);
   }
@@ -10361,7 +10365,7 @@ function advanceRunAnimation(p, dx, dy, dt) {
   const running = distance > dt * 12 && !(p.dashT > 0);
   if (running) {
     let direction = dx * Math.cos(p.aimDraw) + dy * Math.sin(p.aimDraw) < 0 ? -1 : 1;
-    const rig = previewRigKey(textureFacing(p.aimDraw,p.artFacing));
+    const rig = androidRigKey(textureFacing(p.aimDraw,p.artFacing));
     if (rig) {
       direction=1; // The foot path follows displacement; reversing phase would cancel it twice.
       const mx=dx/distance,my=dy/distance;
@@ -10458,7 +10462,7 @@ function drawTexturedAndroid(p) {
   const pose = texturedWeaponPose(p, W);
   const blink = p.hurtT > 0 && Math.floor(timeNow * 18) % 2 === 0;
   const moving = Math.min(1, p.moveAmt || 0);
-  const rig = previewRigKey(facing);
+  const rig = androidRigKey(facing);
   const action=rig?rigAttackPose(p,W,pose):null;
   const runAsset = rig ? null : runAnimationAsset(p, facing);
   const runBlend = runAsset ? Math.min(1, p.artRunBlend) : 0;
@@ -10482,7 +10486,7 @@ function drawTexturedAndroid(p) {
   let grip=null;
   if (rig) {
     ctx.save();ctx.translate(-size/2,-groundY*size/160);ctx.scale(size/160,size/160);
-    grip=drawPreviewRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160,p.artMotion,action);ctx.restore();
+    grip=drawAndroidRig(rig,p.artRunPhase || 0,p.artRunBlend || 0,size/160,p.artMotion,action);ctx.restore();
   } else if (runAsset && runBlend < .99) {
     const blended = blendedAndroidFrame(asset.image,facing,runAsset.image,frame,runBlend);
     ctx.drawImage(blended,0,0,160,160,-size/2,-size*.8,size,size);

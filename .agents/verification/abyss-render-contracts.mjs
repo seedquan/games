@@ -8,9 +8,10 @@ const source = html.slice(html.indexOf('let androidTransitionSurface ='), html.i
 function harness(ready=true) {
   const calls=[];
   const ctx=new Proxy({globalAlpha:1}, {get(o,k){return k in o ? o[k] : (...args)=>calls.push([k,...args]);}});
-  const box={ctx,artAnimationPreview:false,southRigPreviewEnabled:false,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
+  const box={ctx,artAnimationPreview:false,southRigPreviewEnabled:false,rigArtEnabled:false,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
     meleeArcNow:()=>Math.PI,weaponDefP:p=>p.weapon,drawHeldWeapon:(...args)=>calls.push(['weapon',...args]),
     drawAndroidFeedback:p=>calls.push(['feedback',p]),Math,Object,Number};
+  for(const key of ['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'])box.abyssArt['rig'+key]={ready:true,image:{}};
   vm.createContext(box);vm.runInContext(source,box);
   return {box,calls};
 }
@@ -215,11 +216,11 @@ test('articulated gait alternates support legs, clears the swing foot, and loops
  assert.equal(box.southRigStep(.7,-1,0).lift,0);
  assert.equal(Math.abs(box.southRigStep(.2,1,0).travel),0);
 });
-test('south rig is opt-in, waits for its image, and preserves one weapon and feedback pass',()=>{
+test('south rig respects the art switch, waits for its image, and preserves one weapon and feedback pass',()=>{
  const {box,calls}=harness();const p=player();p.aimDraw=Math.PI/2;p.artRunPhase=.7;p.artRunBlend=1;
  box.abyssArt.rigSouth={ready:true,image:{id:'rig'}};
  box.drawTexturedAndroid(p);assert.equal(calls.filter(c=>c[0]==='drawImage'&&c[1].id==='rig').length,0);
- box.southRigPreviewEnabled=true;calls.length=0;box.drawTexturedAndroid(p);
+ box.rigArtEnabled=true;calls.length=0;box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage'&&c[1].id==='rig').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
  assert.equal(calls.filter(c=>c[0]==='save').length,calls.filter(c=>c[0]==='restore').length);
@@ -247,11 +248,11 @@ test('rig planted toe stays in one world position through stance at actual actor
   assert.ok(spread('x')<1e-9);
  }
 });
-test('south rig phase uses its calibrated stride while other direction clips retain theirs',()=>{
- const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigSouth={ready:true,image:{}};
+test('rig phase uses its calibrated stride while disabled fallback clips retain theirs',()=>{
+ const {box}=harness();box.rigArtEnabled=true;box.abyssArt.rigSouth={ready:true,image:{}};
  const p=player();p.aimDraw=Math.PI/2;box.advanceRunAnimation(p,0,12,.01);
  assert.ok(Math.abs(p.artRunPhase-.125)<1e-9);
- p.artRunPhase=0;p.aimDraw=0;box.advanceRunAnimation(p,14,0,.01);
+ box.rigArtEnabled=false;p.artRunPhase=0;p.aimDraw=0;box.advanceRunAnimation(p,14,0,.01);
  assert.ok(Math.abs(p.artRunPhase-.125)<1e-9);
 });
 
@@ -278,11 +279,11 @@ test('unloaded chaser atlas preserves procedural fallback',()=>{
  const {box,calls}=harness();assert.equal(box.drawTexturedEnemy({type:'chaser'},false),false);assert.equal(calls.length,0);
 });
 
-test('east rig remains opt-in and falls back while unavailable',()=>{
+test('east rig respects the art switch and falls back while unavailable',()=>{
  const {box}=harness();box.abyssArt.rigEast={ready:true,image:{}};
- assert.equal(box.previewRigKey(0),null);box.southRigPreviewEnabled=true;
- assert.equal(box.previewRigKey(0),'rigEast');assert.equal(box.previewRigKey(4),null);
- box.abyssArt.rigEast.ready=false;assert.equal(box.previewRigKey(0),null);
+ assert.equal(box.androidRigKey(0),null);box.rigArtEnabled=true;
+ assert.equal(box.androidRigKey(0),'rigEast');assert.equal(box.androidRigKey(4),'rigWest');
+ box.abyssArt.rigEast.ready=false;assert.equal(box.androidRigKey(0),null);
 });
 test('actual east leg renderer preserves bone lengths through running and stopping',()=>{
  const {box}=harness();box.abyssArt.rigEast={ready:true,image:{}};
@@ -305,7 +306,7 @@ test('east planted foot cancels world movement across supported actor scales',()
  }
 });
 test('east rig renders eleven connected parts with one held weapon and feedback pass',()=>{
- const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
+ const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
  const p=player();p.artRunPhase=.3;p.artRunBlend=1;box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
@@ -313,16 +314,16 @@ test('east rig renders eleven connected parts with one held weapon and feedback 
  box.advanceRunAnimation(p,24,0,.1);assert.ok(Math.abs(p.artRunPhase-.55)<1e-8);
 });
 
-test('north rig is opt-in and renders eleven parts with shared weapon feedback',()=>{
+test('north rig respects the art switch and renders eleven parts with shared weapon feedback',()=>{
  const {box,calls}=harness();box.abyssArt.rigNorth={ready:true,image:{}};
- assert.equal(box.previewRigKey(6),null);box.southRigPreviewEnabled=true;
- assert.equal(box.previewRigKey(6),'rigNorth');
+ assert.equal(box.androidRigKey(6),null);box.rigArtEnabled=true;
+ assert.equal(box.androidRigKey(6),'rigNorth');
  const p=player();p.aimDraw=-Math.PI/2;p.artRunPhase=.2;p.artRunBlend=1;
  box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
  assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.abyssArt.rigNorth.ready=false;assert.equal(box.previewRigKey(6),null);
+ box.abyssArt.rigNorth.ready=false;assert.equal(box.androidRigKey(6),null);
 });
 test('north stance cancels negative world Y travel at three actor scales',()=>{
  const {box}=harness();box.abyssArt.rigNorth={ready:true,image:{}};
@@ -337,13 +338,13 @@ test('north stance cancels negative world Y travel at three actor scales',()=>{
 
 test('west rig uses its own atlas without mirroring asymmetric artwork',()=>{
  const {box,calls}=harness();const image={west:true};box.abyssArt.rigWest={ready:true,image};
- assert.equal(box.previewRigKey(4),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(4),'rigWest');
+ assert.equal(box.androidRigKey(4),null);box.rigArtEnabled=true;assert.equal(box.androidRigKey(4),'rigWest');
  const p=player();p.aimDraw=Math.PI;p.artRunPhase=.3;p.artRunBlend=1;box.drawTexturedAndroid(p);
  const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,11);
  for(const d of draws)assert.equal(d[1],image);
  for(const c of calls.filter(c=>c[0]==='scale'))assert.ok(c[1]>0&&c[2]>0,'artwork must not be mirrored');
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.abyssArt.rigWest.ready=false;assert.equal(box.previewRigKey(4),null);
+ box.abyssArt.rigWest.ready=false;assert.equal(box.androidRigKey(4),null);
 });
 test('west stance cancels negative world X travel and retains fixed leg lengths',()=>{
  const {box}=harness();box.abyssArt.rigWest={ready:true,image:{}};
@@ -361,11 +362,11 @@ test('west stance cancels negative world X travel and retains fixed leg lengths'
 
 test('northeast rig draws independent parts and preserves weapon/feedback',()=>{
  const {box,calls}=harness();box.abyssArt.rigNorthEast={ready:true,image:{}};
- assert.equal(box.previewRigKey(7),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(7),'rigNorthEast');
+ assert.equal(box.androidRigKey(7),null);box.rigArtEnabled=true;assert.equal(box.androidRigKey(7),'rigNorthEast');
  const p=player();p.aimDraw=-Math.PI/4;p.artRunPhase=.2;p.artRunBlend=1;box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.abyssArt.rigNorthEast.ready=false;assert.equal(box.previewRigKey(7),null);
+ box.abyssArt.rigNorthEast.ready=false;assert.equal(box.androidRigKey(7),null);
 });
 test('northeast stance locks both world axes and actual leg draws retain bone lengths',()=>{
  const {box}=harness();box.abyssArt.rigNorthEast={ready:true,image:{}};
@@ -384,12 +385,12 @@ test('northeast stance locks both world axes and actual leg draws retain bone le
 
 test('northwest rig preserves its independent asymmetric art without negative image scales',()=>{
  const {box,calls}=harness();const image={northwest:true};box.abyssArt.rigNorthWest={ready:true,image};
- assert.equal(box.previewRigKey(5),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(5),'rigNorthWest');
+ assert.equal(box.androidRigKey(5),null);box.rigArtEnabled=true;assert.equal(box.androidRigKey(5),'rigNorthWest');
  const p=player();p.aimDraw=-3*Math.PI/4;p.artRunPhase=.3;p.artRunBlend=1;box.drawTexturedAndroid(p);
  const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,11);for(const d of draws)assert.equal(d[1],image);
  for(const c of calls.filter(c=>c[0]==='scale'))assert.ok(c[1]>0&&c[2]>0);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.abyssArt.rigNorthWest.ready=false;assert.equal(box.previewRigKey(5),null);
+ box.abyssArt.rigNorthWest.ready=false;assert.equal(box.androidRigKey(5),null);
 });
 test('northwest planted foot cancels both negative world axes with fixed leg lengths',()=>{
  const {box}=harness();box.abyssArt.rigNorthWest={ready:true,image:{}};
@@ -406,13 +407,13 @@ test('northwest planted foot cancels both negative world axes with fixed leg len
  }
 });
 
-test('southeast rig stays opt-in and renders one articulated body plus shared weapon',()=>{
+test('southeast rig respects the art switch and renders one articulated body plus shared weapon',()=>{
  const {box,calls}=harness();box.abyssArt.rigSouthEast={ready:true,image:{}};
- assert.equal(box.previewRigKey(1),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(1),'rigSouthEast');
+ assert.equal(box.androidRigKey(1),null);box.rigArtEnabled=true;assert.equal(box.androidRigKey(1),'rigSouthEast');
  const p=player();p.aimDraw=Math.PI/4;p.artRunPhase=.2;p.artRunBlend=1;box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.abyssArt.rigSouthEast.ready=false;assert.equal(box.previewRigKey(1),null);
+ box.abyssArt.rigSouthEast.ready=false;assert.equal(box.androidRigKey(1),null);
 });
 test('southeast stance cancels both positive world axes and preserves leg lengths',()=>{
  const {box}=harness();box.abyssArt.rigSouthEast={ready:true,image:{}};
@@ -429,13 +430,13 @@ test('southeast stance cancels both positive world axes and preserves leg length
  }
 });
 
-test('southwest rig stays opt-in and renders one articulated body plus shared weapon',()=>{
+test('southwest rig respects the art switch and renders one articulated body plus shared weapon',()=>{
  const {box,calls}=harness();box.abyssArt.rigSouthWest={ready:true,image:{}};
- assert.equal(box.previewRigKey(3),null);box.southRigPreviewEnabled=true;assert.equal(box.previewRigKey(3),'rigSouthWest');
+ assert.equal(box.androidRigKey(3),null);box.rigArtEnabled=true;assert.equal(box.androidRigKey(3),'rigSouthWest');
  const p=player();p.aimDraw=3*Math.PI/4;p.artRunPhase=.2;p.artRunBlend=1;box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.abyssArt.rigSouthWest.ready=false;assert.equal(box.previewRigKey(3),null);
+ box.abyssArt.rigSouthWest.ready=false;assert.equal(box.androidRigKey(3),null);
 });
 test('southwest stance cancels negative X and positive Y and preserves leg lengths',()=>{
  const {box}=harness();box.abyssArt.rigSouthWest={ready:true,image:{}};
@@ -457,7 +458,7 @@ test('all eight weapon grips follow the rendered palm through pose, scale and re
  const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
  const point=(m,x,y)=>[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
  for(let dir=0;dir<8;dir++)for(const phase of [0,.27,.71])for(const blend of [0,1])for(const radius of [12,18]) {
-  const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
+  const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
   const parts=vm.runInContext(keys[dir].toUpperCase()+'_RIG_PARTS.foreR',box);
   const p=player();Object.assign(p,{aimDraw:dir*Math.PI/4+.07,r:radius,artRunPhase:phase,artRunBlend:blend,recoilT:.09});
   if(phase===0){p.slashT=.15;p.slashDur=.25;p.slashAng=p.aimDraw;p.slashSide=-1;}
@@ -497,7 +498,7 @@ test('rig feet plant along actual travel for every facing and movement direction
  }
 });
 test('rig phase advances forward while displacement supplies backward or strafe motion',()=>{
- const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
+ const {box}=harness();box.rigArtEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
  const p=player();box.advanceRunAnimation(p,-24,0,.1);
  assert.ok(Math.abs(p.artRunPhase-.25)<1e-8);assert.equal(p.artMotion.x,-1);assert.equal(p.artMotion.y,0);
  box.advanceRunAnimation(p,0,-24,.1);assert.ok(Math.abs(p.artRunPhase-.5)<1e-8);assert.ok(Math.abs(p.artMotion.x+Math.exp(-2.4))<1e-8);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
@@ -506,7 +507,7 @@ test('rig phase advances forward while displacement supplies backward or strafe 
 });
 
 test('direction reversal narrows the stride continuously and converges independent of update rate',()=>{
- const setup=()=>{const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};const p=player();box.advanceRunAnimation(p,2,0,1/120);return {box,p};};
+ const setup=()=>{const {box}=harness();box.rigArtEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};const p=player();box.advanceRunAnimation(p,2,0,1/120);return {box,p};};
  const {box,p}=setup();box.advanceRunAnimation(p,-2,0,1/120);
  assert.ok(p.artMotion.x>.6&&p.artMotion.x<1,'first reverse update must not snap to opposite foot targets');
  assert.equal(p.artMotion.y,0);
@@ -518,7 +519,7 @@ test('direction reversal narrows the stride continuously and converges independe
  assert.ok(Math.max(...values)-Math.min(...values)<1e-10);
 });
 test('fully stopped characters restart in the new direction without stale stride or NaNs',()=>{
- const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};const p=player();
+ const {box}=harness();box.rigArtEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};const p=player();
  box.advanceRunAnimation(p,20,0,.1);box.advanceRunAnimation(p,0,0,.5);
  assert.equal(p.artMotion,null);assert.equal(p.artRunBlend,0);
  box.advanceRunAnimation(p,0,-20,.1);assert.equal(p.artMotion.x,0);assert.equal(p.artMotion.y,-1);
@@ -528,7 +529,7 @@ test('fully stopped characters restart in the new direction without stale stride
 test('all rigs render after movement settles and clears the motion vector',()=>{
  const keys=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
  for(let dir=0;dir<8;dir++){
-  const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
+  const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt['rig'+keys[dir]]={ready:true,image:{}};
   const p=player();p.aimDraw=dir*Math.PI/4;
   box.advanceRunAnimation(p,20,0,.1);box.advanceRunAnimation(p,0,0,.5);
   assert.equal(p.artMotion,null);assert.doesNotThrow(()=>box.drawTexturedAndroid(p));
@@ -540,7 +541,7 @@ test('all rigs render after movement settles and clears the motion vector',()=>{
 test('articulated ground shadow remains on the actor plane through movement and scaling',()=>{
  const names=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
  for(let dir=0;dir<8;dir++)for(const radius of [12,18])for(const blend of [0,.5,1]){
-  const {box,calls}=harness();box.southRigPreviewEnabled=true;box.abyssArt['rig'+names[dir]]={ready:true,image:{}};
+  const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt['rig'+names[dir]]={ready:true,image:{}};
   const p=player();Object.assign(p,{aimDraw:dir*Math.PI/4,r:radius,artRunBlend:blend,artMotion:{x:0,y:-1}});
   box.drawTexturedAndroid(p);const shadow=calls.find(c=>c[0]==='ellipse');
   assert.equal(shadow[1],p.x);assert.equal(shadow[2],p.y);
@@ -583,4 +584,23 @@ test('attack arc uses the drawing actor rather than the previous co-op actor con
  assert.ok(Math.abs(box.meleeArcNow({weapon:{id:'blade',arcMul:.8},boonPow:{arc:2}})-2*1.7*.8)<1e-8);
  assert.equal(box.meleeArcNow({weapon:{id:'maul',arcMul:1}}),Math.PI*2);
  assert.equal(box.meleeArcNow(),Math.PI*2);
+});
+
+test('normal gameplay enables the entire eight-direction rig set atomically',()=>{
+ const declaration=html.match(/const rigArtEnabled = ([^;]+);/)[1];
+ assert.equal(vm.runInNewContext(declaration,{profileQuery:new URLSearchParams()}),true);
+ assert.equal(vm.runInNewContext(declaration,{profileQuery:new URLSearchParams('rigs=0')}),false);
+ const {box,calls}=harness();box.rigArtEnabled=true;
+ assert.equal(box.artAnimationPreview,false);assert.equal(box.southRigPreviewEnabled,false);
+ const keys=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
+ for(const missing of keys){
+  box.abyssArt['rig'+missing].ready=false;
+  for(let i=0;i<8;i++)assert.equal(box.androidRigKey(i),null);
+  box.abyssArt['rig'+missing].ready=true;
+ }
+ for(let i=0;i<8;i++){
+  assert.equal(box.androidRigKey(i),'rig'+keys[i]);calls.length=0;
+  const p=player();p.aimDraw=i*Math.PI/4;box.drawTexturedAndroid(p);
+  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
+ }
 });
