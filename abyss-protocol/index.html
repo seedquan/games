@@ -221,6 +221,13 @@ const frameProfile = profileQuery.has("profile") ? {
 function recordFrameProfile(now, interval, renderMs) {
   if (!frameProfile || document.hidden) return;
   const p = frameProfile;
+  const sampleKey = [state, paused, canvas.width, canvas.height, ffx.level].join(":");
+  if (p.sampleKey !== sampleKey) {
+    p.sampleKey = sampleKey;
+    p.intervals.length = p.render.length = 0;
+    p.lastPublish = now;
+    delete canvas.dataset.frameProfile;
+  }
   if (interval > 0 && interval < 250) { p.intervals.push(interval); p.render.push(renderMs); }
   if (p.intervals.length > 240) { p.intervals.shift(); p.render.shift(); }
   if (now - p.lastPublish < 2000 || p.intervals.length < 30) return;
@@ -233,6 +240,9 @@ function recordFrameProfile(now, interval, renderMs) {
     renderMs: +mean(p.render).toFixed(2), shadows: p.shadows,
     dpr, width: canvas.width, height: canvas.height, state, effects: ffx.level,
     shadowsDisabled: p.disableShadows, samples: p.intervals.length,
+    viewport: [cw, ch], enemies: enemies.length,
+    projectiles: bullets.length + pbolts.length + ebolts.length + spells.length + glaives.length,
+    cachedLightColors: radialLightCache.size,
   });
 }
 let aS = 1, aOX = 0, aOY = 0;   // arena scale & offset (screen px) — derived from cam each frame
@@ -10053,13 +10063,7 @@ function drawLighting() {
   if (!lights.length) return;
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
-  for (const L of lights) {
-    const g = ctx.createRadialGradient(L.x, L.y, 0, L.x, L.y, L.r);
-    g.addColorStop(0, hexA(L.col, L.a));
-    g.addColorStop(1, hexA(L.col, 0));
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(L.x, L.y, L.r, 0, TAU); ctx.fill();
-  }
+  for (const L of lights) drawRadialLight(L.x, L.y, L.r, L.col, L.a);
   ctx.restore();
 }
 
@@ -10077,17 +10081,39 @@ function hexA(col, a) {
   return "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + a + ")";
 }
 
+// Each color costs at most 64 KiB of pixels; cap the cache at 4 MiB.
+// Radius and intensity remain per-draw values, so animated lights do not churn it.
+const radialLightCache = new Map();
+function drawRadialLight(x, y, radius, color, opacity) {
+  if (!(radius > 0) || !(opacity > 0)) return;
+  let tile = radialLightCache.get(color);
+  if (!tile) {
+    tile = document.createElement("canvas");
+    tile.width = tile.height = 128;
+    const gctx = tile.getContext("2d");
+    const mask = gctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    mask.addColorStop(0, "rgba(0,0,0,1)");
+    mask.addColorStop(1, "rgba(0,0,0,0)");
+    gctx.fillStyle = mask;
+    gctx.fillRect(0, 0, 128, 128);
+    gctx.globalCompositeOperation = "source-in";
+    gctx.fillStyle = color;
+    gctx.fillRect(0, 0, 128, 128);
+    if (radialLightCache.size >= 64) radialLightCache.delete(radialLightCache.keys().next().value);
+    radialLightCache.set(color, tile);
+  }
+  const alpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha * Math.min(1, opacity);
+  ctx.drawImage(tile, x - radius, y - radius, radius * 2, radius * 2);
+  ctx.globalAlpha = alpha;
+}
+
 /* additive bloom helper: redraw an emissive shape larger & faint under 'lighter' */
 function bloomCircle(x, y, r, col, a) {
   if (!ffx.bloom) return;
   ctx.save();
   ctx.globalCompositeOperation = "lighter";
-  ctx.globalAlpha = a;
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-  g.addColorStop(0, hexA(col, 0.9));
-  g.addColorStop(1, hexA(col, 0));
-  ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  drawRadialLight(x, y, r, col, a * 0.9);
   ctx.restore();
 }
 
