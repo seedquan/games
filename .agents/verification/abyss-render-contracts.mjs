@@ -475,3 +475,31 @@ test('all eight weapon grips follow the rendered palm through pose, scale and re
   assert.ok(Math.hypot(palm[0]-grip[0],palm[1]-grip[1])<1e-8,keys[dir]+' grip detached from rendered palm');
  }
 });
+
+test('rig feet plant along actual travel for every facing and movement direction',()=>{
+ const names=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
+ for(const name of names)for(let dir=0;dir<16;dir++)for(const radius of [12,18]) {
+  const {box}=harness();box.abyssArt['rig'+name]={ready:true,image:{}};
+  const motion={x:Math.cos(dir*Math.PI/8),y:Math.sin(dir*Math.PI/8)},scale=radius*4.4/160,points=[];
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
+   if(key==='footL')points.push({x:ex*scale,y:ey*scale});
+   if(!['South','North'].includes(name)&&(key.startsWith('thigh')||key.startsWith('shin')))
+    assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8,`${name}/${dir} ${key} overextended`);
+  };
+  const duty=box.southRigStep(0,-1,1,scale).duty;
+  for(let i=0;i<20;i++){
+   const phase=duty*i/20;box['draw'+name+'Rig'](phase,1,scale,motion);
+   points.at(-1).x+=phase*96*motion.x;points.at(-1).y+=phase*96*motion.y;
+  }
+  for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8,`${name}/${dir} ${axis} slides`);
+  for(const blend of [0,.5,1])for(let i=0;i<60;i++)box['draw'+name+'Rig'](i/60,blend,scale,motion);
+ }
+});
+test('rig phase advances forward while displacement supplies backward or strafe motion',()=>{
+ const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
+ const p=player();box.advanceRunAnimation(p,-24,0,.1);
+ assert.ok(Math.abs(p.artRunPhase-.25)<1e-8);assert.equal(p.artMotion.x,-1);assert.equal(p.artMotion.y,0);
+ box.advanceRunAnimation(p,0,-24,.1);assert.ok(Math.abs(p.artRunPhase-.5)<1e-8);assert.equal(p.artMotion.x,0);assert.equal(p.artMotion.y,-1);
+ box.advanceRunAnimation(p,0,0,.1);assert.equal(p.artRunPhase,.5);
+ p.dashT=1;box.advanceRunAnimation(p,24,0,.01);assert.equal(p.artRunPhase,.5);assert.equal(p.artMotion.y,-1);
+});
