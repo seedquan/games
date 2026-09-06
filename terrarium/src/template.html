@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f7f4ef">
+  <meta name="description" content="一个可干预、可观察的 Three.js 居民生态箱。规则演示与真实模型决策明确分离。">
+  <title>TERRARIUM · 小世界，大未知</title>
+  <script>
+    (() => {
+      const param = new URLSearchParams(window.location.search).get("clawpilotTheme");
+      const theme =
+        param || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <style>/* APP_STYLE */</style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-icon" data-icon="world"></span><div><b>TERRARIUM<span class="edition">EXPERIMENT 001</span></b><span class="tagline">小世界，大未知。</span></div></div>
+    <div class="header-center"><span class="live-dot"></span><span id="clock">DAY 01 · 07:00</span><span id="weather-label">晴天</span></div>
+    <div class="header-actions">
+      <button id="model-button" class="mode-button"><span data-icon="brain"></span><span id="mode-label">规则模拟</span><span class="mode-arrow">↗</span></button>
+      <button id="theme" class="icon-button" aria-label="切换明暗主题" title="切换主题"><span data-icon="sun"></span></button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="left-panel panel" id="intervention-panel">
+      <div class="panel-heading"><span class="eyebrow">GOD'S TOOLBOX</span><span class="small-dot"></span></div>
+      <h1>给世界一个变量。</h1>
+      <p class="intro">不必安排故事。放下一样东西，<br>然后看它们怎么生活。</p>
+      <div class="section-label">01 <span>投放到世界</span><span class="quiet">点击选择</span></div>
+      <div class="tool-grid" id="tools">
+        <button class="tool active" data-tool="observe" aria-pressed="true"><span data-icon="cursor"></span><span>观察</span><small>不干预</small></button>
+        <button class="tool" data-tool="food" aria-pressed="false"><span data-icon="food"></span><span>食物</span><small>浆果丛</small></button>
+        <button class="tool" data-tool="water" aria-pressed="false"><span data-icon="water"></span><span>水源</span><small>一眼清泉</small></button>
+        <button class="tool" data-tool="tree" aria-pressed="false"><span data-icon="tree"></span><span>树木</span><small>可采集木材</small></button>
+        <button class="tool" data-tool="stone" aria-pressed="false"><span data-icon="stone"></span><span>矿石</span><small>建造材料</small></button>
+        <button class="tool" data-tool="shelter" aria-pressed="false"><span data-icon="home"></span><span>小屋</span><small>公共休息处</small></button>
+        <button class="tool" data-tool="fire" aria-pressed="false"><span data-icon="fire"></span><span>篝火</span><small>恢复体力</small></button>
+        <button class="tool mysterious" data-tool="artifact" aria-pressed="false"><span data-icon="artifact"></span><span>未知物件</span><small>等待被发现</small></button>
+        <button class="tool wide" data-tool="resident" aria-pressed="false"><span data-icon="person"></span><span>一位新居民</span><small>最多 12 位</small></button>
+      </div>
+      <p class="placement-help" id="tool-help"><span data-icon="mouse"></span>点击居民查看；拖动旋转世界。</p>
+      <div class="section-label">02 <span>改变环境</span></div>
+      <div class="weather-controls" aria-label="天气">
+        <button data-weather="sun" class="active" aria-pressed="true"><span data-icon="sun"></span>晴天</button>
+        <button data-weather="rain" aria-pressed="false"><span data-icon="rain"></span>细雨</button>
+        <button data-weather="drought" aria-pressed="false"><span data-icon="dry"></span>干旱</button>
+      </div>
+      <p class="weather-help" id="weather-help">资源缓慢再生，一切刚刚好。</p>
+      <div class="experiment-note"><span data-icon="spark"></span><div><b>试一个小实验</b><p id="experiment-hint">把未知物件放在岛的另一端。谁会先发现？它会告诉其他人吗？</p></div></div>
+      <div class="storage-actions"><button id="save"><span data-icon="save"></span>存档</button><button id="load"><span data-icon="restore"></span>恢复</button><button id="export"><span data-icon="download"></span>导出</button></div>
+      <button id="reset" class="text-button"><span data-icon="refresh"></span>重新开始同一种子实验</button>
+    </aside>
+
+    <section class="stage" aria-label="三维岛屿">
+      <div class="world-stats">
+        <div><span id="population">06</span><small>居民</small></div>
+        <div><span id="resource-count">00</span><small>可用物资</small></div>
+        <div><span id="share-count">00</span><small>互助次数</small></div>
+        <div><span id="discovery-count">00</span><small>物件实验</small></div>
+      </div>
+      <div id="viewport"><div id="labels" aria-hidden="true"></div><div id="loading">正在唤醒小岛…</div></div>
+      <div class="world-caption"><span class="caption-line"></span><div><span>THE FIRST GARDEN</span><small>不预设结局，只观察发生。</small></div></div>
+      <div id="toast" role="status" aria-live="polite" hidden></div>
+      <div class="camera-tools">
+        <button id="focus" class="icon-button" title="回到全岛视角" aria-label="回到全岛视角"><span data-icon="focus"></span></button>
+        <button id="vision" aria-pressed="false"><span data-icon="eye"></span>居民视野</button>
+        <button id="names" aria-pressed="true" class="icon-button" title="显示或隐藏姓名" aria-label="显示或隐藏姓名"><span data-icon="person"></span></button>
+      </div>
+      <div class="time-controls">
+        <button id="pause" class="icon-button" aria-label="暂停" title="空格暂停"><span data-icon="pause"></span></button>
+        <div class="speed-control"><button data-speed="1" class="active" aria-pressed="true">1×</button><button data-speed="3" aria-pressed="false">3×</button><button data-speed="10" aria-pressed="false">10×</button></div>
+        <span class="time-status" id="time-status">世界正在继续</span>
+      </div>
+      <div class="scene-help"><span>拖动旋转</span><span>滚轮缩放</span><span>右键平移</span><span>ESC 取消投放</span></div>
+      <section class="chronicle">
+        <div class="chronicle-header"><span class="eyebrow">世界手记</span><span class="quiet">行动记录，不是内心独白</span><span id="event-count"></span></div>
+        <div id="events" class="events"></div>
+      </section>
+    </section>
+
+    <aside class="right-panel panel" id="resident-panel">
+      <div class="panel-heading"><span class="eyebrow">THE INHABITANTS</span><span id="alive-label">6 位居民</span></div>
+      <div class="residents" id="roster" aria-label="选择居民"></div>
+      <div class="resident-title"><div class="portrait" id="portrait"><span data-icon="person"></span></div><div><h2 id="resident-name">阿达</h2><p id="resident-role">好奇的探索者</p></div><span id="resident-source" class="source-tag">规则</span></div>
+      <div class="current-action"><span class="action-dot"></span><div><small>正在做什么</small><p id="resident-goal">观察周围</p></div></div>
+      <div class="needs" id="needs"></div>
+      <div class="inventory"><span class="quiet">随身物品</span><div><span data-icon="food"></span><b id="inventory-food">0</b><span data-icon="tree"></span><b id="inventory-wood">0</b><span data-icon="stone"></span><b id="inventory-stone">0</b></div></div>
+      <div class="section-label">经历 <span class="quiet">只记录亲历与收到的信息</span></div>
+      <div class="memories" id="memories"></div>
+      <div class="knowledge"><span data-icon="eye"></span><span id="knowledge">感知半径 8 · 已知地点 0</span></div>
+      <div class="boundary-note"><b>这是行为观察，不是 AGI 结论。</b><p id="boundary-copy">目前是预设规则驱动的演示。连接模型后，Astra 才会根据每位居民自己的观察选择行动。</p><button id="open-model" class="text-button">了解模型驱动 <span>↗</span></button></div>
+    </aside>
+  </main>
+  <nav class="mobile-nav" aria-label="面板切换"><button data-panel="world" class="active">世界</button><button data-panel="tools">干预</button><button data-panel="residents">居民</button></nav>
+
+  <dialog id="model-dialog">
+    <form method="dialog"><button class="dialog-close icon-button" aria-label="关闭">×</button></form>
+    <span class="eyebrow">GIVE THEM A MIND</span><h2>让模型接过决定权。</h2>
+    <p>每次请求只控制一位居民：自己的需求、附近物件、可见邻居和最近经历。模型不能读取世界源码、隐藏效果或其他人的记忆。</p>
+    <div class="connection-state" id="connection-state">正在检查本地连接…</div>
+    <div class="model-details"><div><span>模型</span><b id="model-name">gpt-6-astra</b></div><div><span>决策方式</span><b>单居民 · 独立请求 · 无工具</b></div><div><span>等待期间</span><b>冻结世界，不扣居民体力</b></div></div>
+    <label class="budget-label" for="budget">本轮最多调用 <input id="budget" type="number" min="1" max="24" value="12"> 次</label>
+    <p class="fine-print">真实调用会消耗你的 Copilot 额度。不会自动启动；到上限或出错会暂停，没有脚本回退。加速只影响模拟时间，不增加请求并发。已有规则模式下的经历会保留；做对照实验请先重置。</p>
+    <div class="dialog-buttons"><button id="use-demo" class="secondary">使用免费规则演示</button><button id="connect-model" class="primary" disabled>允许调用并启用 Astra</button></div>
+  </dialog>
+  <dialog id="reset-dialog"><span class="eyebrow">A FRESH START</span><h2>让世界重新开始？</h2><p>恢复到同一种子的初始世界。当前未保存的进度会丢失，已有存档不变。新世界默认使用规则演示。</p><div class="dialog-buttons"><button id="cancel-reset" class="secondary">取消</button><button id="confirm-reset" class="primary">重新开始</button></div></dialog>
+  <script>/* APP_SCRIPT */</script>
+  <!-- THIRD_PARTY_LICENSE -->
+</body>
+</html>
