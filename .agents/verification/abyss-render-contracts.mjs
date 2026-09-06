@@ -284,15 +284,24 @@ test('east rig remains opt-in and falls back while unavailable',()=>{
  assert.equal(box.previewRigKey(0),'rigEast');assert.equal(box.previewRigKey(4),null);
  box.abyssArt.rigEast.ready=false;assert.equal(box.previewRigKey(0),null);
 });
-test('east rig knees preserve both bone lengths across the full gait',()=>{
- const {box}=harness();
- for(let i=0;i<120;i++)for(const side of [-1,1]) {
-  const phase=i/120,step=box.southRigStep(phase,side,1);
-  const hx=80+side*3,hy=82+side*2-Math.abs(Math.sin(phase*Math.PI*2))*1.6;
-  const ax=80+side*3+step.travel*18,ay=126+side*2-step.lift*19;
-  const k=box.eastRigKnee(hx,hy,ax,ay);
-  assert.ok(Math.abs(Math.hypot(k.x-hx,k.y-hy)-25)<1e-8);
-  assert.ok(Math.abs(Math.hypot(k.x-ax,k.y-ay)-27)<1e-8);
+test('actual east leg renderer preserves bone lengths through running and stopping',()=>{
+ const {box}=harness();box.abyssArt.rigEast={ready:true,image:{}};
+ const bones=[];
+ box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{if(key.startsWith('shin')||key.startsWith('thigh'))bones.push({key,length:Math.hypot(ex-x,ey-y)});};
+ for(const blend of [0,.25,.5,.75,1])for(let i=0;i<120;i++) {
+  bones.length=0;box.drawEastRig(i/120,blend);
+  assert.equal(bones.length,4);
+  for(const b of bones)assert.ok(Math.abs(b.length-(b.key.startsWith('thigh')?25:27))<1e-8);
+ }
+});
+test('east planted foot cancels world movement across supported actor scales',()=>{
+ const {box}=harness();box.abyssArt.rigEast={ready:true,image:{}};
+ for(const radius of [12,13,18]) {
+  const scale=radius*4.4/160,points=[];
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{if(key==='footL')points.push({x:ex*scale,y:ey*scale});};
+  const duty=box.southRigStep(0,-1,1,scale).duty;
+  for(let i=0;i<20;i++) {const phase=duty*i/20;box.drawEastRig(phase,1,scale);points.at(-1).x+=phase*96;}
+  for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8);
  }
 });
 test('east rig renders eleven connected parts with one held weapon and feedback pass',()=>{
