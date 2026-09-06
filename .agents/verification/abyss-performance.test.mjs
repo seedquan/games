@@ -95,3 +95,24 @@ test('compact pause targets fit portrait and landscape viewports at touch size',
  }
  assert.equal(box.pauseLayout(3440,1440,1.25).cols,1);
 });
+
+test('combat profiling store never reads or writes the real save namespace',()=>{
+ const start=html.indexOf('const store ='),end=html.indexOf('/* ---------------- canvas / view',start);
+ for(const preview of [true,false]) {
+  let reads=0,writes=0;const saved={};
+  const box={combatPreviewEnabled:preview,localStorage:{getItem:k=>{reads++;return saved[k];},setItem:(k,v)=>{writes++;saved[k]=v;}}};
+  vm.createContext(box);vm.runInContext(html.slice(start,end)+'\nglobalThis.subject=store;',box);
+  assert.equal(box.subject.get('meta'),undefined);box.subject.set('meta','test');assert.equal(box.subject.get('meta'),'test');
+  assert.equal(reads,preview?0:2);assert.equal(writes,preview?0:1);
+ }
+});
+test('combat scenario uses real spawners, resets waves and leaves ordinary mode inert',()=>{
+ const start=html.indexOf("let combatPreviewScenario ="),end=html.indexOf('if(combatPreviewEnabled) {',start);
+ const spawned=[];let hubs=0,runs=0,rooms=0;
+ const box={combatPreviewEnabled:false,enterHub:()=>hubs++,startRun:()=>runs++,genRoom:()=>rooms++,placePlayers(){},snapCamera(){},CONFIG:{arenaW:2000,arenaH:1200},FINAL_DEPTH:24,players:[{}],player:{x:1000,y:760},ENEMY_DEFS:{chaser:{},shooter:{},tank:{},shield:{}},spawnEnemy:(...a)=>spawned.push(a),TAU:Math.PI*2,Math,Object,frameProfile:{sampleKey:'old'}};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);box.startCombatPreview('crowd');assert.equal(hubs,0);
+ box.combatPreviewEnabled=true;box.startCombatPreview('invalid');assert.equal(hubs,0);
+ box.startCombatPreview('crowd');assert.equal(spawned.length,48);assert.equal(runs,1);assert.equal(rooms,1);
+ assert.equal(box.players[0].hp,100000);assert.equal(box.spawnQ.length,0);assert.equal(box.waves.length,0);assert.equal(box.state,'play');assert.equal(box.frameProfile.sampleKey,null);
+ box.boss={hp:1000,maxHp:1000};box.startCombatPreview('core3');assert.equal(box.depth,24);assert.equal(box.boss.hp,300);
+});
