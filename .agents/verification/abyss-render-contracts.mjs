@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 const html = readFileSync(new URL('../../abyss-protocol/index.html', import.meta.url), 'utf8');
-const source = html.slice(html.indexOf('function textureFacing('), html.indexOf('function drawTexturedFloor('));
+const source = html.slice(html.indexOf('let androidTransitionSurface ='), html.indexOf('function drawTexturedFloor('));
 function harness(ready=true) {
   const calls=[];
   const ctx=new Proxy({globalAlpha:1}, {get(o,k){return k in o ? o[k] : (...args)=>calls.push([k,...args]);}});
@@ -53,7 +53,7 @@ test('textured final boss preserves phase transition and rage feedback',()=>{
  assert.equal(box.drawTexturedEnemy({type:'boss',kind:'abyss',x:0,y:0,r:50,phase:0,bossRage:true,phaseInvT:.3},false),true);
  assert.deepEqual(calls.find(c=>c[0]==='phase'),['phase',true,.3]);
 });
-test('unconverted shield retains vector blocking direction semantics',()=>{
+test('unavailable guardian asset yields to vector shield renderer',()=>{
  const {box,calls}=harness();
  assert.equal(box.drawTexturedEnemy({type:'shield'},false),false);
  assert.equal(calls.length,0);
@@ -149,4 +149,50 @@ test('northeast clip uses its own unmirrored atlas and stays gated in ordinary s
  box.drawTexturedAndroid(p);const draw=calls.find(c=>c[0]==='drawImage');
  assert.equal(p.artFacing,7);assert.equal(draw[1].id,'northeast');assert.equal(draw[2],480);assert.equal(draw[3],0);
  box.artAnimationPreview=false;assert.equal(box.runAnimationAsset(p,7),null);
+});
+
+
+test('pose crossfade adds weighted alpha before a single world draw and reuses its surface',()=>{
+ const {box,calls}=harness();let allocations=0,pixelAlpha=0;
+ const compositing=[];
+ const offscreen={globalAlpha:1,globalCompositeOperation:'source-over',
+  clearRect:()=>{pixelAlpha=0;},
+  drawImage:()=>{const a=offscreen.globalAlpha;
+   pixelAlpha=offscreen.globalCompositeOperation==='lighter'?Math.min(1,pixelAlpha+a):a+pixelAlpha*(1-a);
+   compositing.push(offscreen.globalCompositeOperation);
+  }};
+ const canvas={getContext:()=>offscreen};
+ box.document={createElement:()=>{allocations++;return canvas;}};
+ box.artAnimationPreview=true;box.abyssArt.runEast={ready:true,image:{}};
+ const p=player();p.artRunPhase=.25;p.artRunBlend=.5;
+ box.drawTexturedAndroid(p);
+ assert.equal(pixelAlpha,1);assert.equal(canvas.width,160);assert.equal(canvas.height,160);
+ assert.deepEqual(compositing,['source-over','lighter']);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ assert.equal(calls.find(c=>c[0]==='drawImage')[1],canvas);
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
+ assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
+ p.artRunBlend=.2;box.drawTexturedAndroid(p);assert.equal(allocations,1);assert.equal(pixelAlpha,1);
+ assert.equal(offscreen.globalAlpha,1);assert.equal(offscreen.globalCompositeOperation,'source-over');
+});
+
+
+test('textured guardian preserves directional and status-dependent barrier rendering',()=>{
+ const {box,calls}=harness();box.abyssArt.guardian={ready:true,image:{id:'guardian'}};
+ box.spriteDetail=()=>false;box.clamp=(v,a,b)=>Math.max(a,Math.min(b,v));box.glow=()=>{};box.noglow=()=>{};
+ const start=html.indexOf('function shieldActive(');
+ vm.runInContext(html.slice(start,html.indexOf('/* does a frontal shield',start)),box);
+ const e={type:'shield',x:20,y:30,r:17,hp:100,shieldHp:70,shieldMax:70,shieldA:1.2,frozenT:0,phase:0};
+ box.drawTexturedEnemy(e,false);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ assert.equal(calls.filter(c=>c[0]==='arc').length,2);
+ assert.equal(calls.find(c=>c[0]==='rotate')[1],1.2);
+ for(const overrides of [{shieldHp:0},{frozenT:1},{shockT:1},{exposeT:1}]){
+   calls.length=0;box.drawTexturedEnemy({...e,...overrides},false);
+   assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+   assert.equal(calls.filter(c=>c[0]==='arc').length,1);
+ }
+ calls.length=0;box.drawTexturedEnemy({...e,shieldA:-2},false);
+ assert.equal(calls.find(c=>c[0]==='rotate')[1],-2);
+ assert.equal(calls.filter(c=>c[0]==='save').length,calls.filter(c=>c[0]==='restore').length);
 });
