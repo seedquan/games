@@ -10355,15 +10355,22 @@ function advanceRunAnimation(p, dx, dy, dt) {
     const rig = previewRigKey(textureFacing(p.aimDraw,p.artFacing));
     if (rig) {
       direction=1; // The foot path follows displacement; reversing phase would cancel it twice.
-      if (!p.artMotion) p.artMotion={x:0,y:0};
-      p.artMotion.x=dx/distance;p.artMotion.y=dy/distance;
+      const mx=dx/distance,my=dy/distance;
+      if (!p.artMotion) p.artMotion={x:mx,y:my};
+      else {
+        // Let the stride narrow through a reversal rather than teleporting feet.
+        // Exponential response is time-based; do not normalize the blend to unit length.
+        const follow=1-Math.exp(-dt*24);
+        p.artMotion.x+=(mx-p.artMotion.x)*follow;
+        p.artMotion.y+=(my-p.artMotion.y)*follow;
+      }
     }
     const stride = rig ? SOUTH_RIG_CYCLE_DISTANCE : 112;
     p.artRunPhase = (((p.artRunPhase || 0) + direction * distance / stride) % 1 + 1) % 1;
   }
   const target = running ? 1 : 0;
   p.artRunBlend = target + ((p.artRunBlend || 0) - target) * Math.exp(-dt * 28);
-  if (p.artRunBlend < .01) { p.artRunBlend = 0; p.artRunPhase = 0; }
+  if (p.artRunBlend < .01) { p.artRunBlend = 0; p.artRunPhase = 0; p.artMotion=null; }
 }
 function runAnimationAsset(p, facing) {
   if (!artAnimationPreview || !(p.artRunBlend > 0)) return null;
