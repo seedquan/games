@@ -201,13 +201,13 @@ test('articulated gait alternates support legs, clears the swing foot, and loops
  const {box}=harness();
  for(let i=0;i<100;i++) {
   const phase=i/100,L=box.southRigStep(phase,-1,1),R=box.southRigStep(phase,1,1);
-  assert.notEqual(L.contact,R.contact);
+  assert.ok(!(L.contact && R.contact));
   for(const step of [L,R]) {assert.ok(step.lift>=0);if(step.contact)assert.equal(step.lift,0);}
   const shifted=box.southRigStep(phase+.5,-1,1);
   assert.ok(Math.abs(shifted.travel-R.travel)<1e-10);
   assert.ok(Math.abs(shifted.lift-R.lift)<1e-10);
  }
- for(const boundary of [0,.5,1]) {
+ for(const boundary of [0,box.southRigStep(0,-1,1).duty,.5,1]) {
   const before=box.southRigStep(boundary-1e-7,-1,1),after=box.southRigStep(boundary+1e-7,-1,1);
   assert.ok(Math.abs(before.travel-after.travel)<1e-5);
   assert.ok(Math.abs(before.lift-after.lift)<1e-5);
@@ -227,4 +227,30 @@ test('south rig is opt-in, waits for its image, and preserves one weapon and fee
  box.abyssArt.rigSouth.ready=false;calls.length=0;box.drawTexturedAndroid(p);
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
  assert.equal(box.drawSouthRig(.3,1),false);
+});
+
+test('rig planted toe stays in one world position through stance at actual actor scales',()=>{
+ const {box}=harness();box.abyssArt.rigSouth={ready:true,image:{}};
+ for(const radius of [12,13,18]) {
+  const scale=radius*4.4/160,duty=box.southRigStep(0,-1,1,scale).duty;
+  const positions=[];
+  box.drawSouthRigPart=(image,key,x,y,endX,endY)=>{
+   if(key==='footL')positions.push({x:endX*scale,y:endY*scale});
+  };
+  for(let i=1;i<20;i++) {
+   const phase=duty*i/20;
+   box.drawSouthRig(phase,1,scale);
+   positions.at(-1).y+=phase*96;
+  }
+  const spread=axis=>Math.max(...positions.map(p=>p[axis]))-Math.min(...positions.map(p=>p[axis]));
+  assert.ok(spread('y')<1e-9,`planted toe drift at r=${radius}: ${spread('y')}`);
+  assert.ok(spread('x')<1e-9);
+ }
+});
+test('south rig phase uses its calibrated stride while other direction clips retain theirs',()=>{
+ const {box}=harness();box.southRigPreviewEnabled=true;box.abyssArt.rigSouth={ready:true,image:{}};
+ const p=player();p.aimDraw=Math.PI/2;box.advanceRunAnimation(p,0,12,.01);
+ assert.ok(Math.abs(p.artRunPhase-.125)<1e-9);
+ p.artRunPhase=0;p.aimDraw=0;box.advanceRunAnimation(p,14,0,.01);
+ assert.ok(Math.abs(p.artRunPhase-.125)<1e-9);
 });
