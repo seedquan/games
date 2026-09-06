@@ -666,3 +666,23 @@ test('textured bulwark shield uses live angle, health and frozen state',()=>{
  e.frozenT=1;box.drawTexturedEnemy(e,false);assert.equal(box.ctx.lineWidth,3);
  e.frozenT=0;e.shieldHp=0;box.drawTexturedEnemy(e,false);assert.equal(box.ctx.lineWidth,3);
 });
+
+test('textured reactor bosses retain phase feedback exactly once',()=>{
+ const {box,calls}=harness();box.drawBossPhaseAuras=e=>calls.push(['phase',e.kind]);
+ for(const kind of ['warden','summoner','overseer']) {
+  box.abyssArt[kind]={ready:true,image:{}};calls.length=0;
+  assert.equal(box.drawTexturedEnemy({type:'boss',kind,x:0,y:0,r:40,rot:0,state:'move',t:0},false),true);
+  assert.equal(calls.filter(c=>c[0]==='phase').length,1);assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ }
+});
+test('overseer tracking pupil narrows during sweep and summoner shards expand while casting',()=>{
+ const {box,calls}=harness();
+ const e={x:0,y:0,r:36,rot:0,state:'move',t:0,_tgt:{x:100,y:0}};
+ box.drawTexturedBossMechanics(e,'overseer',120,0);const idle=calls.find(c=>c[0]==='ellipse');assert.ok(idle[1]>0);
+ calls.length=0;e.state='sweep';e.t=.02;e._tgt.x=-100;
+ box.drawTexturedBossMechanics(e,'overseer',120,0);const cast=calls.find(c=>c[0]==='ellipse');assert.ok(cast[1]<0);assert.ok(cast[3]<idle[3]);
+ calls.length=0;e.state='move';box.drawTexturedBossMechanics(e,'summoner',120,0);
+ const orbit=calls.filter(c=>c[0]==='translate')[1][1];
+ calls.length=0;e.state='summon';e.t=.02;box.drawTexturedBossMechanics(e,'summoner',120,0);
+ assert.ok(calls.filter(c=>c[0]==='translate')[1][1]>orbit);
+});

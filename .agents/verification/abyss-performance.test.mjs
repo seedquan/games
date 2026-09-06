@@ -189,3 +189,15 @@ test('camera shake honors off, bounds reduced motion and decays before stopping'
  assert.ok(Math.hypot(...after)<Math.hypot(...before)/100);
  assert.ok(box.cameraShakeOffset(.2,'full',0,0,10).every(v=>v===0));
 });
+
+test('reactor boss scenarios call real boss spawner and reset prior encounters',()=>{
+ const start=html.indexOf("let combatPreviewScenario ="),end=html.indexOf('if(combatPreviewEnabled)',start);
+ const calls=[];const box={combatPreviewEnabled:true,enterHub(){},startRun(){},genRoom(){},placePlayers(){},snapCamera(){},CONFIG:{arenaW:2000,arenaH:1200},FINAL_DEPTH:24,players:[{}],player:{x:1000,y:760},Math,Object,frameProfile:null};
+ box.spawnBoss=kind=>{calls.push(kind);box.boss={kind};};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);
+ for(const kind of ['warden','summoner','overseer']) {
+  box.enemies=[{}];box.spawnQ=[{}];box.startCombatPreview(kind);
+  assert.equal(box.boss.kind,kind);assert.equal(box.enemies.length,0);assert.equal(box.spawnQ.length,0);assert.equal(box.depth,12);assert.equal(box.boss.y,500);
+ }
+ assert.deepEqual(calls,['warden','summoner','overseer']);
+});
