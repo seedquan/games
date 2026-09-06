@@ -29,3 +29,17 @@ only affect player one in the hub, release on keyboard input/window blur, and
 clear on leaving the hub. A visible frame/blend readout supports live checks.
 18 focused tests pass; the added scope regression checks normal mode, combat,
 and player two are unaffected. The controls are absent from ordinary sessions.
+
+North / Northeast follow-up: add two independently authored transparent atlases
+(39,924 and 34,326 bytes) with pelvis registration, without mirroring asymmetric
+shoulder armor. These remain preview candidates; ordinary sessions skip all four
+run decodes. The panel now wraps its controls and includes North and Northeast.
+Preview movement disarms the hub exit until the actor stops and walks clear of
+it, preventing Stop at the portal from unintentionally starting combat.
+
+21 focused checks pass, covering north/northeast selection, reverse phase, normal
+mode isolation and portal re-arming. Inline script syntax and whitespace checks
+pass; all 12 assets are data URLs and the HTML contains no external URLs. The new
+public preview still needs live browser validation after Pages deploys. West
+iterations were rejected for direction reversal or repeated leg poses; full
+eight-direction gait and production art acceptance remain open.
