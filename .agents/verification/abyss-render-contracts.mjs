@@ -8,7 +8,7 @@ const source = html.slice(html.indexOf('let androidTransitionSurface ='), html.i
 function harness(ready=true) {
   const calls=[];
   const ctx=new Proxy({globalAlpha:1}, {get(o,k){return k in o ? o[k] : (...args)=>calls.push([k,...args]);}});
-  const box={ctx,artAnimationPreview:false,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
+  const box={ctx,artAnimationPreview:false,southRigPreviewEnabled:false,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
     weaponDefP:p=>p.weapon,drawHeldWeapon:(...args)=>calls.push(['weapon',...args]),
     drawAndroidFeedback:p=>calls.push(['feedback',p]),Math,Object,Number};
   vm.createContext(box);vm.runInContext(source,box);
@@ -195,4 +195,36 @@ test('textured guardian preserves directional and status-dependent barrier rende
  calls.length=0;box.drawTexturedEnemy({...e,shieldA:-2},false);
  assert.equal(calls.find(c=>c[0]==='rotate')[1],-2);
  assert.equal(calls.filter(c=>c[0]==='save').length,calls.filter(c=>c[0]==='restore').length);
+});
+
+test('articulated gait alternates support legs, clears the swing foot, and loops continuously',()=>{
+ const {box}=harness();
+ for(let i=0;i<100;i++) {
+  const phase=i/100,L=box.southRigStep(phase,-1,1),R=box.southRigStep(phase,1,1);
+  assert.notEqual(L.contact,R.contact);
+  for(const step of [L,R]) {assert.ok(step.lift>=0);if(step.contact)assert.equal(step.lift,0);}
+  const shifted=box.southRigStep(phase+.5,-1,1);
+  assert.ok(Math.abs(shifted.travel-R.travel)<1e-10);
+  assert.ok(Math.abs(shifted.lift-R.lift)<1e-10);
+ }
+ for(const boundary of [0,.5,1]) {
+  const before=box.southRigStep(boundary-1e-7,-1,1),after=box.southRigStep(boundary+1e-7,-1,1);
+  assert.ok(Math.abs(before.travel-after.travel)<1e-5);
+  assert.ok(Math.abs(before.lift-after.lift)<1e-5);
+ }
+ assert.equal(box.southRigStep(.7,-1,0).lift,0);
+ assert.equal(Math.abs(box.southRigStep(.2,1,0).travel),0);
+});
+test('south rig is opt-in, waits for its image, and preserves one weapon and feedback pass',()=>{
+ const {box,calls}=harness();const p=player();p.aimDraw=Math.PI/2;p.artRunPhase=.7;p.artRunBlend=1;
+ box.abyssArt.rigSouth={ready:true,image:{id:'rig'}};
+ box.drawTexturedAndroid(p);assert.equal(calls.filter(c=>c[0]==='drawImage'&&c[1].id==='rig').length,0);
+ box.southRigPreviewEnabled=true;calls.length=0;box.drawTexturedAndroid(p);
+ assert.equal(calls.filter(c=>c[0]==='drawImage'&&c[1].id==='rig').length,11);
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
+ assert.equal(calls.filter(c=>c[0]==='save').length,calls.filter(c=>c[0]==='restore').length);
+ for(const c of calls.filter(c=>['scale','rotate','translate'].includes(c[0])))assert.ok(c.slice(1).every(Number.isFinite));
+ box.abyssArt.rigSouth.ready=false;calls.length=0;box.drawTexturedAndroid(p);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ assert.equal(box.drawSouthRig(.3,1),false);
 });
