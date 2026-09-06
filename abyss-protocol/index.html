@@ -212,6 +212,29 @@ const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 const arcadeLink = document.getElementById("arcade");
 let cw = 0, ch = 0, dpr = 1;
+// Opt-in local telemetry: no network, storage, or normal-game overlay.
+const profileQuery = new URLSearchParams(location.search);
+const frameProfile = profileQuery.has("profile") ? {
+  intervals: [], render: [], shadows: 0, lastPublish: 0,
+  disableShadows: profileQuery.get("shadows") === "off",
+} : null;
+function recordFrameProfile(now, interval, renderMs) {
+  if (!frameProfile || document.hidden) return;
+  const p = frameProfile;
+  if (interval > 0 && interval < 250) { p.intervals.push(interval); p.render.push(renderMs); }
+  if (p.intervals.length > 240) { p.intervals.shift(); p.render.shift(); }
+  if (now - p.lastPublish < 2000 || p.intervals.length < 30) return;
+  p.lastPublish = now;
+  const sorted = p.intervals.slice().sort((a,b) => a-b);
+  const mean = xs => xs.reduce((a,b) => a+b, 0) / xs.length;
+  canvas.dataset.frameProfile = JSON.stringify({
+    fps: +(1000 / mean(p.intervals)).toFixed(1),
+    p95: +sorted[Math.floor(sorted.length * .95)].toFixed(1),
+    renderMs: +mean(p.render).toFixed(2), shadows: p.shadows,
+    dpr, width: canvas.width, height: canvas.height, state, effects: ffx.level,
+    shadowsDisabled: p.disableShadows, samples: p.intervals.length,
+  });
+}
 let aS = 1, aOX = 0, aOY = 0;   // arena scale & offset (screen px) — derived from cam each frame
 let vigGrad = null, lowHpGrad = null;
 
@@ -9749,7 +9772,13 @@ function updateParts(dt) {
 }
 
 /* ---------------- §S RENDER: WORLD ---------------- */
-function glow(col, b) { ctx.shadowColor = col; ctx.shadowBlur = b; }
+function glow(col, b) {
+  if (frameProfile) {
+    frameProfile.shadows++;
+    if (frameProfile.disableShadows) { ctx.shadowBlur = 0; return; }
+  }
+  ctx.shadowColor = col; ctx.shadowBlur = b;
+}
 function noglow() { ctx.shadowBlur = 0; }
 function rrect(x, y, w, h, r) {
   ctx.beginPath();
@@ -15104,7 +15133,10 @@ function loop(now) {
       acc -= S;
     }
   }
+  if (frameProfile) frameProfile.shadows = 0;
+  const renderStart = frameProfile ? performance.now() : 0;
   render(paused ? 0 : dt);
+  if (frameProfile) recordFrameProfile(now, dt * 1000, performance.now() - renderStart);
 }
 requestAnimationFrame(loop);
 </script>
