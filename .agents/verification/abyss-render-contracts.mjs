@@ -8,7 +8,7 @@ const source = html.slice(html.indexOf('function textureFacing('), html.indexOf(
 function harness(ready=true) {
   const calls=[];
   const ctx=new Proxy({globalAlpha:1}, {get(o,k){return k in o ? o[k] : (...args)=>calls.push([k,...args]);}});
-  const box={ctx,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
+  const box={ctx,artAnimationPreview:false,abyssArt:{player:{ready,image:{}}},timeNow:0,TAU:Math.PI*2,numPlayers:1,
     weaponDefP:p=>p.weapon,drawHeldWeapon:(...args)=>calls.push(['weapon',...args]),
     drawAndroidFeedback:p=>calls.push(['feedback',p]),Math,Object,Number};
   vm.createContext(box);vm.runInContext(source,box);
@@ -89,4 +89,27 @@ test('enemy warning, body and HP layers execute exclusively and balance canvas s
  box.drawEnemy(e,'telegraph');assert.ok(calls.some(c=>c[0]==='arc'));assert.ok(!calls.some(c=>c[0]==='body'||c[0]==='fillRect'));assert.equal(depth,0);
  calls.length=0;box.drawEnemy(e,'body');assert.equal(calls.filter(c=>c[0]==='body').length,1);assert.ok(!calls.some(c=>c[0]==='arc'||c[0]==='fillRect'));assert.equal(depth,0);
  calls.length=0;box.drawEnemy(e,'status');assert.equal(calls.filter(c=>c[0]==='fillRect').length,2);assert.ok(!calls.some(c=>c[0]==='arc'||c[0]==='body'));assert.equal(depth,0);
+});
+
+test('run phase follows displacement, freezes at walls/during dash, and blends to idle',()=>{
+ const {box}=harness();const p=player();
+ box.advanceRunAnimation(p,28,0,.1);assert.ok(Math.abs(p.artRunPhase-.25)<1e-8);
+ const phase=p.artRunPhase;box.advanceRunAnimation(p,0,0,.1);assert.equal(p.artRunPhase,phase);
+ p.dashT=.1;box.advanceRunAnimation(p,60,0,.01);assert.equal(p.artRunPhase,phase);
+ p.dashT=0;box.advanceRunAnimation(p,-14,0,.1);assert.ok(Math.abs(p.artRunPhase-.125)<1e-8);
+ for(let i=0;i<20;i++)box.advanceRunAnimation(p,0,0,.016);
+ assert.equal(p.artRunBlend,0);assert.equal(p.artRunPhase,0);
+});
+test('run previews retain unloaded and unconverted direction fallbacks',()=>{
+ const {box,calls}=harness();box.artAnimationPreview=true;
+ const p=player();p.artRunBlend=1;p.artRunPhase=.5;
+ box.abyssArt.runEast={ready:false,image:{id:'run'}};
+ box.drawTexturedAndroid(p);assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ assert.equal(box.runAnimationAsset(p,0),null);
+ box.abyssArt.runEast.ready=true;assert.ok(box.runAnimationAsset(p,0));
+ assert.equal(box.runAnimationAsset(p,6),null);
+ calls.length=0;box.drawTexturedAndroid(p);
+ const draw=calls.find(c=>c[0]==='drawImage');assert.equal(draw[1].id,'run');assert.equal(draw[2],0);assert.equal(draw[3],160);
+ assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
+ assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
 });
