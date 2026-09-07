@@ -686,3 +686,22 @@ test('overseer tracking pupil narrows during sweep and summoner shards expand wh
  calls.length=0;e.state='summon';e.t=.02;box.drawTexturedBossMechanics(e,'summoner',120,0);
  assert.ok(calls.filter(c=>c[0]==='translate')[1][1]>orbit);
 });
+
+test('splitter texture deforms along its committed axis and preserves generation nuclei',()=>{
+ const {box,calls}=harness(),asset={image:{}};
+ const e={x:0,y:0,r:52,rot:0,dirX:0,dirY:1,state:'wind',t:0,gen:0};
+ box.drawTexturedSplitBody(e,asset,160,0);
+ assert.equal(calls.find(c=>c[0]==='rotate')[1],Math.PI/2);
+ const scale=calls.find(c=>c[0]==='scale');assert.equal(scale[1],1.25);assert.ok(Math.abs(scale[2]-.82)<1e-12);
+ assert.equal(calls.filter(c=>c[0]==='ellipse').length,3);
+ calls.length=0;e.gen=1;e.frozenT=1;e.state='move';e.rot=1;
+ box.drawTexturedSplitBody(e,asset,115.2,0);
+ assert.deepEqual(calls.find(c=>c[0]==='scale'),['scale',1,1]);assert.equal(calls.filter(c=>c[0]==='ellipse').length,2);
+ assert.equal(calls.find(c=>c[0]==='drawImage')[4],115.2);
+});
+test('hexweaver keeps two expanding cast glyphs around its textured body',()=>{
+ const {box,calls}=harness();const e={x:0,y:0,r:38,rot:0,state:'move'};
+ box.drawTexturedBossMechanics(e,'hexweaver',124,0);const idle=calls.find(c=>c[0]==='moveTo')[2];assert.equal(calls.filter(c=>c[0]==='stroke').length,2);
+ calls.length=0;e.state='runes';e.t=0;box.drawTexturedBossMechanics(e,'hexweaver',124,0);
+ assert.ok(Math.abs(calls.find(c=>c[0]==='moveTo')[2])>Math.abs(idle));
+});

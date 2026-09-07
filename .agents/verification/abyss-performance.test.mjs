@@ -201,3 +201,12 @@ test('reactor boss scenarios call real boss spawner and reset prior encounters',
  }
  assert.deepEqual(calls,['warden','summoner','overseer']);
 });
+
+test('split validation uses real boss health threshold without injecting fragments',()=>{
+ const start=html.indexOf("let combatPreviewScenario ="),end=html.indexOf('if(combatPreviewEnabled)',start);
+ const box={combatPreviewEnabled:true,enterHub(){},startRun(){},genRoom(){},placePlayers(){},snapCamera(){},CONFIG:{arenaW:2000,arenaH:1200},FINAL_DEPTH:24,players:[{}],player:{x:1000,y:760},Math,Object,frameProfile:null};
+ box.spawnBoss=kind=>{box.boss={kind,hp:1000,maxHp:1000};box.enemies.push(box.boss);};
+ vm.createContext(box);vm.runInContext(html.slice(start,end),box);box.startCombatPreview('splitterSplit');
+ assert.equal(box.boss.kind,'splitter');assert.equal(box.boss.hp,490);assert.equal(box.enemies.length,1);
+ box.startCombatPreview('hexweaver');assert.equal(box.boss.kind,'hexweaver');assert.equal(box.boss.hp,1000);
+});
