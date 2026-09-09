@@ -705,3 +705,31 @@ test('hexweaver keeps two expanding cast glyphs around its textured body',()=>{
  calls.length=0;e.state='runes';e.t=0;box.drawTexturedBossMechanics(e,'hexweaver',124,0);
  assert.ok(Math.abs(calls.find(c=>c[0]==='moveTo')[2])>Math.abs(idle));
 });
+
+test('juggernaut armor textures follow live plate count without changing combat state',()=>{
+ const {box,calls}=harness(),asset={image:{}};
+ const e={x:0,y:0,r:48,plates:4,state:'move',t:0,hp:100,maxHp:100};
+ for(const plates of [4,3,2,1,0]) {
+  e.plates=plates;calls.length=0;const before=JSON.stringify(e);
+  box.drawTexturedJuggernaut(e,asset,156,0);
+  const draws=calls.filter(c=>c[0]==='drawImage');
+  assert.equal(draws.length,1+plates);
+  for(const c of draws){assert.ok(c[2]>=0&&c[2]+c[4]<=768);assert.ok(c[3]>=0&&c[3]+c[5]<=512);}
+  assert.equal(JSON.stringify(e),before);
+ }
+ calls.length=0;e.plates=4;e.state='slam';e.t=0;
+ box.drawTexturedJuggernaut(e,asset,156,0);
+ assert.ok(calls.find(c=>c[0]==='scale')[2]<1);
+ assert.ok(calls.some(c=>c[0]==='ellipse'));
+});
+test('juggernaut retains unloaded fallback, phase feedback and a grounded chassis',()=>{
+ const {box,calls}=harness();box.drawBossPhaseAuras=()=>calls.push(['phase']);
+ const e={type:'boss',kind:'juggernaut',x:20,y:30,r:48,plates:4,state:'move',t:0};
+ assert.equal(box.drawTexturedEnemy(e,false),false);assert.equal(calls.length,0);
+ box.abyssArt.juggernaut={ready:true,image:{}};
+ assert.equal(box.drawTexturedEnemy(e,false),true);
+ assert.equal(calls.filter(c=>c[0]==='phase').length,1);
+ const position=calls.find(c=>c[0]==='translate');calls.length=0;box.timeNow=1.5;
+ box.drawTexturedEnemy(e,false);assert.deepEqual(calls.find(c=>c[0]==='translate'),position);
+ assert.ok(html.includes('"juggernaut":"data:image/webp;base64,'));
+});
