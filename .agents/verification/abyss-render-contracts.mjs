@@ -292,7 +292,7 @@ test('actual east leg renderer preserves bone lengths through running and stoppi
  for(const blend of [0,.25,.5,.75,1])for(let i=0;i<120;i++) {
   bones.length=0;box.drawEastRig(i/120,blend);
   assert.equal(bones.length,4);
-  for(const b of bones)assert.ok(Math.abs(b.length-(b.key.startsWith('thigh')?25:27))<1e-8);
+  for(const b of bones)assert.ok(Math.abs(b.length-(b.key.startsWith('thigh')?25.25:27.25))<1e-8);
  }
 });
 test('east planted foot cancels world movement across supported actor scales',()=>{
@@ -352,7 +352,7 @@ test('west stance cancels negative world X travel and retains fixed leg lengths'
   const scale=radius*4.4/160,points=[];
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
-   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25.25:27.25))<1e-8);
   };
   const duty=box.southRigStep(0,-1,1,scale).duty;
   for(let i=0;i<20;i++){const phase=duty*i/20;box.drawWestRig(phase,1,scale);points.at(-1).x-=phase*96;}
@@ -374,7 +374,7 @@ test('northeast stance locks both world axes and actual leg draws retain bone le
   const scale=radius*4.4/160,points=[];
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
-   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25.25:27.25))<1e-8);
   };
   const duty=box.southRigStep(0,-1,1,scale).duty;
   for(let i=0;i<20;i++){const phase=duty*i/20;box.drawNorthEastRig(phase,1,scale);points.at(-1).x+=phase*96*Math.SQRT1_2;points.at(-1).y-=phase*96*Math.SQRT1_2;}
@@ -398,7 +398,7 @@ test('northwest planted foot cancels both negative world axes with fixed leg len
   const scale=radius*4.4/160,points=[];
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
-   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25.25:27.25))<1e-8);
   };
   const duty=box.southRigStep(0,-1,1,scale).duty;
   for(let i=0;i<20;i++){const phase=duty*i/20;box.drawNorthWestRig(phase,1,scale);points.at(-1).x-=phase*96*Math.SQRT1_2;points.at(-1).y-=phase*96*Math.SQRT1_2;}
@@ -421,7 +421,7 @@ test('southeast stance cancels both positive world axes and preserves leg length
   const scale=radius*4.4/160,points=[];
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
-   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25.25:27.25))<1e-8);
   };
   const duty=box.southRigStep(0,-1,1,scale).duty;
   for(let i=0;i<20;i++){const phase=duty*i/20;box.drawSouthEastRig(phase,1,scale);points.at(-1).x+=phase*96*Math.SQRT1_2;points.at(-1).y+=phase*96*Math.SQRT1_2;}
@@ -444,7 +444,7 @@ test('southwest stance cancels negative X and positive Y and preserves leg lengt
   const scale=radius*4.4/160,points=[];
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
-   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8);
+   if(key.startsWith('thigh')||key.startsWith('shin'))assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25.25:27.25))<1e-8);
   };
   const duty=box.southRigStep(0,-1,1,scale).duty;
   for(let i=0;i<20;i++){const phase=duty*i/20;box.drawSouthWestRig(phase,1,scale);points.at(-1).x-=phase*96*Math.SQRT1_2;points.at(-1).y+=phase*96*Math.SQRT1_2;}
@@ -486,7 +486,7 @@ test('rig feet plant along actual travel for every facing and movement direction
   box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{
    if(key==='footL')points.push({x:ex*scale,y:ey*scale});
    if(!['South','North'].includes(name)&&(key.startsWith('thigh')||key.startsWith('shin')))
-    assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25:27))<1e-8,`${name}/${dir} ${key} overextended`);
+    assert.ok(Math.abs(Math.hypot(ex-x,ey-y)-(key.startsWith('thigh')?25.25:27.25))<1e-8,`${name}/${dir} ${key} overextended`);
   };
   const duty=box.southRigStep(0,-1,1,scale).duty;
   for(let i=0;i<20;i++){
@@ -774,4 +774,22 @@ test('artillery recoil starts only on a real shot and decays in simulation time'
  box.updateBossArtillery(e,.05,100);assert.equal(e.artRecoilT,0);assert.equal(bolts.length,0);
  box.updateBossArtillery(e,.06,100);assert.equal(bolts.length,1);assert.equal(e.artRecoilT,.18);assert.equal(e.artShotA,0);
  e.state='aim';e.t=.2;box.updateBossArtillery(e,.04,100);assert.ok(Math.abs(e.artRecoilT-.14)<1e-10);assert.equal(bolts.length,1);
+});
+
+test('foot trajectory matches velocity through toe-off, recovery and touchdown',()=>{
+ const {box}=harness(),h=1e-7;
+ for(const radius of [12,13,18]) {
+  const scale=radius*4.4/160,duty=box.southRigStep(0,-1,1,scale).duty;
+  const step=u=>box.southRigStep(u,-1,1,scale);
+  for(const boundary of [0,duty,duty*1.08,1-duty*.08,1]) {
+   const before=step(boundary-h),at=step(boundary),after=step(boundary+h);
+   for(const axis of ['travel','lift']) {
+    const incoming=(at[axis]-before[axis])/h,outgoing=(after[axis]-at[axis])/h;
+    assert.ok(Math.abs(incoming-outgoing)<.005,`${radius}, ${boundary}, ${axis}: ${incoming} -> ${outgoing}`);
+   }
+  }
+  for(let i=0;i<1000;i++) {
+   const p=step(i/1000);assert.ok(Math.abs(p.travel)<=1.081);assert.ok(p.lift>=0&&p.lift<=1);
+  }
+ }
 });
