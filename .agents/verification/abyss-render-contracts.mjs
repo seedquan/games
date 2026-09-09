@@ -733,3 +733,45 @@ test('juggernaut retains unloaded fallback, phase feedback and a grounded chassi
  box.drawTexturedEnemy(e,false);assert.deepEqual(calls.find(c=>c[0]==='translate'),position);
  assert.ok(html.includes('"juggernaut":"data:image/webp;base64,'));
 });
+
+test('all boss archetypes resolve to embedded textures',()=>{
+ const {box}=harness();
+ for(const kind of ['abyss','warden','summoner','overseer','splitter','hexweaver','juggernaut','artillery']) {
+  const key=box.enemyTextureKey({type:'boss',kind});assert.ok(key,kind);
+  assert.ok(html.includes('"'+key+'":"data:image/webp;base64,'),kind);
+ }
+});
+test('artillery barrel axis matches committed aim for every direction and holds during recoil',()=>{
+ const {box}=harness();
+ for(let i=0;i<64;i++) {
+  const a=i*Math.PI/32,e={x:0,y:0,state:'aim',t:.2,dirX:Math.cos(a),dirY:Math.sin(a),_tgt:{x:-100,y:1}};
+  const pose=box.artilleryCannonPose(e,124),p=pose.points;
+  const authored=Math.atan2(p[3]-p[1],p[2]-p[0]);
+  assert.ok(Math.abs(Math.cos(authored+pose.angle)-Math.cos(a))<1e-10);
+  assert.ok(Math.abs(Math.sin(authored+pose.angle)-Math.sin(a))<1e-10);
+  assert.ok(Math.abs(Math.atan2(Math.sin(a-pose.facing*Math.PI/4),Math.cos(a-pose.facing*Math.PI/4)))<=Math.PI/8+1e-10);
+  e.state='move';e.artRecoilT=.18;e.artShotA=a;
+  assert.ok(Math.abs(Math.cos(box.artilleryCannonPose(e,124).a)-Math.cos(a))<1e-10);
+  e.artRecoilT=0;assert.equal(box.artilleryCannonPose(e,124).a,Math.atan2(1,-100));
+ }
+});
+test('artillery fallback and painted bearing remain stable with independent cannon recoil',()=>{
+ const {box,calls}=harness();box.drawBossPhaseAuras=()=>calls.push(['phase']);
+ const e={type:'boss',kind:'artillery',x:10,y:20,r:38,state:'move',dirX:1,dirY:0};
+ assert.equal(box.drawTexturedEnemy(e,false),false);assert.equal(calls.length,0);
+ box.abyssArt.artillery={ready:true,image:{}};box.drawTexturedEnemy(e,false);
+ const body=calls.find(c=>c[0]==='drawImage'),bearing=calls.filter(c=>c[0]==='translate').at(-1);
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,2);assert.equal(calls.filter(c=>c[0]==='phase').length,1);
+ calls.length=0;e.artRecoilT=.18;e.artShotA=0;box.timeNow=3;box.drawTexturedEnemy(e,false);
+ assert.deepEqual(calls.find(c=>c[0]==='drawImage'),body);
+ assert.ok(calls.filter(c=>c[0]==='translate').at(-1)[1]<bearing[1]);
+});
+test('artillery recoil starts only on a real shot and decays in simulation time',()=>{
+ const bolts=[],e={x:0,y:0,r:38,state:'aim',t:.1,cd:0,rot:0,vx:0,vy:0,dirX:1,dirY:0,sub:0,tier:0,_tgt:{x:0,y:100}};
+ const box={Math,player:null,bossPhaseTick:()=>1,fireEbolt:(...a)=>bolts.push(a),audio:{bolt(){}},shake(){},enemyContact(){},rand:a=>a,angTo:(x,y,a,b)=>Math.atan2(b-y,a-x)};
+ vm.createContext(box);const start=html.indexOf('function updateBossArtillery(');
+ vm.runInContext(html.slice(start,html.indexOf('/* --- MITOSIS PRIME:',start)),box);
+ box.updateBossArtillery(e,.05,100);assert.equal(e.artRecoilT,0);assert.equal(bolts.length,0);
+ box.updateBossArtillery(e,.06,100);assert.equal(bolts.length,1);assert.equal(e.artRecoilT,.18);assert.equal(e.artShotA,0);
+ e.state='aim';e.t=.2;box.updateBossArtillery(e,.04,100);assert.ok(Math.abs(e.artRecoilT-.14)<1e-10);assert.equal(bolts.length,1);
+});
