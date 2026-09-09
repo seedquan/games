@@ -10046,8 +10046,25 @@ function southRigStep(phase, side, blend, worldScale = 13*4.4/160) {
   const duty = 2*SOUTH_RIG_FOOT_TRAVEL*worldScale/SOUTH_RIG_CYCLE_DISTANCE;
   const contact = u < duty;
   const swing = contact ? 0 : (u-duty)/(1-duty);
-  const travel = contact ? 1-2*u/duty : -1+2*swing*swing*(3-2*swing);
-  const lift = contact ? 0 : Math.sin(swing*Math.PI);
+  // Match stance velocity at both ends of the swing. A short toe-off/landing
+  // arc allows bounded overshoot, then the recovery returns with zero endpoint
+  // velocity. The previous smoothstep stopped the foot abruptly at lift-off.
+  const turn=.08*duty/(1-duty),over=.08;
+  let travel;
+  if(contact) travel=1-2*u/duty;
+  else if(swing<turn) {
+    const v=swing/turn;
+    travel=-1-over*(2*v-v*v);
+  } else if(swing>1-turn) {
+    const v=(1-swing)/turn;
+    travel=1+over*(2*v-v*v);
+  } else {
+    const v=(swing-turn)/(1-2*turn);
+    travel=(1+over)*(-1+2*v*v*(3-2*v));
+  }
+  // Zero vertical speed at toe-off and touchdown prevents boot/toe snapping.
+  const edge=Math.min(1,swing/.025,(1-swing)/.025);
+  const lift = contact ? 0 : Math.sin(swing*Math.PI)*edge*edge*(3-2*edge);
   return { travel: travel*blend, lift: lift*blend, contact, duty };
 }
 function drawSouthRigPart(image, key, x, y, endX, endY, widthScale, parts = SOUTH_RIG_PARTS) {
@@ -10125,7 +10142,7 @@ function androidRigKey(facing) {
 }
 // Two fixed-length bones keep the knee connected while the foot follows its arc.
 function eastRigKnee(hx,hy,ax,ay) {
-  const upper=25,lower=27,dx=ax-hx,dy=ay-hy;
+  const upper=25.25,lower=27.25,dx=ax-hx,dy=ay-hy;
   const distance=Math.max(.001,Math.hypot(dx,dy));
   const reach=Math.min(upper+lower-.001,Math.max(Math.abs(upper-lower)+.001,distance));
   const along=(upper*upper-lower*lower+reach*reach)/(2*reach);
