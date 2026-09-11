@@ -1061,3 +1061,44 @@ test('flora dispatch preserves touch-off omission, view culling and unloaded fal
  box.touchUI=false;box.abyssArt.flora.ready=false;box.drawTerrainOver();
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,0);assert.equal(calls.filter(c=>c[0]==='quadraticCurveTo').length,5);
 });
+
+test('painted gun grips match both rendered palms with real weapon transforms',()=>{
+ const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt.guns={ready:true,image:{gunAtlas:true}};
+ box.glow=()=>{};box.noglow=()=>{};box.spriteDetail=()=>false;
+ const start=html.indexOf('function drawHeldWeapon(');vm.runInContext(html.slice(start,html.indexOf('\n/* the player android:',start)),box);
+ const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+ const point=(m,x,y)=>[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
+ const names=['EAST','SOUTHEAST','SOUTH','SOUTHWEST','WEST','NORTHWEST','NORTH','NORTHEAST'];
+ for(let dir=0;dir<8;dir++)for(const r of [12,13,18])for(const id of ['rifle','scatter','rail'])for(const amount of [0,.5,1]){
+  const parts=vm.runInContext(names[dir]+'_RIG_PARTS',box),spec=vm.runInContext(`GUN_SPRITES.${id}`,box);
+  const p={...player(),r,aimDraw:dir*Math.PI/4+.07,artRunPhase:amount*.7,artRunBlend:1,recoilT:amount*.09,weapon:{id,isGun:true,col:'#bdeeff'}};
+  calls.length=0;box.drawTexturedAndroid(p);let m=[1,0,0,1,0,0],stack=[],palms={},targets={};
+  for(const [op,...v]of calls){
+   if(op==='save')stack.push([...m]);else if(op==='restore')m=stack.pop();
+   else if(op==='translate')m=mul(m,[1,0,0,1,v[0],v[1]]);
+   else if(op==='rotate')m=mul(m,[Math.cos(v[0]),Math.sin(v[0]),-Math.sin(v[0]),Math.cos(v[0]),0,0]);
+   else if(op==='scale')m=mul(m,[v[0],0,0,v[1],0,0]);
+   else if(op==='drawImage'){
+    if(v[0]===box.abyssArt.guns.image){
+     for(const [key,pt]of [['foreR',spec.grip],['foreL',spec.support]])targets[key]=point(m,v[5]+pt[0]*v[7]/v[3],v[6]+pt[1]*v[8]/v[4]);
+     assert.ok(v[1]>=0&&v[2]>=0&&v[1]+v[3]<=256&&v[2]+v[4]<=288);
+    }else for(const key of ['foreL','foreR']){const a=parts[key];if(v[1]===a[0]/2&&v[2]===a[1]/2)palms[key]=point(m,a[8]-a[4],a[9]-a[5]);}
+   }
+  }
+  for(const key of ['foreL','foreR'])assert.ok(Math.hypot(palms[key][0]-targets[key][0],palms[key][1]-targets[key][1])<1e-8,`${dir}/${r}/${id}/${amount}/${key}`);
+  assert.equal(calls.filter(c=>c[0]==='drawImage').length,12);
+ }
+});
+test('gun textures preserve unloaded fallback, rigid dimensions and painted muzzle flash origin',()=>{
+ const {box,calls}=harness();box.glow=()=>{};box.noglow=()=>{};box.spriteDetail=()=>false;
+ const start=html.indexOf('function drawHeldWeapon(');vm.runInContext(html.slice(start,html.indexOf('\n/* the player android:',start)),box);
+ for(const id of ['rifle','scatter','rail']){
+  const W={id,isGun:true,col:'#bdeeff'};box.abyssArt.guns={ready:false,failed:true,image:{}};calls.length=0;
+  box.drawHeldWeapon(W,0,0,0,false,0);assert.equal(calls.filter(c=>c[0]==='drawImage').length,0);assert.ok(calls.some(c=>c[0]==='fillRect'));
+  box.abyssArt.guns.ready=true;calls.length=0;box.drawHeldWeapon(W,0,0,0,false,0);const idle=calls.find(c=>c[0]==='drawImage');
+  calls.length=0;box.drawHeldWeapon(W,0,0,1,false,0);assert.deepEqual(calls.find(c=>c[0]==='drawImage'),idle);
+  const spec=vm.runInContext(`GUN_SPRITES.${id}`,box),dx=(spec.muzzle[0]-spec.grip[0])*spec.scale,dy=(spec.muzzle[1]-spec.grip[1])*spec.scale;
+  const flash=calls.find(c=>c[0]==='moveTo');assert.ok(Math.abs(flash[1]-(dx*Math.cos(spec.angle)+dy*Math.sin(spec.angle)))<1e-10);
+  assert.ok(Math.abs(flash[2]-(-dx*Math.sin(spec.angle)+dy*Math.cos(spec.angle)-1.4))<1e-10);
+ }
+});
