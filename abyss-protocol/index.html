@@ -7800,7 +7800,8 @@ function updatePlayer(p, dt) {
   collidePillars(p);
   collideArena(p);
   separatePlayers(p);
-  if (artAnimationPreview) advanceRunAnimation(p, p.x - artPrevX, p.y - artPrevY, dt);
+  // Live rigs need the same post-collision gait update as the optional art review.
+  if (rigArtEnabled || artAnimationPreview) advanceRunAnimation(p, p.x - artPrevX, p.y - artPrevY, dt);
   for (const tr of p.trail) tr.t -= dt;
   p.trail = p.trail.filter((tr) => tr.t > 0);
 

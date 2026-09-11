@@ -605,6 +605,29 @@ test('normal gameplay enables the entire eight-direction rig set atomically',()=
  }
 });
 
+test('normal player movement advances rendered gait after collision resolution in all eight directions',()=>{
+ const movement=html.slice(html.indexOf('  const artPrevX = p.x, artPrevY = p.y;'),html.indexOf('  for (const tr of p.trail) tr.t -= dt;'));
+ assert.ok(movement.includes('collidePillars(p)')&&movement.includes('separatePlayers(p)'));
+ const {box,calls}=harness();box.rigArtEnabled=true;box.artAnimationPreview=false;
+ box.collidePillars=()=>{};box.collideArena=()=>{};box.separatePlayers=()=>{};
+ vm.runInContext('function movePlayerForCheck(p,dt){'+movement+'}',box);
+ for(let direction=0;direction<8;direction++)for(const idx of [0,1]){
+  const angle=direction*Math.PI/4,p={...player(),idx,aimDraw:angle,vx:Math.cos(angle)*252,vy:Math.sin(angle)*252};
+  box.drawTexturedAndroid(p);const idle=calls.filter(c=>c[0]==='rotate').map(c=>c[1]);calls.length=0;
+  box.movePlayerForCheck(p,.016);
+  assert.ok(p.artRunPhase>0,`normal direction ${direction}, player ${idx+1} did not advance`);
+  assert.ok(p.artRunBlend>0);assert.ok(Math.abs(p.artMotion.x-Math.cos(angle))<1e-10);
+  box.drawTexturedAndroid(p);assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
+  assert.notDeepEqual(calls.filter(c=>c[0]==='rotate').map(c=>c[1]),idle);calls.length=0;
+  const phase=p.artRunPhase,previous={x:p.x,y:p.y};
+  box.collideArena=p=>Object.assign(p,previous);box.movePlayerForCheck(p,.016);
+  assert.equal(p.artRunPhase,phase,'blocked movement must not advance feet');
+  box.collideArena=()=>{};p.dashT=.1;box.movePlayerForCheck(p,.016);assert.equal(p.artRunPhase,phase,'dash must not drive a running stride');
+  p.dashT=0;p.vx=p.vy=0;for(let i=0;i<30;i++)box.movePlayerForCheck(p,.016);
+  assert.equal(p.artRunBlend,0);assert.equal(p.artRunPhase,0);
+ }
+});
+
 test('textured bomber keeps live fuse countdown and unloaded fallback',()=>{
  const {box,calls}=harness();
  const e={type:'bomber',state:'fuse',x:20,y:30,r:12,t:.4,phase:0};
