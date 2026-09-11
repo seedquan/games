@@ -3739,7 +3739,7 @@ function recoverState(e) {
   }
 }
 
-function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag) {
+function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag, impactX = e.x, impactY = e.y) {
   if (e.hp <= 0) return;
   // PHASE-CHANGE INVULN: during a boss's brief phase-transition beat it shrugs off hits
   // (a fair, telegraphed window — the boss flashes/pulses). Shows a small block cue.
@@ -3819,7 +3819,7 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag) {
         e.flash = Math.max(e.flash, 0.06);
         dnum(e.x, e.y - e.r, "0", "#9fd8ff", false);
         audio.shieldHit();
-        ffx.spawnLight(e.x, e.y, 26, "#aaccff", 0.25);
+        ffx.spawnLight(impactX, impactY, 26, "#aaccff", 0.25);
         addBreak(e, breakBuild(e, dmg, isCrit, melee, srcTag) * 0.4); // chip poise through the shield
         return; // shield ate the whole hit; HP untouched
       }
@@ -3852,9 +3852,9 @@ function hitEnemy(e, dmg, kx, ky, isCrit, melee, srcTag) {
   dnum(e.x, e.y - e.r, String(final), isCrit ? "#ffee55" : "#ffffff", isCrit);
   // punchier directional impact spray along the knockback vector
   const sa = (kx || ky) ? Math.atan2(ky, kx) : rand(0, TAU);
-  ffx.spray(e.x, e.y, sa, isCrit ? "#ffee55" : e.col, isCrit ? 12 : 7, isCrit ? 320 : 220);
-  ffx.spawnLight(e.x, e.y, isCrit ? 60 : 40, isCrit ? "#ffee55" : e.col, isCrit ? 0.5 : 0.3);
-  if (isCrit) ffx.ring(e.x, e.y, 30, "#ffee55", 0.3, 3);
+  ffx.spray(impactX, impactY, sa, isCrit ? "#ffee55" : e.col, isCrit ? 12 : 7, isCrit ? 320 : 220);
+  ffx.spawnLight(impactX, impactY, isCrit ? 60 : 40, isCrit ? "#ffee55" : e.col, isCrit ? 0.5 : 0.3);
+  if (isCrit) ffx.ring(impactX, impactY, 30, "#ffee55", 0.3, 3);
   audio.hit(isCrit);
   if (melee) {
     freezeT = Math.max(freezeT, CONFIG.hitStop);
@@ -7174,6 +7174,7 @@ function getArrow() {
                 crit: false, charge: 0, split: 0, shock: 0, mark: 0, rico: 0, gale: false, falloff: 0, homing: 0, homeTgt: null };
   a.hitSet.length = 0; a.pierce = 0; a.crit = false; a.charge = 0; a.split = 0;
   a.shock = 0; a.mark = 0; a.rico = 0; a.gale = false; a.kb = 0; a.falloff = 0; a.homing = 0; a.homeTgt = null;
+  a.artX = 0; a.artY = 0; a.artLength = 0;
   return a;
 }
 function freeArrow(a) {
@@ -7194,6 +7195,12 @@ function spawnArrow(p, kind, a, spd, dmg, col, r, opts) {
   const o = getArrow();
   o.kind = kind;
   o.x = p.x + Math.cos(a) * (p.r + 6); o.y = p.y + Math.sin(a) * (p.r + 6);
+  const launch = opts && opts.launch;
+  if (launch) {
+    // Freeze the authored projection at release. Physics stays on the floor;
+    // turning, moving or swapping the owner's weapon cannot drag a flying arrow.
+    o.artX = launch.x - o.x; o.artY = launch.y - o.y; o.artLength = launch.length;
+  }
   o.vx = Math.cos(a) * spd; o.vy = Math.sin(a) * spd; o.ang = a;
   o.r = r; o.dmg = dmg; o.col = col; o.owner = p;
   o.t = (opts && opts.life) || 0.9; o.tm = o.t;
@@ -7224,14 +7231,15 @@ function fireBow(p, W, charge) {
   p.slashAng = p.aim;
   const a = p.slashAng;
   const base = bowDamage();
-  if (W.id === "qbow") fireQuickBow(p, W, a, base);
-  else if (W.id === "lbow") fireLongBow(p, W, a, base, charge);
-  else fireStormBow(p, W, a, base);
+  const launch = bowReleasePoint(p, W, charge);
+  if (W.id === "qbow") fireQuickBow(p, W, a, base, launch);
+  else if (W.id === "lbow") fireLongBow(p, W, a, base, charge, launch);
+  else fireStormBow(p, W, a, base, launch);
 }
 
 /* QUICK BOW: a fast stream of light arrows. RAPID NOCK ramps fire rate + damage on sustained fire;
    SPLIT ARROW shards arrows on hit; HEARTSEEKER ramps crit on the same foe; BARRAGE fans every 4th. */
-function fireQuickBow(p, W, a, base) {
+function fireQuickBow(p, W, a, base, launch) {
   const fullauto = W.aspect === "fullauto"; // FULL AUTO (异相·连珠): hold to stream arrows
   if (boonLv("rapidnock")) { p.rapidN = Math.min(16, (p.rapidN || 0) + 1); p.rapidT = 0.8; }
   const ramp = boonLv("rapidnock") ? Math.min(1, 0.06 * (p.rapidN || 0) * boonPow("rapidnock")) : 0;
@@ -7245,19 +7253,19 @@ function fireQuickBow(p, W, a, base) {
   for (const off of angs) {
     let crit = critRoll();
     spawnArrow(p, "qarrow", a + off + rand(-0.015, 0.015), 880, dmg, W.col, 3, {
-      life: 0.8, kb: 70, crit,
+      life: 0.8, kb: 70, crit, launch,
       pierce: boonLv("rapidnock") ? 0 : 0,
       split: boonLv("splitarrow") ? 1 + Math.round(boonPow("splitarrow")) : 0,
     });
   }
   audio.bowShot("quick");
-  if (Math.random() < 0.5) burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#eaffd0", 2, 110, 0.13, 1.6);
+  if (Math.random() < 0.5) burst(launch?.x ?? p.x + Math.cos(a) * 18, launch?.y ?? p.y + Math.sin(a) * 18, "#eaffd0", 2, 110, 0.13, 1.6);
 }
 
 /* LONGBOW: a single heavy arrow scaled by draw `charge` (0..1). A full draw PIERCES a line.
    PENETRATOR: full-draw pierces ALL & crits.  GALEFORCE: knockback + wind shockwave.
    HUNTER'S MARK: marks foes for bonus damage.  QUICKDRAW: a perfect release refunds + buffs next. */
-function fireLongBow(p, W, a, base, charge) {
+function fireLongBow(p, W, a, base, charge, launch) {
   charge = clamp(charge || 0, 0, 1);
   p.bowCD = W.fireCD;
   p.recoilT = 0.22;
@@ -7281,7 +7289,7 @@ function fireLongBow(p, W, a, base, charge) {
     for (let i = 0; i < n; i++) {
       const off = (n === 1 ? 0 : (i / (n - 1) - 0.5) * spread);
       spawnArrow(p, "larrow", a + off, 1000, each, W.col, full ? 4 : 3.2, {
-        life: 1.0, kb: 160 + charge * 160, crit: critRoll() || penetrator, charge,
+        life: 1.0, kb: 160 + charge * 160, crit: critRoll() || penetrator, charge, launch,
         pierce: penetrator ? 99 : (charge > 0.6 ? 1 : 0),
         mark: boonLv("huntmark") ? boonPow("huntmark") : 0,
         gale: boonLv("galeforce") && charge > 0.5,
@@ -7289,7 +7297,7 @@ function fireLongBow(p, W, a, base, charge) {
     }
   } else {
   spawnArrow(p, "larrow", a, 1000, dmg, W.col, full ? 4.4 : 3.4, {
-    life: 1.0, kb: 220 + charge * 220, crit, charge,
+    life: 1.0, kb: 220 + charge * 220, crit, charge, launch,
     pierce, gale: boonLv("galeforce") && charge > 0.5,
     mark: boonLv("huntmark") ? boonPow("huntmark") : 0,
   });
@@ -7318,7 +7326,7 @@ function fireLongBow(p, W, a, base, charge) {
   } else {
     p.qdrawBuff = 0;
   }
-  ffx.spawnLight(p.x + Math.cos(a) * 20, p.y + Math.sin(a) * 20, 50, W.col, 0.5 + charge * 0.3);
+  ffx.spawnLight(launch?.x ?? p.x + Math.cos(a) * 20, launch?.y ?? p.y + Math.sin(a) * 20, 50, W.col, 0.5 + charge * 0.3);
   shake(2 + charge * 3, 0.1 + charge * 0.08);
   audio.bowShot("long");
 }
@@ -7326,7 +7334,7 @@ function fireLongBow(p, W, a, base, charge) {
 /* STORMBOW: looses a spread of arrows at once for area coverage; arrows fall off at range.
    ARROW RAIN: a volley also arcs down on the target zone.  STATIC ARROWS: arrows apply SHOCK.
    THICKET: more arrows + wider spread.  RICOCHET: arrows bounce to a nearby foe once. */
-function fireStormBow(p, W, a, base) {
+function fireStormBow(p, W, a, base, launch) {
   p.bowCD = W.fireCD;
   p.recoilT = 0.2;
   const homing = W.aspect === "homing";             // HOMING VOLLEY (异相·追踪): arrows track foes
@@ -7337,7 +7345,7 @@ function fireStormBow(p, W, a, base) {
   for (let i = 0; i < count; i++) {
     const off = (count === 1 ? 0 : (i / (count - 1) - 0.5) * spread) + rand(-0.03, 0.03);
     spawnArrow(p, "sarrow", a + off, homing ? 640 + rand(-30, 40) : 820 + rand(-40, 50), dmg, W.col, 2.8, {
-      life: homing ? 1.2 : 0.6, kb: 90, crit: critRoll(), falloff: homing ? 0 : 0.0024,
+      life: homing ? 1.2 : 0.6, kb: 90, crit: critRoll(), falloff: homing ? 0 : 0.0024, launch,
       shock: boonLv("staticarr") ? boonPow("staticarr") : 0,
       rico: boonLv("ricoarr") ? 1 : 0,
       homing: homing ? 1 : 0,
@@ -7355,7 +7363,7 @@ function fireStormBow(p, W, a, base) {
                       col: W.col, owner: p, shock: boonLv("staticarr") ? boonPow("staticarr") : 0 });
   }
   p.vx -= Math.cos(a) * 70; p.vy -= Math.sin(a) * 70; // light recoil
-  burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#cfeaff", 5, 160, 0.18, 2);
+  burst(launch?.x ?? p.x + Math.cos(a) * 18, launch?.y ?? p.y + Math.sin(a) * 18, "#cfeaff", 5, 160, 0.18, 2);
   shake(2.5, 0.09);
   audio.bowShot("storm");
 }
@@ -7381,7 +7389,7 @@ function arrowHitEnemy(a, e) {
   }
   // a full-draw LONGBOW arrow is a heavy charged shot — shreds shields & poise
   const aTag = (a.charge || 0) >= 0.85 ? "charged" : undefined;
-  hitEnemy(e, dmg, Math.cos(a.ang) * a.kb, Math.sin(a.ang) * a.kb, crit, false, aTag);
+  hitEnemy(e, dmg, Math.cos(a.ang) * a.kb, Math.sin(a.ang) * a.kb, crit, false, aTag, a.x + a.artX, a.y + a.artY);
   if (e.hp <= 0) return;
   // GALEFORCE knockback already folded into kb; STATIC ARROWS apply SHOCK (chains + shatters frozen)
   if (a.shock > 0) applyShock(e, (4 + depth * 0.4) * a.shock * dmgMul(), 1);
@@ -7415,10 +7423,11 @@ function updateArrows(dt) {
     }
     a.x += a.vx * dt; a.y += a.vy * dt; a.t -= dt;
     // cheap fletching trail spark (respects particle cap via addPart)
-    if (Math.random() < 0.35) addPart({ x: a.x, y: a.y, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: a.col, r: 1.5, drag: 0 });
+    const visualX = a.x + a.artX, visualY = a.y + a.artY;
+    if (Math.random() < 0.35) addPart({ x: visualX, y: visualY, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: a.col, r: 1.5, drag: 0 });
     let dead = a.t <= 0;
     if (!dead && (a.x < A.wall || a.x > A.arenaW - A.wall || a.y < A.wall || a.y > A.arenaH - A.wall)) dead = true;
-    if (!dead && pointInPillar(a.x, a.y, a.r)) { burst(a.x, a.y, a.col, 4, 100, 0.18, 1.8); dead = true; }
+    if (!dead && pointInPillar(a.x, a.y, a.r)) { burst(visualX, visualY, a.col, 4, 100, 0.18, 1.8); dead = true; }
     if (dead) { freeArrow(a); continue; }
     // enemy collisions (pierce-aware)
     for (const e of enemies) {
@@ -7428,13 +7437,18 @@ function updateArrows(dt) {
       const ex = a.x, ey = a.y;
       arrowHitEnemy(a, e); // routes through hitEnemy -> shield depletes if the arc is covered
       a.hitSet.push(e);
-      if (onShield && (e.shieldHp || 0) > 0) { burst(a.x, a.y, "#88aaff", 4, 120, 0.2, 2); dead = true; break; } // arrow spent on the shield
+      if (onShield && (e.shieldHp || 0) > 0) { burst(visualX, visualY, "#88aaff", 4, 120, 0.2, 2); dead = true; break; } // arrow spent on the shield
       // SPLIT ARROW: spawn shard arrows fanning off the impact (QUICK BOW)
       if (a.split > 0) {
         const shards = a.split; a.split = 0;
         for (let sI = 0; sI < shards; sI++) {
+          if (arrows.length >= 72) break; // Do not evict/recycle the parent mid-hit.
           const sa = a.ang + (sI === 0 ? 0.5 : -0.5) + rand(-0.1, 0.1);
-          spawnArrow(a.owner, "qarrow", sa, 760, a.dmg * 0.5, a.col, 2.4, { life: 0.4, kb: 40, crit: critRoll() });
+          const shard = spawnArrow(a.owner, "qarrow", sa, 760, a.dmg * 0.5, a.col, 2.4, { life: 0.4, kb: 40, crit: critRoll() });
+          // Splinters start at the hit, carrying the same projection and excluding
+          // the struck foe; they must not jump back to the shooter's feet.
+          shard.x = ex; shard.y = ey; shard.artX = a.artX; shard.artY = a.artY;
+          shard.artLength = a.artLength ? a.artLength * .6 : 0; shard.hitSet.push(e);
         }
       }
       // RICOCHET: redirect toward a nearby unhit foe instead of stopping (STORMBOW)
@@ -7450,7 +7464,7 @@ function updateArrows(dt) {
         break;
       }
       if (a.pierce > 0) a.pierce--;
-      else { burst(ex, ey, a.col, 4, 110, 0.18, 2); dead = true; break; }
+      else { burst(visualX, visualY, a.col, 4, 110, 0.18, 2); dead = true; break; }
     }
     if (dead) { freeArrow(a); continue; }
     // volatile barrels
@@ -10498,7 +10512,8 @@ function runAnimationAsset(p, facing) {
   return asset && asset.ready ? asset : null;
 }
 function texturedWeaponPose(p, W) {
-  const recoil = p.recoilT > 0 ? Math.sin(p.recoilT / 0.18 * Math.PI) : 0;
+  const duration = W.isBow ? (W.id === 'lbow' ? .22 : W.id === 'sbow' ? .2 : .12) : .18;
+  const recoil = p.recoilT > 0 ? Math.sin(Math.min(1, p.recoilT / duration) * Math.PI) : 0;
   const draw = W.isBow ? (W.id === "lbow" ? (p.drawing ? p.drawT : 0) : (recoil > 0.05 ? 0.6 : 0)) : 0;
   return { recoil, draw, visible: !p.glaiveOut };
 }
@@ -10562,6 +10577,31 @@ function bowSpritePose(spec,draw) {
   const sx=spec.scale*(1+.18*draw),sy=spec.scale*(1-.04*draw);
   const tips=spec.tips.map(p=>({x:(p[0]-spec.grip[0])*sx,y:(p[1]-spec.grip[1])*sy}));
   return {draw,sx,sy,tips,nock:{x:(tips[0].x+tips[1].x)*.5-draw*7,y:0}};
+}
+function bowReleasePoint(p,W,charge) {
+  const spec=bowSpriteSpec(W),rig=androidRigKey(textureFacing(p.aimDraw,p.artFacing));
+  if(!spec||!rig)return null;
+  const pose=texturedWeaponPose(p,W);
+  // Longbow release clears drawing before firing. Reconstruct its last drawn
+  // pose from the release charge, before fireBow applies the new recoil timer.
+  if(W.id==='lbow')pose.draw=Math.max(0,Math.min(1,charge||0));
+  const hand=rigTwoHandPose(p,W,pose).twoHand.main;
+  const scale=p.r*4.4/160,blend=p.artRunBlend||0;
+  const bounce=-Math.abs(Math.sin((p.artRunPhase||0)*TAU))*1.6*blend;
+  const ground=rigGroundLevel(rig,blend,p.artMotion);
+  const length=W.id==='lbow'?24:20,nock=bowSpritePose(spec,pose.draw).nock;
+  const c=Math.cos(p.aimDraw),s=Math.sin(p.aimDraw),along=nock.x+length+1.6-pose.recoil*1.5;
+  return {x:p.x+(hand.x-80)*scale+c*along,
+          y:p.y+(hand.y+bounce-ground)*scale+s*along,length};
+}
+// Tip is the local origin, so the rendered shaft and collision contact share
+// the same projected endpoint. Dimensions match the arrow held on the string.
+function drawFlyingBowArrow(a) {
+  const len=a.artLength;
+  ctx.strokeStyle=a.crit?'#fff3c0':'#becfda';ctx.lineWidth=.65;
+  ctx.beginPath();ctx.moveTo(-len-1.6,0);ctx.lineTo(-1.6,0);ctx.stroke();
+  ctx.fillStyle=a.crit?'#fff3c0':a.col;
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-2.6,-1);ctx.lineTo(-2.6,1);ctx.closePath();ctx.fill();
 }
 function drawTexturedBow(spec,W,draw,fl) {
   const pose=bowSpritePose(spec,draw),n=pose.nock;
@@ -13938,10 +13978,12 @@ function drawArrows() {
   const detail = spriteDetail();
   for (const a of arrows) {
     const len = a.r * (a.kind === "larrow" ? 5.5 : 4.2);
-    bloomCircle(a.x, a.y, a.r * 3, a.col, 0.28);
+    const x=a.x+a.artX,y=a.y+a.artY;
+    bloomCircle(x, y, a.artLength ? 5 : a.r * 3, a.col, a.artLength ? .16 : .28);
     ctx.save();
-    ctx.translate(a.x, a.y);
+    ctx.translate(x, y);
     ctx.rotate(a.ang);
+    if(a.artLength) { drawFlyingBowArrow(a);ctx.restore();continue; }
     glow(a.col, a.kind === "larrow" ? 11 : 8);
     // shaft
     ctx.strokeStyle = a.crit ? "#fff3c0" : a.col;
