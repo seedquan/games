@@ -1102,3 +1102,56 @@ test('gun textures preserve unloaded fallback, rigid dimensions and painted muzz
   assert.ok(Math.abs(flash[2]-(-dx*Math.sin(spec.angle)+dy*Math.cos(spec.angle)-1.4))<1e-10);
  }
 });
+
+test('textured bow grip and actual string nock stay on both painted palms',()=>{
+ const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt.bows={ready:true,image:{bowAtlas:true}};
+ box.glow=()=>{};box.noglow=()=>{};box.spriteDetail=()=>false;
+ const start=html.indexOf('function drawHeldWeapon(');vm.runInContext(html.slice(start,html.indexOf('\n/* the player android:',start)),box);
+ const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+ const point=(m,x,y)=>[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
+ const names=['EAST','SOUTHEAST','SOUTH','SOUTHWEST','WEST','NORTHWEST','NORTH','NORTHEAST'];
+ for(let dir=0;dir<8;dir++)for(const r of [12,13,18])for(const id of ['qbow','lbow','sbow'])for(const amount of [0,.5,1]){
+  const parts=vm.runInContext(names[dir]+'_RIG_PARTS',box),spec=vm.runInContext(`BOW_SPRITES.${id}`,box);
+  const p={...player(),r,aimDraw:dir*Math.PI/4+.07,artRunPhase:amount*.7,artRunBlend:1,recoilT:amount*.09,drawing:true,drawT:amount,weapon:{id,isBow:true,col:'#bdeeff'}};
+  calls.length=0;box.drawTexturedAndroid(p);let m=[1,0,0,1,0,0],stack=[],palms={},targets={},stringPending=false;
+  for(const [op,...v]of calls){
+   if(op==='save')stack.push([...m]);else if(op==='restore')m=stack.pop();
+   else if(op==='translate')m=mul(m,[1,0,0,1,v[0],v[1]]);
+   else if(op==='rotate')m=mul(m,[Math.cos(v[0]),Math.sin(v[0]),-Math.sin(v[0]),Math.cos(v[0]),0,0]);
+   else if(op==='scale')m=mul(m,[v[0],0,0,v[1],0,0]);
+   else if(op==='drawImage'){
+    if(v[0]===box.abyssArt.bows.image){targets.foreR=point(m,v[5]+spec.grip[0]*v[7]/v[3],v[6]+spec.grip[1]*v[8]/v[4]);stringPending=true;
+     assert.ok(v[1]>=0&&v[2]>=0&&v[1]+v[3]<=384&&v[2]+v[4]<=256);
+    }else for(const key of ['foreL','foreR']){const a=parts[key];if(v[1]===a[0]/2&&v[2]===a[1]/2)palms[key]=point(m,a[8]-a[4],a[9]-a[5]);}
+   }else if(op==='lineTo'&&stringPending){targets.foreL=point(m,v[0],v[1]);stringPending=false;}
+  }
+  for(const key of ['foreL','foreR'])assert.ok(Math.hypot(palms[key][0]-targets[key][0],palms[key][1]-targets[key][1])<1e-8,`${dir}/${r}/${id}/${amount}/${key}`);
+  assert.equal(calls.filter(c=>c[0]==='drawImage').length,12);
+ }
+});
+test('bow string endpoints follow the flexed image and nocked arrows keep constant length',()=>{
+ const {box,calls}=harness();box.glow=()=>{};box.noglow=()=>{};box.spriteDetail=()=>false;
+ const start=html.indexOf('function drawHeldWeapon(');vm.runInContext(html.slice(start,html.indexOf('\n/* the player android:',start)),box);
+ for(const id of ['qbow','lbow','sbow']){
+  const W={id,isBow:true,col:'#bdeeff'};box.abyssArt.bows={ready:false,failed:true,image:{}};calls.length=0;
+  box.drawHeldWeapon(W,0,0,0,false,1);assert.equal(calls.filter(c=>c[0]==='drawImage').length,0);assert.ok(calls.some(c=>c[0]==='quadraticCurveTo'));
+  box.abyssArt.bows.ready=true;let previousNock=Infinity;
+  for(const draw of [0,.25,.5,.75,1]){
+   calls.length=0;box.drawHeldWeapon(W,0,0,0,false,draw);
+   const d=calls.find(c=>c[0]==='drawImage').slice(1),spec=vm.runInContext(`BOW_SPRITES.${id}`,box);
+   const imagePoint=p=>[d[5]+p[0]*d[7]/d[3],d[6]+p[1]*d[8]/d[4]],grip=imagePoint(spec.grip);
+   assert.ok(Math.hypot(...grip)<1e-10);const moves=calls.filter(c=>c[0]==='moveTo'),lines=calls.filter(c=>c[0]==='lineTo');
+   for(const [actual,pt]of [[moves[0],spec.tips[0]],[lines[1],spec.tips[1]]]){const expected=imagePoint(pt);assert.ok(Math.hypot(actual[1]-expected[0],actual[2]-expected[1])<1e-10);}
+   assert.ok(lines[0][1]<previousNock);previousNock=lines[0][1];
+   if(draw>0){assert.deepEqual(moves[1].slice(1),lines[0].slice(1));assert.ok(Math.abs(lines[2][1]-moves[1][1]-(id==='lbow'?24:20))<1e-10);}
+   else assert.equal(moves.length,1);
+  }
+ }
+});
+test('held-draw preview can only drive player one longbow in the opt-in hub',()=>{
+ const {box}=harness();box.artPreviewDraw=true;box.state='hub';const p={idx:0,weapon:{id:'lbow'}};
+ assert.equal(box.previewBowHeld(p),false);box.artAnimationPreview=true;assert.equal(box.previewBowHeld(p),true);
+ for(const state of ['play','menu','stats']){box.state=state;assert.equal(box.previewBowHeld(p),false);}
+ box.state='hub';assert.equal(box.previewBowHeld({...p,idx:1}),false);assert.equal(box.previewBowHeld({...p,weapon:{id:'qbow'}}),false);
+ box.artPreviewDraw=false;assert.equal(box.previewBowHeld(p),false);
+});
