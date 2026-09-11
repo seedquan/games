@@ -839,3 +839,39 @@ test('ground pass paints one cover shadow and defers only decoded bodies',()=>{
  calls.length=0;box.abyssArt.coverProps={ready:true,image:{}};box.drawPillars();
  assert.equal(calls.filter(c=>c[0]==='shadow').length,1);assert.equal(calls.filter(c=>['drawImage','fallback'].includes(c[0])).length,0);
 });
+
+test('swarmer gait follows resolved distance, stops at walls and locks during stun',()=>{
+ const {box}=harness();const make=()=>({type:'swarmer',r:8,artStride:.2,artHeading:0});
+ const e=make();box.advanceSwarmerGait(e,2,0,.02);assert.ok(e.artStride>.2);
+ const stride=e.artStride;box.advanceSwarmerGait(e,0,0,.02);assert.equal(e.artStride,stride);
+ box.advanceSwarmerGait(e,0,2,.02,true);assert.equal(e.artStride,stride);assert.equal(e.artHeading,0);
+ box.advanceSwarmerGait(e,1000,0,.02);assert.equal(e.artStride,stride);
+ const a=make(),b=make();for(let i=0;i<10;i++)box.advanceSwarmerGait(a,1,0,.01);for(let i=0;i<5;i++)box.advanceSwarmerGait(b,2,0,.02);
+ assert.ok(Math.abs(a.artStride-b.artStride)<1e-12);
+ for(let i=0;i<8;i++){const e={type:'swarmer',r:8};box.advanceSwarmerGait(e,Math.cos(i*Math.PI/4),Math.sin(i*Math.PI/4),.016);assert.ok(Math.abs(e.artHeading-i*Math.PI/4)<1e-12||Math.abs(e.artHeading-i*Math.PI/4+Math.PI*2)<1e-12);}
+});
+test('swarmer feet plant during straight travel and have continuous contact velocity',()=>{
+ const {box}=harness(),r=8,h=1e-6,cycleDistance=r*1.8/.62;
+ for(const phase of [.1,.3,.55]){
+  const a=box.swarmerFoot(phase,1,1,r),b=box.swarmerFoot(phase+h,1,1,r);
+  assert.ok(Math.abs((b.x-a.x)/h+cycleDistance)<1e-6);assert.equal(a.lift,0);
+ }
+ for(const phase of [0,.62]){
+  const left=box.swarmerFoot(phase-h,1,1,r),mid=box.swarmerFoot(phase,1,1,r),right=box.swarmerFoot(phase+h,1,1,r);
+  assert.ok(Math.abs((mid.x-left.x)/h-(right.x-mid.x)/h)<.001);
+  assert.ok(Math.abs((mid.y-left.y)/h-(right.y-mid.y)/h)<.001);
+ }
+ for(let i=0;i<100;i++)for(const front of [-1,1])for(const side of [-1,1]){
+  const foot=box.swarmerFoot(i/100,front,side,r),hx=front*r*.2,hy=side*r*.28,k=box.swarmerKnee(hx,hy,foot.x,foot.y,side,r);
+  assert.ok(Math.abs(Math.hypot(k.x-hx,k.y-hy)-r*.85)<1e-10);
+  assert.ok(Math.abs(Math.hypot(k.x-foot.x,k.y-foot.y)-r*.85)<1e-10);
+ }
+});
+test('swarmer articulated renderer uses nine bounded crops and does not advance simulation',()=>{
+ const {box,calls}=harness();const e={type:'swarmer',x:0,y:0,r:8,artStride:.3,artHeading:1};
+ assert.equal(box.drawArticulatedSwarmer(e),false);assert.equal(calls.length,0);
+ box.abyssArt.swarmerRig={ready:true,image:{}};const before=JSON.stringify(e);
+ assert.equal(box.drawArticulatedSwarmer(e),true);assert.equal(JSON.stringify(e),before);
+ const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,9);
+ for(const d of draws){assert.ok(d[2]>=0&&d[2]+d[4]<=768);assert.ok(d[3]>=0&&d[3]+d[5]<=512);}
+});
