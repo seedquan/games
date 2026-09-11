@@ -6869,7 +6869,7 @@ function getBullet() {
                 dmg: 0, kb: 0, col: "#fff", owner: null, hitSet: [], pierce: 0,
                 bounces: 0, falloff: 0, crit: false, pblank: false, ignite: 0, tracer: 0 };
   b.hitSet.length = 0; b.pierce = 0; b.bounces = 0; b.falloff = 0; b.crit = false; b.pblank = false; b.kb = 0;
-  b.ignite = 0; b.tracer = 0;
+  b.ignite = 0; b.tracer = 0; b.artX = 0; b.artY = 0; b.artMuzzle = false;
   return b;
 }
 function freeBullet(b) {
@@ -6884,6 +6884,8 @@ function spawnBullet(p, kind, a, spd, dmg, col, r, opts) {
   const b = getBullet();
   b.kind = kind;
   b.x = p.x + Math.cos(a) * (p.r + 4); b.y = p.y + Math.sin(a) * (p.r + 4);
+  const launch = opts && opts.launch;
+  if (launch) { b.artX = launch.x - b.x; b.artY = launch.y - b.y; b.artMuzzle = true; }
   b.vx = Math.cos(a) * spd; b.vy = Math.sin(a) * spd; b.ang = a;
   b.r = r; b.dmg = dmg; b.col = col; b.owner = p;
   b.t = (opts && opts.life) || 1.2; b.tm = b.t;
@@ -6906,9 +6908,10 @@ function fireGun(p, W) {
   p.slashAng = p.aim;
   const a = p.slashAng;
   const base = gunDamage();
-  if (W.id === "rifle") fireRifle(p, W, a, base);
-  else if (W.id === "scatter") fireScatter(p, W, a, base);
-  else fireRail(p, W, a, base);
+  const launch = gunReleasePoint(p, W);
+  if (W.id === "rifle") fireRifle(p, W, a, base, launch);
+  else if (W.id === "scatter") fireScatter(p, W, a, base, launch);
+  else fireRail(p, W, a, base, launch);
 }
 
 /* base per-pellet/round damage for GUN firearms; shares the melee/HEAVY EDGE power budget
@@ -6917,7 +6920,7 @@ function gunDamage() { const p = ctxP || player; return CONFIG.meleeDmg * weapon
 
 /* AUTO-RIFLE: rapid low-damage rounds with mild spread + recoil. OVERHEAT ramps rate & damage
    on sustained fire; RICOCHET ROUNDS lets a round bounce once (wall or to a nearby foe). */
-function fireRifle(p, W, a, base) {
+function fireRifle(p, W, a, base, launch) {
   const burst3 = W.aspect === "burst"; // BURST FIRE (异相·三连发): tight 3-round group, slower cadence
   // OVERHEAT: each shot while sustaining fire ramps the counter; decays via heatT.
   if (boonLv("overheat")) { p.heatN = Math.min(20, (p.heatN || 0) + 1); p.heatT = 0.9; }
@@ -6934,19 +6937,19 @@ function fireRifle(p, W, a, base) {
     let crit = critRoll();
     if (boonLv("apr") && !crit) crit = Math.random() < 0.10 * boonPow("apr");
     spawnBullet(p, "rifle", aa, 760, dmgEach, W.col, 3.2, {
-      life: 1.0, kb: 60, crit,
+      life: 1.0, kb: 60, crit, launch,
       pierce: boonLv("apr") ? 2 * Math.round(boonPow("apr")) : 0,
       bounces: boonLv("ricoR") ? Math.round(boonPow("ricoR")) : 0,
       tracer: boonLv("tracer") ? boonPow("tracer") : 0,
     });
-    if (Math.random() < 0.5) burst(p.x + Math.cos(aa) * 18, p.y + Math.sin(aa) * 18, "#ffe6b0", 2, 120, 0.14, 1.8);
+    if (Math.random() < 0.5) burst(launch?.x ?? p.x + Math.cos(aa) * 18, launch?.y ?? p.y + Math.sin(aa) * 18, "#ffe6b0", 2, 120, 0.14, 1.8);
   }
   audio.rifleShot();
 }
 
 /* SCATTERGUN: a tight cone of pellets — devastating point-blank, sharp range falloff, big knockback.
    DOUBLE BARREL adds a pellet; POINT BLANK boosts close damage and executes low-HP foes up close. */
-function fireScatter(p, W, a, base) {
+function fireScatter(p, W, a, base, launch) {
   p.gunCD = W.fireCD;
   p.recoilT = 0.2;
   // SLUG ASPECT (异相·独头): a single far-flying piercing slug instead of the pellet cone —
@@ -6954,13 +6957,13 @@ function fireScatter(p, W, a, base) {
   if (W.aspect === "slug") {
     const dragon = boonLv("dragonsbreath");
     spawnBullet(p, "pellet", a + rand(-0.01, 0.01), 900, base * 2.0, W.col, 4, {
-      life: 0.7, kb: 320, falloff: 0, crit: critRoll(),
+      life: 0.7, kb: 320, falloff: 0, crit: critRoll(), launch,
       pierce: 3, pblank: boonLv("pblank") > 0,
       ignite: dragon ? boonPow("dragonsbreath") : 0,
     });
     p.vx -= Math.cos(a) * 130; p.vy -= Math.sin(a) * 130;
-    burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#ffd29a", 8, 220, 0.24, 2.6);
-    ffx.spawnLight(p.x + Math.cos(a) * 24, p.y + Math.sin(a) * 24, 64, W.col, 0.6);
+    burst(launch?.x ?? p.x + Math.cos(a) * 18, launch?.y ?? p.y + Math.sin(a) * 18, "#ffd29a", 8, 220, 0.24, 2.6);
+    ffx.spawnLight(launch?.x ?? p.x + Math.cos(a) * 24, launch?.y ?? p.y + Math.sin(a) * 24, 64, W.col, 0.6);
     shake(3.5, 0.12);
     audio.scatterShot();
     return;
@@ -6977,21 +6980,21 @@ function fireScatter(p, W, a, base) {
       life: slug ? 0.34 + 0.12 * boonPow("slugs") : 0.34,
       kb: slug ? 220 + 90 * boonPow("slugs") : 220,
       falloff: slug ? 0.0042 / (1 + 0.6 * boonPow("slugs")) : 0.0042,
-      crit: critRoll(), pblank: boonLv("pblank") > 0,
+      crit: critRoll(), pblank: boonLv("pblank") > 0, launch,
       ignite: dragon ? boonPow("dragonsbreath") : 0,
     });
   }
   // recoil shove backward (mechanical kick)
   p.vx -= Math.cos(a) * 120; p.vy -= Math.sin(a) * 120;
-  burst(p.x + Math.cos(a) * 18, p.y + Math.sin(a) * 18, "#ffd29a", 7, 200, 0.22, 2.4);
-  ffx.spawnLight(p.x + Math.cos(a) * 24, p.y + Math.sin(a) * 24, 60, W.col, 0.5);
+  burst(launch?.x ?? p.x + Math.cos(a) * 18, launch?.y ?? p.y + Math.sin(a) * 18, "#ffd29a", 7, 200, 0.22, 2.4);
+  ffx.spawnLight(launch?.x ?? p.x + Math.cos(a) * 24, launch?.y ?? p.y + Math.sin(a) * 24, 60, W.col, 0.5);
   shake(3, 0.1);
   audio.scatterShot();
 }
 
 /* RAILGUN: an instant charged piercing rail that hits everything along a line. Slow cadence;
    OVERCHARGE makes shots crit & pierce/reach further; RECOIL DASH kicks you back with i-frames. */
-function fireRail(p, W, a, base) {
+function fireRail(p, W, a, base, launch) {
   // RAPID RAIL (异相·速射轨): no-charge rapid rail — much faster cadence, lighter per shot.
   const rapid = W.aspect === "rapidrail";
   p.gunCD = rapid ? W.fireCD * 0.42 : W.fireCD;
@@ -7006,7 +7009,7 @@ function fireRail(p, W, a, base) {
     const charge = Math.min(1, (p.railChargeT || 0) / 1.4); // ~1.4s to full
     capMul = 1 + charge * (0.6 + 0.3 * boonPow("chargeshot"));
     p.railChargeT = 0;
-    if (charge > 0.5) { ffx.spawnLight(p.x, p.y, 80, W.col, 0.7); }
+    if (charge > 0.5) { ffx.spawnLight(launch?.x ?? p.x, launch?.y ?? p.y, 80, W.col, 0.7); }
   }
   // single big hit; RAPID RAIL trades per-shot weight (×0.42 dmg ≈ matches the ×0.42 faster cadence)
   const dmg = base * 2.3 * (rapid ? 0.42 : 1) * (over ? 1.15 : 1) * capMul;
@@ -7014,11 +7017,12 @@ function fireRail(p, W, a, base) {
   const ex = clamp(p.x + Math.cos(a) * len, CONFIG.wall, CONFIG.arenaW - CONFIG.wall);
   const ey = clamp(p.y + Math.sin(a) * len, CONFIG.wall, CONFIG.arenaH - CONFIG.wall);
   // visual rail beam + sparks
-  beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.22, col: W.col });
-  beams.push({ x1: p.x, y1: p.y, x2: ex, y2: ey, t: 0.14, col: "#eafaff" });
-  sparkLine(p.x, p.y, ex, ey, W.col, 10);
-  ffx.spawnLight(p.x, p.y, 70, W.col, 0.6);
-  ffx.spawnLight(ex, ey, 60, W.col, 0.5);
+  const artX = launch ? launch.x - p.x : 0, artY = launch ? launch.y - p.y : 0;
+  beams.push({ x1: p.x + artX, y1: p.y + artY, x2: ex + artX, y2: ey + artY, t: 0.22, tm: 0.22, kind: 'rail', width: 3, col: W.col });
+  beams.push({ x1: p.x + artX, y1: p.y + artY, x2: ex + artX, y2: ey + artY, t: 0.14, tm: 0.14, kind: 'rail', width: 1, col: "#eafaff" });
+  sparkLine(p.x + artX, p.y + artY, ex + artX, ey + artY, W.col, 10);
+  ffx.spawnLight(p.x + artX, p.y + artY, 70, W.col, 0.6);
+  ffx.spawnLight(ex + artX, ey + artY, 60, W.col, 0.5);
   shake(5, 0.18);
   audio.railShot();
   // hitscan: damage every enemy whose center is within the rail band
@@ -7032,7 +7036,7 @@ function fireRail(p, W, a, base) {
     if (dist(px, py, e.x, e.y) > bandW + e.r) continue;
     let crit = critRoll() || over;       // OVERCHARGE: full-charge shots always crit
     // RAILGUN pierces & shreds shields (handled via hitEnemy: heavy weapon + charged tag)
-    hitEnemy(e, dmg, Math.cos(a) * 160, Math.sin(a) * 160, crit, false, railTag);
+    hitEnemy(e, dmg, Math.cos(a) * 160, Math.sin(a) * 160, crit, false, railTag, px + artX, py + artY);
     if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
     if (e.hp > 0) applyWeaponEnchants(e, p); // 元素附魔: enchants fire on railgun hits too
   }
@@ -7090,14 +7094,14 @@ function bulletHitEnemy(b, e) {
     if (e.type !== "boss" && e.hp <= e.maxHp * (0.14 + 0.05 * boonPow("pblank"))) exec = true;
   }
   if (exec) {
-    burst(e.x, e.y, "#ffd29a", 16, 260, 0.5, 3);
+    burst(b.x + b.artX, b.y + b.artY, "#ffd29a", 16, 260, 0.5, 3);
     dnum(e.x, e.y - e.r - 14, "POINT BLANK", "#ffd29a", true);
     statusDamage(e, e.hp + 999, "#ffd29a");
     return;
   }
   // TRACER FIRE: marked foes take bonus damage; this hit consumes & re-applies the mark
   if ((e.markT || 0) > 0) dmg *= 1 + 0.12 * (e.markPow || 0);
-  hitEnemy(e, dmg, Math.cos(b.ang) * b.kb, Math.sin(b.ang) * b.kb, b.crit, false);
+  hitEnemy(e, dmg, Math.cos(b.ang) * b.kb, Math.sin(b.ang) * b.kb, b.crit, false, undefined, b.x + b.artX, b.y + b.artY);
   if (e.hp > 0 && boonLv("ignite")) applyBurn(e, 4 * boonPow("ignite") * dmgMul());
   if (e.hp > 0 && b.crit && boonLv("volt")) applyShock(e, 7 * boonPow("volt") * dmgMul(), 1); // VOLT ROUNDS works for guns too
   // DRAGON'S BREATH: incendiary pellets/rounds set foes burning
@@ -7117,7 +7121,7 @@ function updateBullets(dt) {
     ctxP = b.owner || player;
     b.x += b.vx * dt; b.y += b.vy * dt; b.t -= dt;
     // cheap tracer spark (respects particle cap via addPart)
-    if (Math.random() < 0.4) addPart({ x: b.x, y: b.y, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: b.col, r: 1.6, drag: 0 });
+    if (Math.random() < 0.4) addPart({ x: b.x + b.artX, y: b.y + b.artY, vx: 0, vy: 0, t: 0.1, tm: 0.1, col: b.col, r: 1.6, drag: 0 });
     let dead = b.t <= 0;
     // wall bounce (RICOCHET ROUNDS) or expire
     if (!dead && (b.x < A.wall || b.x > A.arenaW - A.wall)) {
@@ -7128,7 +7132,7 @@ function updateBullets(dt) {
       if (b.bounces > 0) { b.vy = -b.vy; b.ang = Math.atan2(b.vy, b.vx); b.bounces--; b.y = clamp(b.y, A.wall, A.arenaH - A.wall); b.hitSet.length = 0; }
       else dead = true;
     }
-    if (!dead && pointInPillar(b.x, b.y, b.r)) { burst(b.x, b.y, b.col, 4, 110, 0.2, 2); dead = true; }
+    if (!dead && pointInPillar(b.x, b.y, b.r)) { burst(b.x + b.artX, b.y + b.artY, b.col, 4, 110, 0.2, 2); dead = true; }
     if (dead) { freeBullet(b); continue; }
     // enemy collisions (pierce-aware)
     for (const e of enemies) {
@@ -7137,7 +7141,7 @@ function updateBullets(dt) {
       const onShield = shieldBlocks(e, b.x - b.vx * 0.02, b.y - b.vy * 0.02);
       bulletHitEnemy(b, e); // routes through hitEnemy -> shield depletes if the arc is covered
       b.hitSet.push(e);
-      if (onShield && (e.shieldHp || 0) > 0) { burst(b.x, b.y, "#88aaff", 4, 120, 0.2, 2); dead = true; break; } // round spent on the shield
+      if (onShield && (e.shieldHp || 0) > 0) { burst(b.x + b.artX, b.y + b.artY, "#88aaff", 4, 120, 0.2, 2); dead = true; break; } // round spent on the shield
       // RICOCHET ROUNDS: a rifle round can redirect toward a nearby unhit foe instead of stopping
       if (b.bounces > 0 && b.kind === "rifle") {
         let tgt = null, bd = 200;
@@ -7151,7 +7155,7 @@ function updateBullets(dt) {
         break;
       }
       if (b.pierce > 0) b.pierce--;
-      else { burst(b.x, b.y, b.col, 4, 120, 0.2, 2); dead = true; break; }
+      else { burst(b.x + b.artX, b.y + b.artY, b.col, 4, 120, 0.2, 2); dead = true; break; }
     }
     if (dead) { freeBullet(b); continue; }
     // volatile barrels
@@ -10512,7 +10516,8 @@ function runAnimationAsset(p, facing) {
   return asset && asset.ready ? asset : null;
 }
 function texturedWeaponPose(p, W) {
-  const duration = W.isBow ? (W.id === 'lbow' ? .22 : W.id === 'sbow' ? .2 : .12) : .18;
+  const duration = W.isBow ? (W.id === 'lbow' ? .22 : W.id === 'sbow' ? .2 : .12)
+    : W.isGun ? (W.id === 'rifle' ? .1 : W.id === 'scatter' ? .2 : W.aspect === 'rapidrail' ? .14 : .24) : .18;
   const recoil = p.recoilT > 0 ? Math.sin(Math.min(1, p.recoilT / duration) * Math.PI) : 0;
   const draw = W.isBow ? (W.id === "lbow" ? (p.drawing ? p.drawT : 0) : (recoil > 0.05 ? 0.6 : 0)) : 0;
   return { recoil, draw, visible: !p.glaiveOut };
@@ -10550,6 +10555,10 @@ function gunSpriteOffset(spec,point) {
   const c=Math.cos(spec.angle),s=Math.sin(spec.angle);
   return {x:c*dx+s*dy,y:-s*dx+c*dy};
 }
+function gunReleasePoint(p,W) {
+  const spec=gunSpriteSpec(W);
+  return spec?rigHeldPoint(p,W,texturedWeaponPose(p,W),gunSpriteOffset(spec,spec.muzzle)):null;
+}
 function drawTexturedGun(spec,W,recoil,fl) {
   ctx.save();ctx.rotate(-spec.angle);
   ctx.drawImage(abyssArt.guns.image,0,spec.cell*96,256,96,-spec.grip[0]*spec.scale,-spec.grip[1]*spec.scale,256*spec.scale,96*spec.scale);
@@ -10579,20 +10588,29 @@ function bowSpritePose(spec,draw) {
   return {draw,sx,sy,tips,nock:{x:(tips[0].x+tips[1].x)*.5-draw*7,y:0}};
 }
 function bowReleasePoint(p,W,charge) {
-  const spec=bowSpriteSpec(W),rig=androidRigKey(textureFacing(p.aimDraw,p.artFacing));
-  if(!spec||!rig)return null;
+  const spec=bowSpriteSpec(W);
+  if(!spec)return null;
   const pose=texturedWeaponPose(p,W);
   // Longbow release clears drawing before firing. Reconstruct its last drawn
   // pose from the release charge, before fireBow applies the new recoil timer.
   if(W.id==='lbow')pose.draw=Math.max(0,Math.min(1,charge||0));
+  const length=W.id==='lbow'?24:20,nock=bowSpritePose(spec,pose.draw).nock;
+  const point=rigHeldPoint(p,W,pose,{x:nock.x+length+1.6,y:0});
+  if(point)point.length=length;
+  return point;
+}
+// Map a calibrated weapon point through the same palm/body projection used by
+// drawTexturedAndroid. Only evaluated at firing, never in the projectile loop.
+function rigHeldPoint(p,W,pose,local) {
+  const rig=androidRigKey(textureFacing(p.aimDraw,p.artFacing));
+  if(!rig)return null;
   const hand=rigTwoHandPose(p,W,pose).twoHand.main;
   const scale=p.r*4.4/160,blend=p.artRunBlend||0;
   const bounce=-Math.abs(Math.sin((p.artRunPhase||0)*TAU))*1.6*blend;
   const ground=rigGroundLevel(rig,blend,p.artMotion);
-  const length=W.id==='lbow'?24:20,nock=bowSpritePose(spec,pose.draw).nock;
-  const c=Math.cos(p.aimDraw),s=Math.sin(p.aimDraw),along=nock.x+length+1.6-pose.recoil*1.5;
-  return {x:p.x+(hand.x-80)*scale+c*along,
-          y:p.y+(hand.y+bounce-ground)*scale+s*along,length};
+  const c=Math.cos(p.aimDraw),s=Math.sin(p.aimDraw),along=local.x-pose.recoil*1.5;
+  return {x:p.x+(hand.x-80)*scale+c*along-s*local.y,
+          y:p.y+(hand.y+bounce-ground)*scale+s*along+c*local.y};
 }
 // Tip is the local origin, so the rendered shaft and collision contact share
 // the same projected endpoint. Dimensions match the arrow held on the string.
@@ -13955,10 +13973,19 @@ function drawBolts() {
 /* ballistic bullets: short metallic tracers (rifle rounds / scatter pellets) */
 function drawBullets() {
   for (const b of bullets) {
-    bloomCircle(b.x, b.y, b.r * 3, b.col, 0.3);
+    const x=b.x+b.artX,y=b.y+b.artY;
+    bloomCircle(x, y, b.artMuzzle ? 5 : b.r * 3, b.col, b.artMuzzle ? .18 : .3);
     ctx.save();
-    ctx.translate(b.x, b.y);
+    ctx.translate(x, y);
     ctx.rotate(b.ang);
+    if(b.artMuzzle) {
+      // The leading tip begins at the muzzle; a narrow tracer preserves the
+      // painted barrel silhouette without tying its width to collision radius.
+      const len=b.kind==='rifle'?7:5;
+      ctx.fillStyle=b.crit?'#fff3c0':'#f4f8ff';
+      ctx.beginPath();ctx.ellipse(-len*.5,0,len*.5,.7,0,0,TAU);ctx.fill();
+      ctx.restore();continue;
+    }
     glow(b.col, 9);
     ctx.fillStyle = b.crit ? "#fff3c0" : "#f4f8ff";
     // elongated tracer slug
@@ -14021,6 +14048,14 @@ function drawArrows() {
 function drawBeamsParts() {
   for (const bm of beams) {
     ctx.save();
+    if(bm.kind==='rail') {
+      // A rail is a stable straight discharge. Lightning's randomized vertices
+      // made its aim line flicker sideways on every render frame.
+      ctx.globalAlpha=clamp(bm.t/bm.tm,0,1);
+      ctx.strokeStyle=bm.col;ctx.lineWidth=bm.width;
+      ctx.beginPath();ctx.moveTo(bm.x1,bm.y1);ctx.lineTo(bm.x2,bm.y2);ctx.stroke();
+      ctx.restore();continue;
+    }
     ctx.globalAlpha = bm.t / 0.18;
     glow(bm.col, 12);
     ctx.strokeStyle = bm.col;

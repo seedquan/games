@@ -1254,3 +1254,84 @@ test('shared damage resolution moves only direct contact cosmetics when an impac
   for(const e of lifted.events.filter(e=>e[0]!=='number'))assert.deepEqual(e.slice(1,3),[155,70]);
  }
 });
+
+test('gun release anchors match actual painted muzzles across facings, sizes and moving recoil poses',()=>{
+ const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt.guns={ready:true,image:{}};box.glow=()=>{};box.noglow=()=>{};box.spriteDetail=()=>false;
+ const start=html.indexOf('function drawHeldWeapon(');vm.runInContext(html.slice(start,html.indexOf('\n/* the player android:',start)),box);
+ const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+ for(let dir=0;dir<8;dir++)for(const r of [12,13,18])for(const id of ['rifle','scatter','rail'])for(const amount of [0,.5,1]){
+  const p={...player(),r,aimDraw:dir*Math.PI/4+.04,recoilT:amount*.09,artRunPhase:.23,artRunBlend:amount,artMotion:{x:-.6,y:.8},weapon:{id,isGun:true,col:'#abc'}};
+  calls.length=0;box.drawTexturedAndroid(p);const spec=vm.runInContext(`GUN_SPRITES.${id}`,box);let m=[1,0,0,1,0,0],stack=[],tip;
+  for(const [op,...v]of calls){
+   if(op==='save')stack.push([...m]);else if(op==='restore')m=stack.pop();
+   else if(op==='translate')m=mul(m,[1,0,0,1,v[0],v[1]]);
+   else if(op==='rotate')m=mul(m,[Math.cos(v[0]),Math.sin(v[0]),-Math.sin(v[0]),Math.cos(v[0]),0,0]);
+   else if(op==='scale')m=mul(m,[v[0],0,0,v[1],0,0]);
+   else if(op==='drawImage'&&v[0]===box.abyssArt.guns.image){const x=v[5]+spec.muzzle[0]*v[7]/v[3],y=v[6]+spec.muzzle[1]*v[8]/v[4];tip=[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];}
+  }
+  const origin=box.gunReleasePoint(p,p.weapon);assert.ok(Math.hypot(origin.x-tip[0],origin.y-tip[1])<1e-8,`${dir}/${r}/${id}/${amount}`);
+ }
+ box.abyssArt.guns.ready=false;assert.equal(box.gunReleasePoint(player(),{id:'rifle'}),null);
+});
+function bulletHarness(){
+ const {box,calls,events,p}=arrowHarness();Object.assign(box,{bullets:[],bulletPool:[],beams:[],novas:[],sparkLine:(...v)=>events.push(['line',...v]),shake:()=>{},
+ audio:{rifleShot:()=>{},scatterShot:()=>{},railShot:()=>{}},ffx:{spawnLight:(...v)=>events.push(['light',...v]),ring:(...v)=>events.push(['ring',...v])}});
+ vm.runInContext(html.slice(html.indexOf('function getBullet()'),html.indexOf('/* ---------------- §L4 ARCHERY')),box);box.gunDamage=()=>20;return {box,calls,events,p};
+}
+test('every firearm variant dispatches from its painted muzzle',()=>{
+ for(const [id,aspect,count]of [['rifle','',1],['rifle','burst',3],['scatter','',6],['scatter','slug',1],['rail','',0],['rail','rapidrail',0]]){
+  const {box,p,events}=bulletHarness();box.rigArtEnabled=true;box.abyssArt.guns={ready:true,image:{}};
+  Object.assign(p,{aim:0,aimDraw:0,recoilT:0,vx:0,vy:0,weapon:{id,aspect,isGun:true,col:'#abc',fireCD:.3}});
+  const origin=box.gunReleasePoint(p,p.weapon);box.fireGun(p,p.weapon);assert.equal(box.bullets.length,count);
+  for(const b of box.bullets){assert.ok(Math.hypot(b.x+b.artX-origin.x,b.y+b.artY-origin.y)<1e-8);assert.equal(b.artMuzzle,true);}
+  if(id==='rail'){assert.equal(box.beams.length,2);for(const beam of box.beams)assert.deepEqual([beam.x1,beam.y1],[origin.x,origin.y]);}
+  for(const e of events.filter(e=>['burst','light'].includes(e[0])&&e[3]!==60))assert.ok(Math.hypot(e[1]-origin.x,e[2]-origin.y)<1e-8);
+ }
+});
+test('ballistic flight and impacts preserve projection after owner movement and pool reuse',()=>{
+ const {box,p,events}=bulletHarness();const b=box.spawnBullet(p,'rifle',0,100,20,'#abc',3,{launch:{x:125,y:70}});p.x=800;p.y=800;
+ box.updateBullets(.1);assert.deepEqual([b.x,b.y,b.x+b.artX,b.y+b.artY],[127,100,135,70]);assert.deepEqual(events[0],['part',135,70]);
+ const foe={x:137,y:100,r:10,hp:100};box.enemies=[foe];box.updateBullets(.1);
+ assert.deepEqual(events.find(e=>e[0]==='hit').slice(8),[145,70]);assert.deepEqual(events.find(e=>e[0]==='burst').slice(1,3),[145,70]);
+ assert.equal(box.bullets.length,0);const reused=box.spawnBullet(p,'pellet',0,100,1,'#abc',3,{});assert.equal(reused,b);assert.deepEqual([reused.artX,reused.artY,reused.artMuzzle],[0,0,false]);
+});
+test('ballistic wall bounce, pillar collision, piercing and target ricochet keep their physics',()=>{
+ for(const mode of ['wall','pillar','pierce','bounce']){
+  const {box,p,events}=bulletHarness();const b=box.spawnBullet(p,'rifle',0,100,20,'#abc',3,{pierce:mode==='pierce'?1:0,bounces:1,launch:{x:125,y:70}});
+  const offset=[b.artX,b.artY];
+  if(mode==='wall'){b.x=998;box.updateBullets(.1);assert.equal(b.x,1000);assert.equal(b.vx,-100);assert.equal(b.bounces,0);}
+  else if(mode==='pillar'){box.pointInPillar=(x,y)=>{assert.deepEqual([x,y],[127,100]);return true;};box.updateBullets(.1);assert.equal(box.bullets.length,0);assert.deepEqual(events.find(e=>e[0]==='burst').slice(1,3),[135,70]);continue;}
+  else {box.enemies=[{x:127,y:100,r:10,hp:100}];if(mode==='bounce')box.enemies.push({x:160,y:150,r:10,hp:100});else b.bounces=0;box.updateBullets(.1);assert.equal(box.bullets.length,1);if(mode==='bounce'){assert.ok(b.vy>0);assert.equal(b.bounces,0);}else assert.equal(b.pierce,0);}
+  assert.deepEqual([b.artX,b.artY],offset);
+ }
+});
+test('rail visual projection preserves target selection, damage and siege ground zone',()=>{
+ const run=launch=>{const {box,p,events}=bulletHarness();Object.assign(p,{vx:0,vy:0,aim:0,aimDraw:0});
+  box.enemies=[{id:'near',x:160,y:110,r:10,hp:100},{id:'far',x:400,y:100,r:10,hp:100},{id:'off',x:300,y:170,r:10,hp:100}];
+  box.boonLv=k=>k==='siege'?1:0;box.boonPow=()=>1;box.fireRail(p,{id:'rail',fireCD:.5,col:'#abc'},0,20,launch);return {box,events};};
+ const plain=run(null),projected=run({x:125,y:70});const hits=r=>r.events.filter(e=>e[0]==='hit');
+ assert.deepEqual(hits(projected).map(e=>[e[1].id,...e.slice(2,8)]),hits(plain).map(e=>[e[1].id,...e.slice(2,8)]));
+ assert.deepEqual(hits(projected).map(e=>e.slice(8)),[[185,70],[425,70]]);
+ assert.equal(JSON.stringify(projected.box.novas),JSON.stringify(plain.box.novas));assert.deepEqual(projected.events.filter(e=>e[0]==='ring'),plain.events.filter(e=>e[0]==='ring'));
+ assert.deepEqual([projected.box.beams[0].x1,projected.box.beams[0].y1,projected.box.beams[0].x2,projected.box.beams[0].y2],[125,70,685,70]);
+});
+test('gun recoil completes one positive pulse at each actual firing duration',()=>{
+ const {box}=harness();for(const [id,aspect,duration]of [['rifle','',.1],['scatter','',.2],['rail','',.24],['rail','rapidrail',.14]]){
+  const p=player(),W={id,aspect,isGun:true};p.recoilT=duration;assert.ok(box.texturedWeaponPose(p,W).recoil<1e-10);
+  p.recoilT=duration/2;assert.equal(box.texturedWeaponPose(p,W).recoil,1);p.recoilT=0;assert.equal(box.texturedWeaponPose(p,W).recoil,0);
+ }
+});
+
+test('rail rendering keeps exact straight endpoints across frames and fades without random flicker',()=>{
+ const {box,calls}=harness();box.beams=[{kind:'rail',x1:125,y1:70,x2:685,y2:70,t:.22,tm:.22,width:3,col:'#abc'}];box.parts=[];
+ box.clamp=(v,a,b)=>Math.max(a,Math.min(b,v));box.rand=()=>{throw Error('rail must not jitter');};
+ vm.runInContext(html.slice(html.indexOf('function drawBeamsParts()'),html.indexOf('function drawDnums()')),box);
+ for(const t of [.22,.16,.08,0]){box.beams[0].t=t;calls.length=0;box.drawBeamsParts();assert.deepEqual(calls.filter(c=>c[0]==='moveTo'||c[0]==='lineTo'),[['moveTo',125,70],['lineTo',685,70]]);assert.equal(calls.filter(c=>c[0]==='save').length,calls.filter(c=>c[0]==='restore').length);}
+});
+test('projected bullet tracer begins at its muzzle endpoint with no extra shadow filter',()=>{
+ const {box,calls}=harness();box.bullets=[{x:120,y:100,artX:5,artY:-30,artMuzzle:true,kind:'rifle',r:3,col:'#abc',ang:0}];box.bloomCircle=()=>{};
+ box.glow=()=>{throw Error('projected bullet must not add shadow filter');};
+ vm.runInContext(html.slice(html.indexOf('function drawBullets()'),html.indexOf('/* bow arrows:')),box);box.drawBullets();
+ assert.deepEqual(calls.find(c=>c[0]==='translate'),['translate',125,70]);const e=calls.find(c=>c[0]==='ellipse');assert.equal(e[1]+e[3],0);assert.equal(e[4],.7);
+ assert.equal(calls.filter(c=>c[0]==='save').length,calls.filter(c=>c[0]==='restore').length);
+});
