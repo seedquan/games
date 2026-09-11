@@ -906,3 +906,42 @@ test('both desktop and touch-off terrain paths use decals with unloaded fallback
  box.touchUI=true;box.ffx.level='off';box.drawTerrainUnder();assert.deepEqual(events,['decal:lake','decal:rock']);events.length=0;
  box.touchUI=false;box.drawTexturedTerrain=()=>false;box.drawTerrainUnder();assert.deepEqual(events,['fallbackLake','fallbackRock']);
 });
+
+test('flora atlas covers all sectors with bounded crops and stable roots',()=>{
+ const {box,calls}=harness();box.arenaBiomeIdx=0;box.ffx={level:'full'};
+ const f={kind:'plant',x:10,y:20,h:40,ph:1};
+ assert.equal(box.drawTexturedFlora(f),false);assert.equal(calls.length,0);
+ box.abyssArt.flora={ready:true,image:{}};
+ const roots=[[134,224],[134,224],[150,225],[132,216],[132,220],[140,214]];
+ for(let i=0;i<6;i++){
+  calls.length=0;box.arenaBiomeIdx=i%5;const p={...f,crystal:i===5};const before=JSON.stringify(p);
+  assert.equal(box.floraTextureCell(p,i%5),i);assert.equal(box.drawTexturedFlora(p),true);assert.equal(JSON.stringify(p),before);
+  const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,1);const d=draws[0];
+  assert.ok(d[2]>=0&&d[2]+d[4]<=768&&d[3]>=0&&d[3]+d[5]<=512);
+  const rootX=d[6]+roots[i][0]*d[8]/256,rootY=d[7]+roots[i][1]*d[9]/256;
+  const shear=calls.find(c=>c[0]==='transform')[3];
+  assert.ok(Math.abs(rootX+shear*rootY)<1e-10&&Math.abs(rootY)<1e-10);
+ }
+ assert.equal(box.drawTexturedFlora({...f,kind:'rock'}),false);
+});
+test('flora sway stays bounded while crystals and off effects remain stationary',()=>{
+ const {box}=harness();
+ for(let i=0;i<100;i++){
+  const f={ph:i*.2};const t=i*.17;
+  assert.ok(Math.abs(box.floraSway(f,t,'full'))<=.035);
+  assert.ok(Math.abs(box.floraSway(f,t,'reduced'))<=.015);
+  assert.equal(box.floraSway(f,t,'off'),0);
+  assert.equal(box.floraSway({...f,crystal:true},t,'full'),0);
+ }
+});
+test('flora dispatch preserves touch-off omission, view culling and unloaded fallback',()=>{
+ const {box,calls}=harness();box.arenaBiomeIdx=0;box.ffx={level:'reduced'};box.touchUI=false;
+ const plant={kind:'plant',x:10,y:20,h:40,r:24,blades:5,ph:0};
+ box.terrain=[plant,{...plant,x:999},{...plant,kind:'rock'}];box.inView=x=>x!==999;
+ box.terrainPalette=()=>({flora:{stem:'#234',glow:'#456'}});
+ vm.runInContext(html.slice(html.indexOf('function drawTerrainOver()'),html.indexOf('function drawPillars()')),box);
+ box.abyssArt.flora={ready:true,image:{}};box.drawTerrainOver();assert.equal(calls.filter(c=>c[0]==='drawImage').length,1);
+ calls.length=0;box.touchUI=true;box.ffx.level='off';box.drawTerrainOver();assert.equal(calls.length,0);
+ box.touchUI=false;box.abyssArt.flora.ready=false;box.drawTerrainOver();
+ assert.equal(calls.filter(c=>c[0]==='drawImage').length,0);assert.equal(calls.filter(c=>c[0]==='quadraticCurveTo').length,5);
+});
