@@ -875,3 +875,34 @@ test('swarmer articulated renderer uses nine bounded crops and does not advance 
  const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,9);
  for(const d of draws){assert.ok(d[2]>=0&&d[2]+d[4]<=768);assert.ok(d[3]>=0&&d[3]+d[5]<=512);}
 });
+
+test('ground decals cover all biome palettes and preserve unsupported fallbacks',()=>{
+ const {box,calls}=harness();box.arenaBiomeIdx=0;const pal={liquid:{rim:'#448899'}};
+ const f={kind:'lake',x:10,y:20,r:80,shallow:false};assert.equal(box.drawTexturedTerrain(f,pal),false);
+ box.abyssArt.groundDecals={ready:true,image:{}};
+ for(let biome=0;biome<5;biome++){
+  box.arenaBiomeIdx=biome;assert.equal(box.terrainTextureCell(f,biome),[0,1,2,3,1][biome]);
+  for(const kind of ['lake','rock']){
+   calls.length=0;const prop={...f,kind,rot:.3};const before=JSON.stringify(prop);assert.equal(box.drawTexturedTerrain(prop,pal),true);assert.equal(JSON.stringify(prop),before);
+   const draws=calls.filter(c=>c[0]==='drawImage');assert.equal(draws.length,1);const d=draws[0];assert.ok(d[2]>=0&&d[2]+d[4]<=768&&d[3]>=0&&d[3]+d[5]<=512);
+  }
+ }
+ assert.equal(box.drawTexturedTerrain({...f,kind:'plant'},pal),false);assert.equal(box.terrainTextureCell({kind:'rock',crystal:true},0),5);
+});
+test('only shallow water shows its exact circular slow boundary',()=>{
+ const {box,calls}=harness();const pal={liquid:{rim:'#448899'}},f={kind:'lake',x:10,y:20,r:80,shallow:true};
+ box.drawShallowPoolCue(f,pal);const arc=calls.find(c=>c[0]==='arc');assert.deepEqual(arc.slice(1,4),[10,20,80*.82]);
+ calls.length=0;box.drawShallowPoolCue({...f,shallow:false},pal);box.drawShallowPoolCue({...f,kind:'rock'},pal);assert.equal(calls.length,0);
+ box.terrain=[f];box.dist=(x,y,a,b)=>Math.hypot(x-a,y-b);
+ vm.runInContext(html.slice(html.indexOf('function terrainSlowFactor('),html.indexOf('/* REGION-WEIGHTED enemy pick:')),box);
+ assert.equal(box.terrainSlowFactor(10,20,false),.82);assert.equal(box.terrainSlowFactor(10+80*.82+.01,20,false),1);assert.equal(box.terrainSlowFactor(10,20,true),1);
+});
+test('both desktop and touch-off terrain paths use decals with unloaded fallback',()=>{
+ const {box}=harness();box.terrain=[{kind:'lake',x:0,y:0,r:80},{kind:'rock',x:200,y:0,r:80},{kind:'plant',x:300,y:0,r:10}];
+ const events=[];box.ffx={level:'reduced'};box.touchUI=false;box.inView=()=>true;box.terrainPalette=()=>({liquid:{core:'#123'},rock:{base:'#123'}});box.drawTexturedTerrain=f=>{events.push('decal:'+f.kind);return true;};
+ vm.runInContext(html.slice(html.indexOf('function drawTerrainUnder()'),html.indexOf('function drawLake(')),box);
+ box.drawLake=()=>events.push('fallbackLake');box.drawRock=()=>events.push('fallbackRock');
+ box.drawTerrainUnder();assert.deepEqual(events,['decal:lake','decal:rock']);events.length=0;
+ box.touchUI=true;box.ffx.level='off';box.drawTerrainUnder();assert.deepEqual(events,['decal:lake','decal:rock']);events.length=0;
+ box.touchUI=false;box.drawTexturedTerrain=()=>false;box.drawTerrainUnder();assert.deepEqual(events,['fallbackLake','fallbackRock']);
+});
