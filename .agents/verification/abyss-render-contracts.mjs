@@ -478,6 +478,41 @@ test('all eight weapon grips follow the rendered palm through pose, scale and re
  }
 });
 
+test('both painted palms stay on gun receivers and drawn bowstrings in every direction',()=>{
+ const {box,calls}=harness();box.rigArtEnabled=true;
+ const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+ const point=(m,x,y)=>[m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]];
+ const names=['EAST','SOUTHEAST','SOUTH','SOUTHWEST','WEST','NORTHWEST','NORTH','NORTHEAST'];
+ for(let dir=0;dir<8;dir++)for(const r of [12,13,18])for(const id of ['rifle','scatter','rail','qbow','lbow','sbow'])for(const amount of [0,.5,1]){
+  const parts=vm.runInContext(names[dir]+'_RIG_PARTS',box),p={...player(),r,aimDraw:dir*Math.PI/4+.07,artRunPhase:amount*.7,artRunBlend:1,recoilT:amount*.09,drawing:true,drawT:amount,weapon:{id,isBow:id.endsWith('bow'),isGun:!id.endsWith('bow')}};
+  calls.length=0;box.drawTexturedAndroid(p);let m=[1,0,0,1,0,0],stack=[],palms={},targets={};
+  for(const [op,...v]of calls){
+   if(op==='save')stack.push([...m]);else if(op==='restore')m=stack.pop();
+   else if(op==='translate')m=mul(m,[1,0,0,1,v[0],v[1]]);
+   else if(op==='rotate')m=mul(m,[Math.cos(v[0]),Math.sin(v[0]),-Math.sin(v[0]),Math.cos(v[0]),0,0]);
+   else if(op==='scale')m=mul(m,[v[0],0,0,v[1],0,0]);
+   else if(op==='drawImage')for(const key of ['foreL','foreR']){const a=parts[key];if(v[1]===a[0]/2&&v[2]===a[1]/2)palms[key]=point(m,a[8]-a[4],a[9]-a[5]);}
+   else if(op==='weapon'){
+    targets.foreR=point(m,v[1]+(p.weapon.isBow?(id==='lbow'?10:9):0),v[2]);
+    targets.foreL=point(m,v[1]+(p.weapon.isBow?4-7*v[5]:4),v[2]);
+   }
+  }
+  for(const key of ['foreL','foreR'])assert.ok(Math.hypot(palms[key][0]-targets[key][0],palms[key][1]-targets[key][1])<1e-8,`${dir}/${r}/${id}/${amount}/${key}`);
+  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
+ }
+});
+test('folded support arm stays finite and continuous as the palm passes the shoulder',()=>{
+ const {box}=harness(),parts=vm.runInContext('SOUTHEAST_RIG_PARTS',box);
+ let previous;
+ for(let i=-100;i<=100;i++){
+  const j=box.rigSupportJoints(parts,'foreL',65,41,65+i*.001,41,.145);
+  for(const v of [j.ex,j.ey,j.wx,j.wy])assert.ok(Number.isFinite(v));
+  assert.ok(Math.hypot(j.ex-65,j.ey-41)<=22.001);assert.ok(Math.hypot(j.wx-j.ex,j.wy-j.ey)<=22.001);
+  if(previous)assert.ok(Math.hypot(j.ex-previous.ex,j.ey-previous.ey)<.01);
+  previous=j;
+ }
+});
+
 test('rig feet plant along actual travel for every facing and movement direction',()=>{
  const names=['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'];
  for(const name of names)for(let dir=0;dir<16;dir++)for(const radius of [12,18])for(const amount of [0,.5,1]) {

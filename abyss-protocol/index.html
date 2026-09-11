@@ -9952,6 +9952,16 @@ if (artAnimationPreview) {
     speedButton.textContent='步速：'+(previewSpeed===1?'全速':previewSpeed===.25?'慢走':'轻步');
     if(artPreviewMove){artPreviewMove.x*=previewSpeed/previous;artPreviewMove.y*=previewSpeed/previous;}
   };
+  const gripButton=document.createElement('button');
+  gripButton.type='button';gripButton.textContent='持握：当前';gripButton.style.cssText=speedButton.style.cssText;speedButton.after(gripButton);
+  let gripChoice=0,gripOriginal=null;
+  gripButton.onclick=()=>{
+    const p=players[0];if(state!=='hub'||!p)return;
+    if(!gripOriginal)gripOriginal={weapon:p.weapon,aspect:p.aspect};
+    const id=['rifle','scatter','rail','qbow','lbow','sbow',null][gripChoice];gripChoice=(gripChoice+1)%7;
+    p.weapon=id||gripOriginal.weapon;p.aspect=id?'':gripOriginal.aspect;p.drawing=false;p.drawT=0;
+    gripButton.textContent='持握：'+(id?weaponDefP(p).zh:'当前');
+  };
   panel.addEventListener('pointerdown', e => e.stopPropagation());
   panel.addEventListener('keydown', e => e.stopPropagation());
   document.body.append(panel);
@@ -9961,6 +9971,7 @@ if (artAnimationPreview) {
   setInterval(() => {
     const p = players[0];
     speedButton.disabled=state!=='hub';
+    gripButton.disabled=state!=='hub';
     buttons[0].disabled = buttons[1].disabled = buttons[2].disabled = buttons[3].disabled = buttons[4].disabled = buttons[5].disabled = buttons[6].disabled = buttons[7].disabled = buttons[8].disabled = buttons[9].disabled = buttons[10].disabled = state !== 'hub';
     panel.querySelector('output').textContent = state !== 'hub' || !p ? '进入枢纽后开始' :
       '朝向 ' + (p.artFacing ?? '-') + ' · 第 ' + (1 + Math.floor((p.artRunPhase || 0) * 8)) + ' 帧 · 跑步 ' + Math.round((p.artRunBlend || 0) * 100) + '% · 步幅 ' + (p.artMotion?.cycleDistance||0).toFixed(1);
@@ -10058,7 +10069,7 @@ function blendedAndroidFrame(idle, facing, run, frame, blend) {
 const SOUTH_RIG_PARTS = {
   core: [158,0,184,394,249,350,249,15],
   upperL: [532,35,146,163,610,100,582,182],
-  foreL: [902,54,92,278,935,81,958,221],
+  foreL: [902,54,92,278,935,81,958,221,959,277],
   upperR: [1215,27,140,171,1292,100,1304,185],
   foreR: [179,402,92,269,235,427,217,565,220,625],
   thighL: [506,384,127,286,580,414,560,616],
@@ -10139,6 +10150,7 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1},
   const drawArm = side => {
     const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance);
     const sx=80+side*18,sy=43+bounce;
+    if(action?.twoHand)return drawRigSupportArm(image,SOUTH_RIG_PARTS,side,sx,sy,.145,.17,action,bounce);
     let ex=80+side*(25-5*blend+step.lift*2),ey=64+bounce+step.travel*3;
     let wx=80+side*(31-8*blend+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
     if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,1));
@@ -10153,7 +10165,7 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1},
 const EAST_RIG_PARTS = {
   core:[180,16,180,356,275,330,280,40],
   upperL:[548,48,113,180,600,105,590,208],
-  foreL:[892,48,112,284,935,80,952,225],
+  foreL:[892,48,112,284,935,80,952,225,957,272],
   upperR:[1207,42,118,188,1268,110,1273,210],
   foreR:[207,388,106,280,255,420,254,560,264,620],
   thighL:[528,370,123,298,600,407,590,628],
@@ -10198,6 +10210,7 @@ function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:d
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=79-side*6,sy=44+side*2+bounce;
+    if(action?.twoHand)return drawRigSupportArm(asset.image,parts,side,80+(sx-80)*direction,sy,.14,.17,action,bounce);
     let ex=sx+2+2*blend+step.travel*9,ey=66+bounce-step.lift*4;
     let wx=sx+3+9*blend+step.travel*12,wy=85-5*blend+bounce-step.lift*8;
     if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,direction));
@@ -10213,7 +10226,7 @@ function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:d
 const WEST_RIG_PARTS = {
   core:[212,23,160,336,291,320,285,43],
   upperL:[547,63,120,196,607,122,597,232],
-  foreL:[904,80,98,276,951,117,961,251],
+  foreL:[904,80,98,276,951,117,961,251,961,292],
   upperR:[1232,65,136,202,1288,123,1325,240],
   foreR:[220,393,108,267,275,433,266,555,279,612],
   thighL:[543,348,138,296,618,390,619,591],
@@ -10233,7 +10246,7 @@ function drawWestRig(phase,blend,worldScale=13*4.4/160,motion,action) {
 const NORTH_RIG_PARTS = {
   core:[210,12,176,335,298,320,298,22],
   upperL:[596,48,117,235,656,125,639,250],
-  foreL:[878,61,104,286,920,96,944,235],
+  foreL:[878,61,104,286,920,96,944,235,942,287],
   upperR:[1204,49,134,235,1263,123,1284,252],
   foreR:[226,377,95,273,269,411,258,553,270,606],
   thighL:[534,346,134,306,613,384,595,609],
@@ -10263,6 +10276,7 @@ function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1},action
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=80+side*18,sy=44+bounce;
+    if(action?.twoHand)return drawRigSupportArm(asset.image,NORTH_RIG_PARTS,side,sx,sy,.145,.17,action,bounce);
     let ex=80+side*(25-5*blend+step.lift*2),ey=65+bounce-step.travel*3;
     let wx=80+side*(30-7*blend+step.lift*2),wy=83+bounce-step.travel*7-step.lift*3;
     if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,1));
@@ -10274,7 +10288,7 @@ function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1},action
 const NORTHEAST_RIG_PARTS = {
   core:[198,12,184,333,285,317,283,30],
   upperL:[571,43,123,248,632,118,618,255],
-  foreL:[896,41,116,294,947,66,968,213],
+  foreL:[896,41,116,294,947,66,968,213,970,278],
   upperR:[1206,39,146,250,1268,114,1301,254],
   foreR:[210,360,111,278,261,388,253,539,266,590],
   thighL:[526,337,142,297,608,373,588,593],
@@ -10303,6 +10317,7 @@ function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mot
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=80+side*15,sy=44+side*3+bounce;
+    if(action?.twoHand)return drawRigSupportArm(asset.image,parts,side,80+(sx-80)*direction,sy,.145*(direction<0?.85:1),.17*(direction<0?.85:1),action,bounce);
     let ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce-step.travel*5*q;
     let wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce-step.travel*10*q-step.lift*4;
     if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,direction));
@@ -10315,7 +10330,7 @@ function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mot
 const NORTHWEST_RIG_PARTS = {
   core:[175,9,232,430,298,387,289,40],
   upperL:[580,70,176,254,667,156,673,296],
-  foreL:[878,108,194,281,1020,151,938,298],
+  foreL:[878,108,194,281,1020,151,938,298,930,335],
   upperR:[1215,72,172,280,1301,151,1316,310],
   foreR:[163,447,177,268,291,497,218,635,205,677],
   thighL:[548,400,155,247,649,443,621,614],
@@ -10334,7 +10349,7 @@ function drawNorthWestRig(phase,blend,worldScale=13*4.4/160,motion,action) {
 const SOUTHEAST_RIG_PARTS = {
   core:[131,5,209,410,240,375,237,37],
   upperL:[540,113,172,221,583,153,683,301],
-  foreL:[916,145,138,272,956,184,1005,326],
+  foreL:[916,145,138,272,956,184,1005,326,1007,364],
   upperR:[1308,108,163,251,1370,156,1440,329],
   foreR:[188,430,124,252,248,465,251,598,257,646],
   thighL:[532,404,168,270,582,445,649,626],
@@ -10360,6 +10375,7 @@ function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mo
   const arm=side=>{
     const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=80+side*15,sy=44+side*3+bounce;
+    if(action?.twoHand)return drawRigSupportArm(asset.image,parts,side,80+(sx-80)*direction,sy,.145,.17,action,bounce);
     let ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce+step.travel*5*q;
     let wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce+step.travel*10*q-step.lift*4;
     if(side>0&&action)({ex,ey,wx,wy}=rigArmAction(sx,sy,ex,ey,wx,wy,action,direction));
@@ -10375,7 +10391,7 @@ function drawSouthEastRig(phase,blend,worldScale=13*4.4/160,motion,action) {
 const SOUTHWEST_RIG_PARTS = {
   core:[182,3,202,426,274,375,278,51],
   upperL:[584,80,186,246,658,159,732,287],
-  foreL:[863,122,179,274,1005,159,914,310],
+  foreL:[863,122,179,274,1005,159,914,310,912,345],
   upperR:[1231,96,177,230,1302,174,1372,286],
   foreR:[151,453,210,240,320,497,211,620,199,648],
   thighL:[540,387,173,300,650,442,591,626],
@@ -10503,8 +10519,45 @@ function enemyLabelTop(e) {
   const key = enemyTextureKey(e);
   return abyssArt[key]?.ready ? e.y - e.r * (key === 'core' ? 3.1 : 3.25) * .8 - 2 : e.y - e.r;
 }
+function rigTwoHandPose(p,W,pose) {
+  const scale=p.r*4.4/160,c=Math.cos(p.aimDraw),s=Math.sin(p.aimDraw);
+  const main={x:80+c*8,y:(W.isBow?60:62)+s*(W.isBow?10:8)};
+  // The support palm follows the receiver or the actual bowstring nocking point.
+  const spacing=W.isBow?(4-pose.draw*7-(W.id==='lbow'?10:9)):4;
+  return {angle:p.aimDraw,amount:pose.recoil,twoHand:{main,support:{x:main.x+c*spacing/scale,y:main.y+s*spacing/scale}}};
+}
+function rigSupportJoints(parts,key,sx,sy,tx,ty,width) {
+  const a=parts[key],px=a[4],py=a[5],qx=a[6],qy=a[7],gx=a[8],gy=a[9];
+  const native=Math.atan2(qy-py,qx-px),n=Math.hypot(qx-px,qy-py),c=Math.cos(native),s=Math.sin(native);
+  const upper=22,factor=((gx-px)*c+(gy-py)*s)/n,across=(-(gx-px)*s+(gy-py)*c)*width;
+  const dx=tx-sx,dy=ty-sy,d=Math.max(.001,Math.hypot(dx,dy));
+  // A tightly drawn bow folds the forearm toward the camera. Shorten its
+  // projected length only when the painted palm would otherwise miss the string.
+  let fore=Math.min(22,Math.sqrt(Math.max(1,(upper+d-.01)**2-across*across))/factor);
+  const along=factor*fore,palmLength=Math.hypot(along,across);
+  const reach=Math.min(upper+palmLength-.001,Math.max(Math.abs(upper-palmLength)+.001,d));
+  const forward=(upper*upper-palmLength*palmLength+reach*reach)/(2*reach),bend=Math.sqrt(Math.max(0,upper*upper-forward*forward));
+  let ex=sx+dx/d*forward+dy/d*bend,ey=sy+dy/d*forward-dx/d*bend;
+  if(d<8) {
+    // Near the shoulder, fold out of the floor plane instead of flipping the
+    // elbow around a nearly zero target vector. Both projected bones shorten.
+    const t=1-d/8,w=t*t*(3-2*t);
+    ex+=(sx+(sx<80?-12:12)-ex)*w;ey+=(sy+10-ey)*w;
+    fore=Math.sqrt(Math.max(.01,(tx-ex)**2+(ty-ey)**2-across*across))/factor;
+  }
+  const armAngle=Math.atan2(ty-ey,tx-ex)-Math.atan2(across,factor*fore);
+  return {ex,ey,wx:ex+Math.cos(armAngle)*fore,wy:ey+Math.sin(armAngle)*fore,reachable:Math.abs(d-reach)<.002};
+}
+function drawRigSupportArm(image,parts,side,sx,sy,foreWidth,upperWidth,action,bounce) {
+  const suffix=side>0?'R':'L',target=side>0?action.twoHand.main:action.twoHand.support;
+  const j=rigSupportJoints(parts,'fore'+suffix,sx,sy,target.x,target.y+bounce,foreWidth);
+  const grip=drawSouthRigPart(image,'fore'+suffix,j.ex,j.ey,j.wx,j.wy,foreWidth,parts);
+  drawSouthRigPart(image,'upper'+suffix,sx,sy,j.ex,j.ey,upperWidth,parts);
+  return grip;
+}
 function rigAttackPose(p,W,pose) {
   if(p.glaiveOut)return null;
+  if(W.isGun||W.isBow)return rigTwoHandPose(p,W,pose);
   let amount=0,angle=p.aimDraw,sweep=0;
   if(p.slashT>0 && !W.isGun && !W.isCaster && !W.isBow) {
     const progress=Math.max(0,Math.min(1,1-p.slashT/(p.slashDur||.25)));
