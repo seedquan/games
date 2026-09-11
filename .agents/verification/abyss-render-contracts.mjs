@@ -311,7 +311,7 @@ test('east rig renders eleven connected parts with one held weapon and feedback 
  assert.equal(calls.filter(c=>c[0]==='drawImage').length,11);
  assert.equal(calls.filter(c=>c[0]==='weapon').length,1);
  assert.equal(calls.filter(c=>c[0]==='feedback').length,1);
- box.advanceRunAnimation(p,24,0,.1);assert.ok(Math.abs(p.artRunPhase-.55)<1e-8);
+ box.advanceRunAnimation(p,24,0,.1);assert.ok(Math.abs(p.artRunPhase-.5625)<1e-8);
 });
 
 test('north rig respects the art switch and renders eleven parts with shared weapon feedback',()=>{
@@ -500,10 +500,10 @@ test('rig feet plant along actual travel for every facing and movement direction
 test('rig phase advances forward while displacement supplies backward or strafe motion',()=>{
  const {box}=harness();box.rigArtEnabled=true;box.abyssArt.rigEast={ready:true,image:{}};
  const p=player();box.advanceRunAnimation(p,-24,0,.1);
- assert.ok(Math.abs(p.artRunPhase-.25)<1e-8);assert.equal(p.artMotion.x,-1);assert.equal(p.artMotion.y,0);
- box.advanceRunAnimation(p,0,-24,.1);assert.ok(Math.abs(p.artRunPhase-.5)<1e-8);assert.ok(Math.abs(p.artMotion.x+Math.exp(-2.4))<1e-8);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
- box.advanceRunAnimation(p,0,0,.1);assert.equal(p.artRunPhase,.5);
- p.dashT=1;box.advanceRunAnimation(p,24,0,.01);assert.equal(p.artRunPhase,.5);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
+ assert.ok(Math.abs(p.artRunPhase-.2625)<1e-8);assert.equal(p.artMotion.x,-1);assert.equal(p.artMotion.y,0);
+ box.advanceRunAnimation(p,0,-24,.1);assert.ok(Math.abs(p.artRunPhase-.525)<1e-8);assert.ok(Math.abs(p.artMotion.x+Math.exp(-2.4))<1e-8);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
+ box.advanceRunAnimation(p,0,0,.1);assert.ok(Math.abs(p.artRunPhase-.525)<1e-8);
+ p.dashT=1;box.advanceRunAnimation(p,24,0,.01);assert.ok(Math.abs(p.artRunPhase-.525)<1e-8);assert.ok(Math.abs(p.artMotion.y+1-Math.exp(-2.4))<1e-8);
 });
 
 test('direction reversal narrows the stride continuously and converges independent of update rate',()=>{
@@ -625,6 +625,64 @@ test('normal player movement advances rendered gait after collision resolution i
   box.collideArena=()=>{};p.dashT=.1;box.movePlayerForCheck(p,.016);assert.equal(p.artRunPhase,phase,'dash must not drive a running stride');
   p.dashT=0;p.vx=p.vy=0;for(let i=0;i<30;i++)box.movePlayerForCheck(p,.016);
   assert.equal(p.artRunBlend,0);assert.equal(p.artRunPhase,0);
+ }
+});
+
+test('analog walking shortens the cycle and increases support without changing full-speed stride',()=>{
+ const {box}=harness();box.rigArtEnabled=true;
+ const atSpeed=(speed,hz=120)=>{
+  const p={...player(),r:13};for(let i=0;i<hz;i++)box.advanceRunAnimation(p,speed/hz,0,1/hz);return p;
+ };
+ const walk=atSpeed(50),run=atSpeed(252),scale=13*4.4/160;
+ const w=box.southRigStep(0,-1,1,scale,walk.artMotion.cycleDistance),r=box.southRigStep(0,-1,1,scale,run.artMotion.cycleDistance);
+ assert.ok(Math.abs(w.duty-.58)<1e-10);assert.ok(r.duty<.14);assert.equal(run.artMotion.cycleDistance,96);
+ assert.ok(Math.abs(atSpeed(63,60).artRunPhase-atSpeed(63,120).artRunPhase)<1e-10);
+ assert.ok(Math.abs(atSpeed(63,120).artRunPhase-atSpeed(63,240).artRunPhase)<1e-10);
+ const previous=walk.artMotion.cycleDistance;box.advanceRunAnimation(walk,252/120,0,1/120);
+ assert.ok(walk.artMotion.cycleDistance>previous&&walk.artMotion.cycleDistance<96);
+ for(let i=0;i<240;i++)box.advanceRunAnimation(walk,252/120,0,1/120);
+ assert.ok(Math.abs(walk.artMotion.cycleDistance-96)<1e-6);
+});
+test('slow gait keeps planted feet fixed across all facing and movement directions',()=>{
+ const {box}=harness();const scale=13*4.4/160,cycle=24;
+ for(const name of ['East','SouthEast','South','SouthWest','West','NorthWest','North','NorthEast'])for(let direction=0;direction<8;direction++){
+  const motion={x:Math.cos(direction*Math.PI/4),y:Math.sin(direction*Math.PI/4),cycleDistance:cycle},points=[];
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{if(key==='footL')points.push({x:ex*scale,y:ey*scale});};
+  const duty=box.southRigStep(0,-1,1,scale,cycle).duty;
+  for(let j=1;j<20;j++){
+   const phase=duty*j/20;box['draw'+name+'Rig'](phase,1,scale,motion);
+   points.at(-1).x+=phase*cycle*motion.x;points.at(-1).y+=phase*cycle*motion.y;
+  }
+  for(const axis of ['x','y'])assert.ok(Math.max(...points.map(p=>p[axis]))-Math.min(...points.map(p=>p[axis]))<1e-8,`${name}/${direction} slow ${axis}`);
+ }
+});
+
+test('walking contact and recovery preserve continuous foot velocity at each boundary',()=>{
+ const {box}=harness(),scale=13*4.4/160,h=1e-7;
+ for(const cycle of [2*18*scale/.58,24,48,72,96]){
+  const step=u=>box.southRigStep(u,-1,1,scale,cycle),duty=step(0).duty;
+  for(const boundary of [0,duty,duty*1.08,1-duty*.08,1]){
+   const before=step(boundary-h),at=step(boundary),after=step(boundary+h);
+   for(const axis of ['travel','lift'])assert.ok(Math.abs((at[axis]-before[axis])/h-(after[axis]-at[axis])/h)<.005,`${cycle}/${boundary}/${axis}`);
+  }
+ }
+});
+
+test('speed changes retain both rendered foot anchors throughout planted contact',()=>{
+ const {box}=harness();box.rigArtEnabled=true;const scale=13*4.4/160;
+ for(const hz of [60,120])for(const speeds of [[63,252],[252,63]])for(let initial=0;initial<20;initial++){
+  const p={...player(),r:13,aimDraw:0,artRunPhase:initial/20,artRunBlend:1,artMotion:{x:1,y:0,cycleDistance:speeds[0]/2.625}};
+  let root=0,last=null,feet={};
+  box.drawSouthRigPart=(image,key,x,y,ex,ey)=>{if(key.startsWith('foot'))feet[key]={x:root+ex*scale,y:ey*scale};};
+  for(let i=0;i<hz;i++){
+   box.advanceRunAnimation(p,speeds[1]/hz,0,1/hz);root+=speeds[1]/hz;feet={};
+   box.drawEastRig(p.artRunPhase,1,scale,p.artMotion);
+   for(const [key,side] of [['footL',-1],['footR',1]]){
+    feet[key].planted=box.southRigStep(p.artRunPhase,side,1,scale,p.artMotion.cycleDistance).contact;
+    if(last?.[key].planted&&feet[key].planted)assert.ok(Math.hypot(feet[key].x-last[key].x,feet[key].y-last[key].y)<1e-8,`${hz}/${speeds}/${initial}/${key} slipped`);
+   }
+   last=feet;
+  }
  }
 });
 

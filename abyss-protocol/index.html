@@ -9929,7 +9929,8 @@ if (artAnimationPreview) {
   panel.innerHTML = '<div>跑步预览 · 仅枢纽</div><div style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0"><button type="button">持续向东</button><button type="button">持续向南</button><button type="button">持续向北</button><button type="button">持续向东北</button><button type="button">持续向西</button><button type="button">持续向西北</button><button type="button">持续向东南</button><button type="button">持续向西南</button><button type="button">朝东向北横移</button><button type="button">朝东向西倒退</button><button type="button">挥击预览</button><button type="button">停止</button></div><output>进入枢纽后开始</output>';
   const buttons = panel.querySelectorAll('button');
   buttons.forEach(b => b.style.cssText = 'padding:7px;background:#234056;color:#edf7ff;border:1px solid #60899c;border-radius:4px;cursor:pointer');
-  const setMove = move => { if (state === 'hub') artPreviewMove = move; };
+  let previewSpeed=1;
+  const setMove = move => { if (state === 'hub') artPreviewMove = {...move,x:move.x*previewSpeed,y:move.y*previewSpeed}; };
   buttons[0].onclick = () => setMove({ x: 1, y: 0 });
   buttons[1].onclick = () => setMove({ x: 0, y: 1 });
   buttons[2].onclick = () => setMove({ x: 0, y: -1 });
@@ -9942,6 +9943,15 @@ if (artAnimationPreview) {
   buttons[9].onclick = () => setMove({x:-1,y:0,aim:0});
   buttons[10].onclick = () => { if(state==='hub'&&players[0]){artPreviewMove=null;trySlash(players[0]);} };
   buttons[11].onclick = () => { artPreviewMove = null; };
+  const speedButton=document.createElement('button');
+  speedButton.type='button';speedButton.textContent='步速：全速';speedButton.style.cssText=buttons[11].style.cssText;
+  buttons[11].after(speedButton);
+  speedButton.onclick=()=>{
+    const previous=previewSpeed;
+    previewSpeed=previewSpeed===1?.25:previewSpeed===.25?.1:1;
+    speedButton.textContent='步速：'+(previewSpeed===1?'全速':previewSpeed===.25?'慢走':'轻步');
+    if(artPreviewMove){artPreviewMove.x*=previewSpeed/previous;artPreviewMove.y*=previewSpeed/previous;}
+  };
   panel.addEventListener('pointerdown', e => e.stopPropagation());
   panel.addEventListener('keydown', e => e.stopPropagation());
   document.body.append(panel);
@@ -9950,9 +9960,10 @@ if (artAnimationPreview) {
   // Visible diagnostics allow repeatable preview checks without touching game state from DevTools.
   setInterval(() => {
     const p = players[0];
+    speedButton.disabled=state!=='hub';
     buttons[0].disabled = buttons[1].disabled = buttons[2].disabled = buttons[3].disabled = buttons[4].disabled = buttons[5].disabled = buttons[6].disabled = buttons[7].disabled = buttons[8].disabled = buttons[9].disabled = buttons[10].disabled = state !== 'hub';
     panel.querySelector('output').textContent = state !== 'hub' || !p ? '进入枢纽后开始' :
-      '朝向 ' + (p.artFacing ?? '-') + ' · 第 ' + (1 + Math.floor((p.artRunPhase || 0) * 8)) + ' 帧 · 跑步 ' + Math.round((p.artRunBlend || 0) * 100) + '%';
+      '朝向 ' + (p.artFacing ?? '-') + ' · 第 ' + (1 + Math.floor((p.artRunPhase || 0) * 8)) + ' 帧 · 跑步 ' + Math.round((p.artRunBlend || 0) * 100) + '% · 步幅 ' + (p.artMotion?.cycleDistance||0).toFixed(1);
   }, 150);
 }
 // Visible, opt-in profiling scenarios run the real combat systems with an
@@ -10059,11 +10070,11 @@ const SOUTH_RIG_PARTS = {
 };
 const SOUTH_RIG_CYCLE_DISTANCE = 96;
 const SOUTH_RIG_FOOT_TRAVEL = 18;
-function southRigStep(phase, side, blend, worldScale = 13*4.4/160) {
+function southRigStep(phase, side, blend, worldScale = 13*4.4/160, cycleDistance = SOUTH_RIG_CYCLE_DISTANCE) {
   const u = ((phase + (side > 0 ? .5 : 0)) % 1 + 1) % 1;
   // Sprint has an aerial phase. During stance, local foot motion exactly
   // cancels root displacement: 2 * travel * worldScale / duty = cycle distance.
-  const duty = 2*SOUTH_RIG_FOOT_TRAVEL*worldScale/SOUTH_RIG_CYCLE_DISTANCE;
+  const duty = Math.min(.58,2*SOUTH_RIG_FOOT_TRAVEL*worldScale/cycleDistance);
   const contact = u < duty;
   const swing = contact ? 0 : (u-duty)/(1-duty);
   // Match stance velocity at both ends of the swing. A short toe-off/landing
@@ -10084,7 +10095,7 @@ function southRigStep(phase, side, blend, worldScale = 13*4.4/160) {
   }
   // Zero vertical speed at toe-off and touchdown prevents boot/toe snapping.
   const edge=Math.min(1,swing/.025,(1-swing)/.025);
-  const lift = contact ? 0 : Math.sin(swing*Math.PI)*edge*edge*(3-2*edge);
+  const lift = contact ? 0 : Math.sin(swing*Math.PI)*edge*edge*(3-2*edge)*(.35+.65*Math.min(1,cycleDistance/SOUTH_RIG_CYCLE_DISTANCE));
   return { travel: travel*blend, lift: lift*blend, contact, duty };
 }
 function drawSouthRigPart(image, key, x, y, endX, endY, widthScale, parts = SOUTH_RIG_PARTS) {
@@ -10112,7 +10123,7 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1},
   const bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend;
   const hipY=82+bounce;
   const drawLeg = side => {
-    const step=southRigStep(phase,side,blend,worldScale), suffix=side<0?'L':'R';
+    const step=southRigStep(phase,side,blend,worldScale,motion.cycleDistance), suffix=side<0?'L':'R';
     const hipX=80+side*12;
     const ankleX=80+side*(22-11*blend+step.lift*1.5)+step.travel*SOUTH_RIG_FOOT_TRAVEL*motion.x;
     const ankleY=124-12*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL*motion.y-step.lift*12;
@@ -10123,10 +10134,10 @@ function drawSouthRig(phase, blend, worldScale = 13*4.4/160, motion = {x:0,y:1},
     drawSouthRigPart(image,'thigh'+suffix,hipX,hipY,kneeX,kneeY,.17);
   };
   // The leg farther up the floor is painted first; parts overlap at their joints.
-  const left=southRigStep(phase,-1,blend,worldScale), right=southRigStep(phase,1,blend,worldScale);
+  const left=southRigStep(phase,-1,blend,worldScale,motion.cycleDistance), right=southRigStep(phase,1,blend,worldScale,motion.cycleDistance);
   if (left.travel<right.travel) { drawLeg(-1);drawLeg(1); } else { drawLeg(1);drawLeg(-1); }
   const drawArm = side => {
-    const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend,worldScale);
+    const suffix=side<0?'L':'R', step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance);
     const sx=80+side*18,sy=43+bounce;
     let ex=80+side*(25-5*blend+step.lift*2),ey=64+bounce+step.travel*3;
     let wx=80+side*(31-8*blend+step.lift*2),wy=81+bounce+step.travel*7-step.lift*3;
@@ -10175,7 +10186,7 @@ function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:d
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,80+(x-80)*direction,y,80+(ex-80)*direction,ey,width,parts);
   const bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend;
   const leg=side=>{
-    const step=southRigStep(phase,side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const hx=80-side*3,hy=82+side*2+bounce;
     const ax=(side>0?76:88)*(1-blend)+(80-side*3)*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL*motion.x*direction;
     const ay=(side>0?135:128)*(1-blend)+(126+side*2-14*Math.abs(motion.y))*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL*motion.y-step.lift*19;
@@ -10185,7 +10196,7 @@ function drawSideRig(phase,blend,worldScale,assetKey,parts,direction,motion={x:d
     part('thigh'+suffix,hx,hy,knee.x,knee.y,.15);
   };
   const arm=side=>{
-    const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=79-side*6,sy=44+side*2+bounce;
     let ex=sx+2+2*blend+step.travel*9,ey=66+bounce-step.lift*4;
     let wx=sx+3+9*blend+step.travel*12,wy=85-5*blend+bounce-step.lift*8;
@@ -10238,7 +10249,7 @@ function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1},action
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,x,y,ex,ey,width,NORTH_RIG_PARTS);
   const bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend,hipY=86+bounce;
   const leg=side=>{
-    const step=southRigStep(phase,side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const hx=80+side*12,ax=80+side*(20-9*blend+step.lift*1.5)+step.travel*SOUTH_RIG_FOOT_TRAVEL*motion.x;
     // North moves toward negative world Y; stance must travel positive local Y.
     const ay=132-10*blend+step.travel*SOUTH_RIG_FOOT_TRAVEL*motion.y-step.lift*12;
@@ -10247,10 +10258,10 @@ function drawNorthRig(phase,blend,worldScale=13*4.4/160,motion={x:0,y:-1},action
     part('shin'+suffix,kx,ky,ax,ay,.14);
     part('thigh'+suffix,hx,hipY,kx,ky,.17);
   };
-  const l=southRigStep(phase,-1,blend,worldScale),r=southRigStep(phase,1,blend,worldScale);
+  const l=southRigStep(phase,-1,blend,worldScale,motion.cycleDistance),r=southRigStep(phase,1,blend,worldScale,motion.cycleDistance);
   if(l.travel>r.travel){leg(-1);leg(1);}else{leg(1);leg(-1);}
   const arm=side=>{
-    const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=80+side*18,sy=44+bounce;
     let ex=80+side*(25-5*blend+step.lift*2),ey=65+bounce-step.travel*3;
     let wx=80+side*(30-7*blend+step.lift*2),wy=83+bounce-step.travel*7-step.lift*3;
@@ -10279,7 +10290,7 @@ function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mot
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,80+(x-80)*direction,y,80+(ex-80)*direction,ey,width*(direction<0?.85:1),parts);
   const q=Math.SQRT1_2,bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend;
   const leg=side=>{
-    const step=southRigStep(phase,side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const hx=80+side*9,hy=86+side*3+bounce;
     const travel=step.travel*SOUTH_RIG_FOOT_TRAVEL;
     const ax=80+side*(17-6*blend)+travel*motion.x*direction;
@@ -10290,7 +10301,7 @@ function drawRearDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mot
     part('thigh'+suffix,hx,hy,knee.x,knee.y,.17);
   };
   const arm=side=>{
-    const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=80+side*15,sy=44+side*3+bounce;
     let ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce-step.travel*5*q;
     let wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce-step.travel*10*q-step.lift*4;
@@ -10339,7 +10350,7 @@ function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mo
   const part=(key,x,y,ex,ey,width)=>drawSouthRigPart(asset.image,key,80+(x-80)*direction,y,80+(ex-80)*direction,ey,width,parts);
   const q=Math.SQRT1_2,bounce=-Math.abs(Math.sin(phase*TAU))*1.6*blend;
   const leg=side=>{
-    const step=southRigStep(phase,side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const hx=80+side*9,hy=86+side*3+bounce,travel=step.travel*SOUTH_RIG_FOOT_TRAVEL;
     const ax=80+side*(17-6*blend)+travel*motion.x*direction,ay=130+side*3-(9+5*Math.max(0,(Math.abs(motion.y)-q)/(1-q)))*blend+travel*motion.y-step.lift*6;
     const knee=eastRigKnee(hx,hy,ax,ay);
@@ -10347,7 +10358,7 @@ function drawFrontDiagonalRig(phase,blend,worldScale,assetKey,parts,direction,mo
     part('shin'+suffix,knee.x,knee.y,ax,ay,.14);part('thigh'+suffix,hx,hy,knee.x,knee.y,.17);
   };
   const arm=side=>{
-    const step=southRigStep(phase,-side,blend,worldScale),suffix=side<0?'L':'R';
+    const step=southRigStep(phase,-side,blend,worldScale,motion.cycleDistance),suffix=side<0?'L':'R';
     const sx=80+side*15,sy=44+side*3+bounce;
     let ex=80+side*21+step.travel*5*q,ey=65+side*2+bounce+step.travel*5*q;
     let wx=80+side*(27-4*blend)+step.travel*10*q,wy=84+side*2+bounce+step.travel*10*q-step.lift*4;
@@ -10432,7 +10443,27 @@ function advanceRunAnimation(p, dx, dy, dt) {
         p.artMotion.y+=(my-p.artMotion.y)*follow;
       }
     }
-    const stride = rig ? SOUTH_RIG_CYCLE_DISTANCE : 112;
+    let stride=112;
+    if(rig) {
+      // Analog walking gets a shorter cycle and longer planted contact. Smooth
+      // speed changes so throttling the stick does not switch poses abruptly.
+      const scale=(p.r||13)*4.4/160;
+      const shortest=2*SOUTH_RIG_FOOT_TRAVEL*scale/.58;
+      const targetStride=Math.max(shortest,Math.min(SOUTH_RIG_CYCLE_DISTANCE,distance/dt/2.625));
+      const previous=p.artMotion.cycleDistance??targetStride;
+      stride=targetStride+(previous-targetStride)*Math.exp(-dt*10);
+      const phase=p.artRunPhase||0,leftU=phase,rightU=(phase+.5)%1;
+      const duty=Math.min(.58,2*SOUTH_RIG_FOOT_TRAVEL*scale/previous);
+      const leftPlanted=leftU<duty,rightPlanted=rightU<duty;
+      if(leftPlanted&&rightPlanted)stride=previous;
+      else if(leftPlanted||rightPlanted) {
+        // Preserve u * cycleDistance for the supporting foot while retiming.
+        // During double support, defer the change until one foot lifts.
+        const offset=leftPlanted?0:.5,u=leftPlanted?leftU:rightU;
+        p.artRunPhase=((u*previous/stride-offset)%1+1)%1;
+      }
+      p.artMotion.cycleDistance=stride;
+    }
     p.artRunPhase = (((p.artRunPhase || 0) + direction * distance / stride) % 1 + 1) % 1;
   }
   const target = running ? 1 : 0;
