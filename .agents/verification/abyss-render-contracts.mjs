@@ -1155,3 +1155,102 @@ test('held-draw preview can only drive player one longbow in the opt-in hub',()=
  box.state='hub';assert.equal(box.previewBowHeld({...p,idx:1}),false);assert.equal(box.previewBowHeld({...p,weapon:{id:'qbow'}}),false);
  box.artPreviewDraw=false;assert.equal(box.previewBowHeld(p),false);
 });
+
+test('released arrow tip matches the actual drawn longbow arrow in every facing and gait',()=>{
+ const {box,calls}=harness();box.rigArtEnabled=true;box.abyssArt.bows={ready:true,image:{}};
+ box.glow=()=>{};box.noglow=()=>{};box.spriteDetail=()=>false;
+ const start=html.indexOf('function drawHeldWeapon(');vm.runInContext(html.slice(start,html.indexOf('\n/* the player android:',start)),box);
+ const mul=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];
+ for(let dir=0;dir<8;dir++)for(const r of [12,13,18])for(const draw of [.25,.6,1])for(const moving of [false,true]){
+  const p={...player(),r,aimDraw:dir*Math.PI/4+.05,recoilT:.05,drawing:true,drawT:draw,artRunPhase:.19,artRunBlend:moving?1:0,artMotion:{x:-.6,y:.8},weapon:{id:'lbow',isBow:true,col:'#eec'}};
+  calls.length=0;box.drawTexturedAndroid(p);let m=[1,0,0,1,0,0],stack=[],bow=false,moves=0,tip;
+  for(const [op,...v]of calls){
+   if(op==='save')stack.push([...m]);else if(op==='restore')m=stack.pop();
+   else if(op==='translate')m=mul(m,[1,0,0,1,v[0],v[1]]);
+   else if(op==='rotate')m=mul(m,[Math.cos(v[0]),Math.sin(v[0]),-Math.sin(v[0]),Math.cos(v[0]),0,0]);
+   else if(op==='scale')m=mul(m,[v[0],0,0,v[1],0,0]);
+   else if(op==='drawImage'&&v[0]===box.abyssArt.bows.image)bow=true;
+   else if(op==='moveTo'&&bow&&++moves===3)tip=[m[0]*v[0]+m[2]*v[1]+m[4],m[1]*v[0]+m[3]*v[1]+m[5]];
+  }
+  p.drawing=false;p.drawT=0;const launch=box.bowReleasePoint(p,p.weapon,draw);
+  assert.ok(tip);assert.ok(Math.hypot(launch.x-tip[0],launch.y-tip[1])<1e-8,`${dir}/${r}/${draw}/${moving}`);assert.equal(launch.length,24);
+ }
+ box.abyssArt.bows.ready=false;assert.equal(box.bowReleasePoint(player(),{id:'lbow'},1),null);
+});
+test('bow recoil stays nonnegative across its complete weapon-specific duration',()=>{
+ const {box}=harness();for(const [id,duration]of [['qbow',.12],['lbow',.22],['sbow',.2]]){
+  const p=player(),W={id,isBow:true};
+  for(let i=0;i<=100;i++){p.recoilT=i/100*duration;const r=box.texturedWeaponPose(p,W).recoil;assert.ok(r>=0&&r<=1);}
+  p.recoilT=duration/2;assert.equal(box.texturedWeaponPose(p,W).recoil,1);
+ }
+});
+function arrowHarness(){
+ const {box,calls}=harness();const events=[];
+ Object.assign(box,{arrows:[],arrowPool:[],arrowRains:[],enemies:[],barrels:[],player:{},players:[],CONFIG:{wall:0,arenaW:1000,arenaH:1000},
+  ctxP:null,depth:1,clamp:(x,a,b)=>Math.max(a,Math.min(b,x)),dist:(x,y,a,b)=>Math.hypot(x-a,y-b),angTo:(x,y,a,b)=>Math.atan2(b-y,a-x),angDiff:(a,b)=>Math.atan2(Math.sin(b-a),Math.cos(b-a)),
+  pointInPillar:()=>false,shieldBlocks:()=>false,boonLv:()=>0,boonPow:()=>0,critRoll:()=>false,rand:(a,b)=>(a+b)/2,
+  addPart:p=>events.push(['part',p.x,p.y]),burst:(...v)=>events.push(['burst',...v]),hitEnemy:(...v)=>events.push(['hit',...v]),applyWeaponEnchants:()=>{},igniteBarrel:(...v)=>events.push(['barrel',...v])});
+ box.Math=Object.create(Math);box.Math.random=()=>0;
+ vm.runInContext(html.slice(html.indexOf('function getArrow()'),html.indexOf('function tryBolt(')),box);
+ return {box,calls,events,p:{x:100,y:100,r:13}};
+}
+test('flight and impact use frozen projection while collision stays on the ground plane',()=>{
+ const {box,events,p}=arrowHarness();const a=box.spawnArrow(p,'larrow',0,100,20,'#fff',4,{launch:{x:125,y:70,length:24}});
+ const old={vx:a.vx,vy:a.vy,dmg:a.dmg,t:a.t};p.x=800;p.y=500;p.aimDraw=Math.PI;
+ box.updateArrows(.1);assert.deepEqual([a.x,a.y,a.x+a.artX,a.y+a.artY],[129,100,135,70]);assert.equal(a.t,old.t-.1);
+ assert.equal(a.vx,old.vx);assert.equal(a.vy,old.vy);assert.equal(a.dmg,old.dmg);assert.deepEqual(events[0],['part',135,70]);
+ const e={hp:50,r:10,x:139,y:100};box.enemies=[e];events.length=0;box.updateArrows(.1);
+ const hit=events.find(e=>e[0]==='hit');assert.equal(hit[1],e);assert.deepEqual(hit.slice(8),[145,70]);
+ assert.deepEqual(events.find(e=>e[0]==='burst').slice(1,3),[145,70]);assert.equal(box.arrows.length,0);
+ const reused=box.spawnArrow(p,'qarrow',0,100,1,'#fff',3,{});assert.equal(reused,a);assert.deepEqual([reused.artX,reused.artY,reused.artLength],[0,0,0]);
+});
+test('piercing, ricochet and split arrows retain their contact projection',()=>{
+ for(const mode of ['pierce','rico','split']){
+  const {box,p}=arrowHarness();const first={x:129,y:100,r:10,hp:50},second={x:160,y:150,r:10,hp:50};box.enemies=[first,second];
+  const a=box.spawnArrow(p,mode==='rico'?'sarrow':'qarrow',0,100,20,'#fff',3,{[mode]:mode==='split'?2:1,launch:{x:125,y:70,length:20}});
+  box.updateArrows(.1);
+  if(mode==='split'){
+   assert.equal(box.arrows.length,2);for(const shard of box.arrows){assert.deepEqual([shard.x,shard.y,shard.x+shard.artX,shard.y+shard.artY],[129,100,135,70]);assert.equal(shard.artLength,12);assert.ok(shard.hitSet.includes(first));}
+  }else{assert.ok(box.arrows.includes(a));assert.deepEqual([a.artX,a.artY,a.artLength],[6,-30,20]);assert.equal(a[mode],0);if(mode==='rico')assert.ok(a.vy>0);}
+ }
+});
+test('homing, pillar impact and split at capacity preserve projection and pool integrity',()=>{
+ const {box,p,events}=arrowHarness();box.enemies=[{x:220,y:220,r:10,hp:50}];
+ const a=box.spawnArrow(p,'sarrow',0,100,20,'#fff',3,{homing:1,launch:{x:125,y:70,length:20}});box.updateArrows(.1);
+ assert.ok(a.vy>0);assert.deepEqual([a.artX,a.artY],[6,-30]);let probe;
+ box.pointInPillar=(x,y)=>{probe=[x,y];return true;};box.updateArrows(.1);
+ assert.deepEqual(events.find(e=>e[0]==='burst').slice(1,3),[probe[0]+6,probe[1]-30]);assert.equal(box.arrows.length,0);
+ box.pointInPillar=()=>false;const foe={x:129,y:100,r:10,hp:50};box.enemies=[foe];
+ const parent=box.spawnArrow(p,'qarrow',0,100,20,'#fff',3,{split:3,launch:{x:125,y:70,length:20}});
+ for(let i=0;i<71;i++)box.spawnArrow({x:700,y:700,r:13},'qarrow',0,1,1,'#fff',3,{});
+ box.updateArrows(.1);assert.equal(box.arrows.length,71);assert.ok(!box.arrows.includes(parent));assert.equal(new Set(box.arrows).size,71);assert.equal(new Set(box.arrowPool).size,box.arrowPool.length);
+});
+test('flying textured arrows keep the nocked shaft length independent of hit radius',()=>{
+ const {box,calls}=harness();for(const length of [20,24])for(const r of [2.4,3.4,4.4]){
+  calls.length=0;box.drawFlyingBowArrow({artLength:length,r,col:'#abc',crit:false});
+  const move=calls.find(c=>c[0]==='moveTo'),line=calls.find(c=>c[0]==='lineTo');assert.equal(line[1]-move[1],length);
+  assert.deepEqual(calls.filter(c=>c[0]==='moveTo')[1],['moveTo',0,0]);
+ }
+});
+
+test('normal bow fire dispatch passes a release anchor to every volley arrow',()=>{
+ for(const [id,aspect,count]of [['qbow','',1],['lbow','',1],['lbow','multishot',5],['sbow','',5],['sbow','homing',5]]){
+  const {box,p}=arrowHarness();box.rigArtEnabled=true;box.abyssArt.bows={ready:true,image:{}};
+  Object.assign(p,{aim:0,aimDraw:0,vx:0,vy:0,recoilT:.05,weapon:{id,aspect,isBow:true,col:'#abc',fireCD:.3}});
+  box.bowDamage=()=>20;box.audio={bowShot:()=>{}};box.shake=()=>{};box.ffx={spawnLight:()=>{}};
+  const origin=box.bowReleasePoint(p,p.weapon,1);box.fireBow(p,p.weapon,1);assert.equal(box.arrows.length,count);
+  for(const a of box.arrows){assert.ok(Math.hypot(a.x+a.artX-origin.x,a.y+a.artY-origin.y)<1e-8);assert.equal(a.artLength,id==='lbow'?24:20);}
+ }
+});
+test('shared damage resolution moves only direct contact cosmetics when an impact is supplied',()=>{
+ const source=html.slice(html.indexOf('function hitEnemy('),html.indexOf('/* ---------------- §K2 ELEMENTAL STATUS'));
+ const run=(projected,crit)=>{const events=[],box={ctxP:{},player:{},CONFIG:{},boonLv:()=>0,shieldActive:()=>false,applyWeaponEnchants:()=>{},
+  dnum:(...v)=>events.push(['number',...v]),audio:{hit:()=>{}},ffx:{spray:(...v)=>events.push(['spray',...v]),spawnLight:(...v)=>events.push(['light',...v]),ring:(...v)=>events.push(['ring',...v])},Math};
+  vm.createContext(box);vm.runInContext(source,box);const e={x:150,y:100,hp:100,r:10,type:'chaser',col:'#abc',kbx:0,kby:0,frozenT:0};
+  box.hitEnemy(e,10,20,0,crit,false,undefined,...(projected?[155,70]:[]));return {e,events};};
+ for(const crit of [false,true]){
+  const normal=run(false,crit),lifted=run(true,crit);assert.deepEqual(lifted.e,normal.e);
+  assert.deepEqual(lifted.events.find(e=>e[0]==='number'),normal.events.find(e=>e[0]==='number'));
+  for(const e of lifted.events.filter(e=>e[0]!=='number'))assert.deepEqual(e.slice(1,3),[155,70]);
+ }
+});
