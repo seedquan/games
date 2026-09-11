@@ -64,7 +64,7 @@ test('character passes put warnings below sorted bodies and labels above, withou
  const near={id:'near',x:0,y:30,r:10}, far={id:'far',x:0,y:10,r:10}, culled={id:'culled',x:999,y:0,r:10};
  const middle={id:'player',x:0,y:20,r:10,hp:1}, dead={id:'dead',x:0,y:0,r:10,hp:0};
  const enemies=[near,far,culled];const players=[middle,dead];
- const box={enemies,players,numPlayers:2,inView:x=>x!==999,
+ const box={enemies,players,pillars:[],texturedObstacleAsset:()=>null,numPlayers:2,inView:x=>x!==999,
  drawEnemy:(e,layer)=>events.push(`${layer}:${e.id}`),drawPlayerTrails:()=>events.push('trails'),
  drawOnePlayer:(p,showTag)=>{assert.equal(showTag,false);events.push(`body:${p.id}`);},
  drawPlayerTag:p=>events.push(`tag:${p.id}`)};
@@ -792,4 +792,50 @@ test('foot trajectory matches velocity through toe-off, recovery and touchdown',
    const p=step(i/1000);assert.ok(Math.abs(p.travel)<=1.081);assert.ok(p.lift>=0&&p.lift<=1);
   }
  }
+});
+
+test('cover atlas preserves unloaded, unknown and temporary ward fallbacks',()=>{
+ const {box,calls}=harness();box.players=[];
+ for(const kind of ['cargo','machinery','reactor','conduit','crystal','shard']) {
+  const p={kind,x:0,y:0,r:40};assert.equal(box.drawTexturedObstacle(p),false);
+ }
+ assert.equal(calls.length,0);box.abyssArt.coverProps={ready:true,image:{}};
+ for(const kind of ['cargo','machinery','reactor','conduit','crystal','shard']) {
+  const p={kind,x:10,y:20,r:40};calls.length=0;
+  assert.equal(box.drawTexturedObstacle(p),true);const draw=calls.find(c=>c[0]==='drawImage');
+  assert.ok(draw[2]>=0&&draw[2]+draw[4]<=768);assert.ok(draw[3]>=0&&draw[3]+draw[5]<=512);
+  assert.deepEqual([p.x,p.y,p.r,p.kind],[10,20,40,kind]);
+ }
+ for(const p of [{kind:'cargo',ttl:1},{kind:'cargo',ttl:0},{kind:'unknown'},{}])assert.equal(box.drawTexturedObstacle(p),false);
+});
+test('cover fades only for a living or downed player behind it, with time-based recovery',()=>{
+ const {box}=harness();box.abyssArt.coverProps={ready:true,image:{}};
+ box.characterGroundY=e=>e.y+e.r*.6;box.players=[];
+ const p={kind:'crystal',x:0,y:0,r:40};box.drawTexturedObstacle(p);assert.equal(p.artCoverAlpha,1);
+ const actor={x:0,y:-60,r:13,hp:100};box.players=[actor];box.timeNow=.1;box.drawTexturedObstacle(p);
+ assert.ok(p.artCoverAlpha>.42&&p.artCoverAlpha<.6);const low=p.artCoverAlpha;
+ actor.y=80;box.timeNow=.2;box.drawTexturedObstacle(p);assert.ok(p.artCoverAlpha>low&&p.artCoverAlpha<1);
+ const alpha=(hp,downed)=>{box.players=[{x:0,y:-60,r:13,hp,downed}];const prop={kind:'crystal',x:0,y:0,r:40};box.drawTexturedObstacle(prop);return prop.artCoverAlpha;};
+ assert.equal(alpha(0,false),1);assert.equal(alpha(0,true),.42);assert.equal(alpha(100,false),.42);
+ const atRate=dt=>{box.timeNow=0;box.players=[];const prop={kind:'crystal',x:0,y:0,r:40};box.drawTexturedObstacle(prop);box.players=[{x:0,y:-60,r:13,hp:100}];for(let t=dt;t<.16+1e-8;t+=dt){box.timeNow=t;box.drawTexturedObstacle(prop);}return prop.artCoverAlpha;};
+ assert.ok(Math.abs(atRate(.016)-atRate(.032))<1e-10);
+});
+test('cover bodies share actor depth ordering while warnings and status retain their passes',()=>{
+ const events=[],behind={id:'behind',x:0,y:10,r:10,hp:100},near={id:'near',x:0,y:40,r:10};
+ const wall={id:'wall',kind:'cargo',x:0,y:25,r:10},ward={id:'ward',kind:'cargo',ttl:1,x:0,y:0,r:10},culled={id:'culled',kind:'cargo',x:999,y:0,r:10};
+ const pillars=[wall,ward,culled],enemies=[near],players=[behind];
+ const box={pillars,enemies,players,numPlayers:1,inView:x=>x!==999,texturedObstacleAsset:p=>p.ttl===undefined,
+ drawTexturedObstacle:p=>events.push('cover:'+p.id),drawEnemy:(e,layer)=>events.push(layer+':'+e.id),drawOnePlayer:p=>events.push('body:'+p.id),drawPlayerTrails:()=>events.push('trails')};
+ vm.createContext(box);vm.runInContext(html.slice(html.indexOf('const characterDrawList ='),html.indexOf('function drawPlayerTrails()')),box);
+ box.drawCharacterLayers();assert.deepEqual(events,['telegraph:near','trails','body:behind','cover:wall','body:near','status:near']);
+ assert.deepEqual(pillars,[wall,ward,culled]);assert.deepEqual(enemies,[near]);assert.deepEqual(players,[behind]);
+ events.length=0;pillars.length=0;box.drawCharacterLayers();assert.ok(!events.some(x=>x.startsWith('cover:')));
+});
+test('ground pass paints one cover shadow and defers only decoded bodies',()=>{
+ const {box,calls}=harness();box.pillars=[{kind:'cargo',x:10,y:20,r:40}];box.spriteDetail=()=>false;box.inView=()=>true;
+ box.obstacleShadow=()=>calls.push(['shadow']);box.drawObstacleBody=()=>calls.push(['fallback']);
+ vm.runInContext(html.slice(html.indexOf('function drawPillars()'),html.indexOf('function drawDoors()')),box);
+ box.drawPillars();assert.deepEqual(calls.filter(c=>['shadow','fallback'].includes(c[0])),[['shadow'],['fallback']]);
+ calls.length=0;box.abyssArt.coverProps={ready:true,image:{}};box.drawPillars();
+ assert.equal(calls.filter(c=>c[0]==='shadow').length,1);assert.equal(calls.filter(c=>['drawImage','fallback'].includes(c[0])).length,0);
 });
