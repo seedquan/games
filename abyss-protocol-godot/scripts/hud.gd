@@ -304,6 +304,10 @@ func show_menu(kind: String) -> void:
 			card.border_width_top = 4
 			option.add_theme_stylebox_override("normal", card)
 			option.add_theme_stylebox_override("hover", style(Color("27383b"), accent, 20))
+			# Child labels retain their light colors while the card is held down.
+			var pressed_card := style(Color("203036"), accent, 20)
+			option.add_theme_stylebox_override("pressed", pressed_card)
+			option.add_theme_stylebox_override("hover_pressed", pressed_card)
 			choices.add_child(option)
 			var inset := margin(option, 22)
 			var card_content := VBoxContainer.new()

@@ -8,6 +8,8 @@ var checks := 0
 var game
 var pad_device := 0
 var temp_path := "user://test-settings-%d.cfg" % Time.get_ticks_usec()
+var menu_contrast_min := INF
+var menu_pressed_contrast_min := INF
 
 func _initialize() -> void:
 	run.call_deferred()
@@ -242,6 +244,133 @@ func controller_menus() -> void:
 	game.queue_free()
 	await frames(8)
 
+func menu_pointer(position: Vector2, held := false) -> void:
+	var event := InputEventMouseMotion.new()
+	event.position = position
+	event.global_position = position
+	event.relative = Vector2(8, 0)
+	event.button_mask = MOUSE_BUTTON_MASK_LEFT if held else 0
+	Input.parse_input_event(event)
+
+func menu_mouse(position: Vector2, pressed: bool) -> void:
+	var event := InputEventMouseButton.new()
+	event.position = position
+	event.global_position = position
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
+	event.pressed = pressed
+	Input.parse_input_event(event)
+
+func inspect_button_contrast(control: Button, expected: BaseButton.DrawMode, context: String) -> void:
+	var mode := control.get_draw_mode()
+	check(mode == expected, context + " reaches its real input-driven draw state")
+	var background_name := "normal"
+	var foreground_name := "font_focus_color" if control.has_focus() else "font_color"
+	match mode:
+		BaseButton.DRAW_HOVER:
+			background_name = "hover"
+			foreground_name = "font_hover_color"
+		BaseButton.DRAW_PRESSED:
+			background_name = "pressed"
+			foreground_name = "font_pressed_color"
+		BaseButton.DRAW_HOVER_PRESSED:
+			# Godot falls back to pressed when a Button has no hover_pressed style.
+			background_name = "hover_pressed" if control.has_theme_stylebox("hover_pressed") else "pressed"
+			foreground_name = "font_hover_pressed_color"
+	var background := control.get_theme_stylebox(background_name) as StyleBoxFlat
+	check(background != null and background.bg_color.a == 1.0, context + " has a known opaque text backing")
+	if background == null:
+		return
+	var colors: Array[Color] = []
+	if not control.text.is_empty():
+		colors.append(control.get_theme_color(foreground_name))
+	for caption in control.find_children("*", "Label", true, false):
+		if caption.is_visible_in_tree() and not caption.text.is_empty():
+			colors.append(caption.get_theme_color("font_color"))
+	check(not colors.is_empty(), context + " includes the displayed text")
+	var backing_luminance := background.bg_color.srgb_to_linear().get_luminance()
+	for foreground in colors:
+		var luminance := foreground.srgb_to_linear().get_luminance()
+		var ratio := (maxf(luminance, backing_luminance) + 0.05) / (minf(luminance, backing_luminance) + 0.05)
+		menu_contrast_min = minf(menu_contrast_min, ratio)
+		if mode == BaseButton.DRAW_PRESSED:
+			menu_pressed_contrast_min = minf(menu_pressed_contrast_min, ratio)
+		# This project's menu readability floor also applies to nested card labels.
+		check(ratio >= 4.5, "%s text contrast %.2f:1 stays at least 4.5:1" % [context, ratio])
+
+func menu_contrast() -> void:
+	var first_check := checks
+	var first_failure := failures.size()
+	game = load("res://scenes/main.tscn").instantiate()
+	game.persistence_enabled = false
+	game.auto_pause_enabled = false
+	game.narrative_enabled = false
+	root.add_child(game)
+	await frames()
+	root.size = Vector2i(1440, 900)
+	await frames()
+	# Keep the pointer away when exercising the keyboard/controller draw state.
+	var outside := Vector2(5, 5)
+	var title_buttons: Array[Node] = game.hud.menu_margin.find_children("*", "Button", true, false)
+	for index in range(2):
+		var control: Button = title_buttons[index]
+		var center := control.get_global_rect().get_center()
+		menu_pointer(outside)
+		await frames()
+		inspect_button_contrast(control, BaseButton.DRAW_NORMAL, "Title button %d normal" % index)
+		menu_pointer(center)
+		await frames()
+		inspect_button_contrast(control, BaseButton.DRAW_HOVER, "Title button %d hover" % index)
+		menu_mouse(center, true)
+		await frames()
+		inspect_button_contrast(control, BaseButton.DRAW_PRESSED, "Title button %d mouse hold" % index)
+		# Release outside to cancel, retaining the actual title menu.
+		menu_pointer(outside, true)
+		menu_mouse(outside, false)
+		await frames()
+	check(game.state == "title", "Cancelled pointer holds do not activate title actions")
+	game.start_run(441)
+	await frames()
+	for enhanced in [false, true]:
+		game.set_setting("high_contrast", enhanced)
+		for index in range(game.PROGRESSION.BOONS.size()):
+			var boon: Dictionary = game.PROGRESSION.BOONS[index]
+			game.boon_choices.assign([boon, game.PROGRESSION.BOONS[(index + 1) % game.PROGRESSION.BOONS.size()], game.PROGRESSION.BOONS[(index + 2) % game.PROGRESSION.BOONS.size()]])
+			game.show_menu("reward")
+			menu_pointer(outside)
+			await frames()
+			var control: Button = game.hud.menu_margin.find_children("*", "Button", true, false)[0]
+			var context := "Blessing %s contrast=%s" % [boon.stat, enhanced]
+			inspect_button_contrast(control, BaseButton.DRAW_NORMAL, context + " normal/focus")
+			var center := control.get_global_rect().get_center()
+			menu_pointer(center)
+			await frames()
+			inspect_button_contrast(control, BaseButton.DRAW_HOVER, context + " hover")
+			menu_mouse(center, true)
+			await frames()
+			inspect_button_contrast(control, BaseButton.DRAW_PRESSED, context + " mouse hold")
+			if index == 0 and not enhanced:
+				await snapshot("blessing-mouse-pressed")
+			menu_pointer(outside, true)
+			menu_mouse(outside, false)
+			await frames()
+			var event := InputEventJoypadButton.new()
+			event.device = 3
+			event.button_index = JOY_BUTTON_A
+			event.pressed = true
+			Input.parse_input_event(event)
+			await frames()
+			inspect_button_contrast(control, BaseButton.DRAW_PRESSED, context + " controller hold")
+			if index == 0 and not enhanced:
+				await snapshot("blessing-controller-pressed")
+			event.pressed = false
+			Input.parse_input_event(event)
+			await frames()
+			check(game.state == "route", context + " commits only after controller release")
+	game.queue_free()
+	await frames(8)
+	print("ABYSS MENU CONTRAST: %d checks, %d failures; minimum %.2f:1, pressed %.2f:1" % [checks - first_check, failures.size() - first_failure, menu_contrast_min, menu_pressed_contrast_min])
+
 func preferences() -> void:
 	var settings = SETTINGS.new()
 	settings.save_path = temp_path
@@ -460,6 +589,7 @@ func run() -> void:
 	await frames()
 	game.queue_free()
 	await frames(8)
+	await menu_contrast()
 	await controller_devices()
 	await controller_menus()
 	print("ABYSS PRODUCTION: %d checks, %d failures" % [checks, failures.size()])
