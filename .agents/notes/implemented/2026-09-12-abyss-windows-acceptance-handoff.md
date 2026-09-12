@@ -31,3 +31,13 @@ Windows 0.10.1 已交付 `smb://Rog-xx/Games`，但没有 Windows 原生运行�
 0.11.0 起使用 `tools/prepare_windows_acceptance.py` 从明确指定的本地构建 JSON 和 ZIP 生成验收入口。生成前核对版本、归档大小与 SHA-256、精确文件集合、包内校验清单及每个文件的实际哈希；再把 EXE、PCK、验证脚本哈希写入模板。未替换的模板不能直接运行，已有交付目录不会被覆盖。输出固定为 Windows PowerShell 兼容的 UTF-8 BOM 与 CRLF，并附验收工具自身清单。生成成功只说明工具与指定发行包绑定，不代表 Windows 已运行。
 
 Windows 导出器的中文源码、说明、日志与报告显式使用 UTF-8，避免 Python 3.11 在 cp1252/cp936 默认代码页下解码失败或生成不能被验收工具读取的报告。PowerShell 执行策略仅通过当前进程参数设置，不修改用户或系统策略。18 项 Python/PowerShell 工具测试通过，覆盖既有权限/回传边界、包篡改、版本错配、关键文件逐项哈希、旧目录保护、中文非 UTF-8 默认环境与完整生成链路。
+
+## Revision 4: recover completed reports without rerunning the game
+
+用户反馈 0.11.0 的 Windows 测试通过、回传有权限问题。共享盘尚无本次完整报告，完整错误路径仍缺失，因此未认定具体 Windows ACL 根因。代码与真实文件系统回归确认了恢复缺口：原入口只能重新运行游戏；上次残留的同名回传目录会使补传再次失败。
+
+增加独立“仅回传验收报告.cmd”入口及 `-ReportOnly`。它只搜索当前用户已标记的本地验收工作区，选择当前 EXE/PCK 哈希匹配、三个阶段通过的最新原生窗口报告，并显示报告时间、路径和摘要；也支持显式 `-RunDirectory` / `-DestinationRoot`。缺少匹配报告时直接停止，绝不自动重跑游戏。Wine、其他版本、缺失或失败阶段的报告不作为原生通过结果回传。
+
+白名单 diagnostics 先生成单个本地 ZIP，再尝试共享盘复制；失败时显示操作、完整目标路径及错误，并在 Windows 资源管理器选中 ZIP。ZIP 不包含 profile/settings。压缩失败仍保留 diagnostics 并尝试目录回传。已有完整或部分结果保持不变，重试使用 `abyss-windows-…-retry-<GUID>` 新目录，逐文件回读校验，成功凭据最后复制。没有更改系统或共享盘权限，不需要管理员运行。
+
+工具测试覆盖只读共享目录、本地 ZIP 精确白名单及内容、完整/半截旧结果保护、旧版/Wine 报告排除、只恢复报告、未标记或链接目录排除，以及版本绑定生成。仅交付外层验收附件；原游戏 ZIP、EXE/PCK/验证器保留。Mac 上的 PowerShell 文件系统测试不等于目标 Windows 权限已修复，待目标机补传确认。

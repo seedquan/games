@@ -1,5 +1,11 @@
 # Source template only. Generate a version-bound handoff with prepare_windows_acceptance.py.
 # Deploy the generated script beside the extracted game folder, outside its verified payload.
+param(
+    [switch]$ReportOnly,
+    [string]$RunDirectory = '',
+    [string]$DestinationRoot = ''
+)
+
 $ErrorActionPreference = 'Stop'
 $AcceptanceVersion = '__ABYSS_VERSION__'
 if ($AcceptanceVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
@@ -65,33 +71,109 @@ function Publish-AcceptanceEvidence([string]$RunDirectory, [string]$DestinationR
         scope = 'Automated Windows release verification. Physical controllers and human playtesting are not certified by this report.'
     }
     $receipt | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $local 'handoff.json') -Encoding UTF8
-    $destination = Join-Path $DestinationRoot $runName
+    # Package only the whitelist copy, never the full test fixture or player saves.
+    $archive = $local + '.zip'
+    $archiveError = ''
     try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::CreateFromDirectory($local, $archive)
+    } catch {
+        $archiveError = $_.Exception.Message
+        $archive = ''
+    }
+    $destination = Join-Path $DestinationRoot $runName
+    $operation = '创建回传目录'
+    $target = $destination
+    try {
+        # Preserve both completed results and interrupted uploads. No overwrite/rename.
+        if (Test-Path -LiteralPath $destination) {
+            $destination = Join-Path $DestinationRoot ($runName + '-retry-' + [Guid]::NewGuid().ToString('N'))
+        }
+        $target = $destination
         New-Item -ItemType Directory -Path $destination | Out-Null
-        New-Item -ItemType Directory -Path (Join-Path $destination 'storage with spaces') | Out-Null
+        $target = Join-Path $destination 'storage with spaces'
+        New-Item -ItemType Directory -Path $target | Out-Null
         # The receipt is always copied last; an interrupted upload is never accepted.
         foreach ($relative in ($evidence + @('handoff.json'))) {
             $source = Join-Path $local $relative
             $target = Join-Path $destination $relative
+            $operation = '复制回传文件'
             Copy-Item -LiteralPath $source -Destination $target
+            $operation = '回读校验文件'
             if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash) {
                 throw "Evidence upload failed integrity verification: $relative"
             }
         }
-        return @{ published = $true; destination = $destination; local_directory = $local; error = '' }
+        return @{ published = $true; destination = $destination; local_directory = $local; local_archive = $archive; archive_error = $archiveError; error = '' }
     } catch {
-        return @{ published = $false; destination = $destination; local_directory = $local; error = $_.Exception.Message }
+        return @{ published = $false; destination = $destination; local_directory = $local; local_archive = $archive; archive_error = $archiveError; error = "$operation ($target): $($_.Exception.Message)" }
     }
+}
+
+function Read-AcceptanceReport([string]$RunDirectory, [hashtable]$Expected) {
+    $directory = Get-Item -LiteralPath $RunDirectory
+    $reportPath = Join-Path $RunDirectory 'report.json'
+    $item = Get-Item -LiteralPath $reportPath
+    if (-not $directory.PSIsContainer -or $item.PSIsContainer -or
+        (($directory.Attributes -bor $item.Attributes) -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Unexpected report link or file type.'
+    }
+    $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($report.runtime -ne 'Windows native' -or $report.rendered -ne $true -or
+        $report.executable_sha256 -ne $Expected['AbyssProtocol.exe'] -or
+        $report.content_sha256 -ne $Expected['AbyssProtocol.pck'] -or $report.checks.Count -ne 3) {
+        throw 'The report does not verify this rendered Windows release.'
+    }
+    foreach ($stage in @('campaign', 'write', 'read')) {
+        $matching = @($report.checks | Where-Object { $_.stage -eq $stage })
+        if ($matching.Count -ne 1 -or $matching[0].exit_code -ne 0 -or $matching[0].summary -notmatch ': \d+ checks, 0 failures$') {
+            throw "Incomplete verification stage: $stage"
+        }
+    }
+    return $report
+}
+
+function Restore-AcceptanceEvidence([string[]]$Candidates, [hashtable]$Expected, [string]$DestinationRoot, [string]$RunDirectory = '') {
+    if (-not $RunDirectory) {
+        $reports = @()
+        # Search only our marked local workspaces, with two bounded directory levels.
+        foreach ($candidate in $Candidates) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            foreach ($workspace in (Get-ChildItem -LiteralPath $candidate -Directory -Filter 'abyss-acceptance-*' -ErrorAction SilentlyContinue)) {
+                if ($workspace.Name -notmatch '^abyss-acceptance-[0-9a-f]{32}$' -or
+                    ($workspace.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+                $marker = Get-Item -LiteralPath (Join-Path $workspace.FullName '.abyss-acceptance-workspace') -Force -ErrorAction SilentlyContinue
+                if (-not $marker -or $marker.PSIsContainer -or ($marker.Attributes -band [IO.FileAttributes]::ReparsePoint)) { continue }
+                foreach ($run in (Get-ChildItem -LiteralPath $workspace.FullName -Directory -Filter 'abyss-windows-*' -ErrorAction SilentlyContinue)) {
+                    if ($run.Name -notmatch '^abyss-windows-[0-9a-f]{32}$') { continue }
+                    try {
+                        [void](Read-AcceptanceReport -RunDirectory $run.FullName -Expected $Expected)
+                        $reports += Get-Item -LiteralPath (Join-Path $run.FullName 'report.json')
+                    } catch { continue }
+                }
+            }
+        }
+        $latest = $reports | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+        if (-not $latest) { throw '未找到本版已通过的 Windows 本地报告。请用 -RunDirectory 指定之前窗口显示的测试日志目录；不会自动重跑游戏。' }
+        $RunDirectory = $latest.DirectoryName
+    }
+    $report = Read-AcceptanceReport -RunDirectory $RunDirectory -Expected $Expected
+    Write-Host ('使用已有测试报告：' + (Join-Path $RunDirectory 'report.json'))
+    Write-Host ('报告时间：' + (Get-Item -LiteralPath (Join-Path $RunDirectory 'report.json')).LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))
+    foreach ($check in $report.checks) { Write-Host $check.summary }
+    $result = Publish-AcceptanceEvidence -RunDirectory $RunDirectory -DestinationRoot $DestinationRoot
+    $result.run_directory = $RunDirectory
+    return $result
 }
 
 $phase = '启动检查'
 $temporary = $null
-$runDirectory = $null
 try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
         throw 'This handoff must be run on the Windows test computer.'
     }
-    Write-Host "Windows 验收工具 · $AcceptanceVersion / 修订 3"
+    if ($RunDirectory -and -not $ReportOnly) { throw '-RunDirectory requires -ReportOnly.' }
+    Write-Host "Windows 验收工具 · $AcceptanceVersion / 修订 4"
     $phase = '核对发行文件'
     $package = Join-Path $PSScriptRoot ('深渊协议 ' + $AcceptanceVersion)
     $expected = @{
@@ -106,54 +188,57 @@ try {
         }
     }
 
-    # Save transactions stay on the Windows local disk. The SMB share may deny renames.
-    $phase = '创建本地测试目录'
     $localData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
     $candidates = @([IO.Path]::GetTempPath())
     if ($localData) { $candidates += (Join-Path $localData 'AbyssProtocol-QA') }
-    $temporary = New-AcceptanceWorkspace -Candidates $candidates
-    Write-Host "本地验收目录：$temporary"
-    $lines = New-Object 'System.Collections.Generic.List[string]'
-    $verifier = Join-Path $package 'Verify-Windows.ps1'
-    $phase = '运行游戏自检'
-    Write-Host "正在验证 ${AcceptanceVersion}：单人、双人、窗口渲染及跨进程续档。正式玩家存档不会被读写。"
-    & $verifier -ExecutablePath (Join-Path $package 'AbyssProtocol.exe') -OutputDirectory $temporary -Rendered |
-        ForEach-Object { $lines.Add([string]$_); Write-Host $_ }
+    if (-not $DestinationRoot) { $DestinationRoot = Join-Path $PSScriptRoot '验收记录' }
+    if ($ReportOnly) {
+        $phase = '整理已有验收报告'
+        Write-Host '仅整理并回传已有报告，不启动游戏、不重复测试。'
+        $publication = Restore-AcceptanceEvidence -Candidates $candidates -Expected $expected -DestinationRoot $DestinationRoot -RunDirectory $RunDirectory
+        $runDirectory = $publication.run_directory
+    } else {
+        # Save transactions stay on the Windows local disk. The SMB share may deny renames.
+        $phase = '创建本地测试目录'
+        $temporary = New-AcceptanceWorkspace -Candidates $candidates
+        Write-Host "本地验收目录：$temporary"
+        $lines = New-Object 'System.Collections.Generic.List[string]'
+        $verifier = Join-Path $package 'Verify-Windows.ps1'
+        $phase = '运行游戏自检'
+        Write-Host "正在验证 ${AcceptanceVersion}：单人、双人、窗口渲染及跨进程续档。正式玩家存档不会被读写。"
+        & $verifier -ExecutablePath (Join-Path $package 'AbyssProtocol.exe') -OutputDirectory $temporary -Rendered |
+            ForEach-Object { $lines.Add([string]$_); Write-Host $_ }
 
-    $phase = '核对自检结果'
-    $markers = @($lines | Where-Object { $_.StartsWith('ABYSS WINDOWS REPORT: ') })
-    if ($markers.Count -ne 1) { throw 'The verifier did not return exactly one completed report.' }
-    $reportPath = [IO.Path]::GetFullPath($markers[0].Substring('ABYSS WINDOWS REPORT: '.Length))
-    $runDirectory = Split-Path -Parent $reportPath
-    $runName = Split-Path -Leaf $runDirectory
-    if ($runName -notmatch '^abyss-windows-[0-9a-f]{32}$' -or
-        -not [string]::Equals([IO.Path]::GetFullPath((Split-Path -Parent $runDirectory)).TrimEnd('\'), $temporary.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'The returned report is outside the local verification fixture.'
-    }
-    $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($report.runtime -ne 'Windows native' -or -not $report.rendered -or
-        $report.executable_sha256 -ne $expected['AbyssProtocol.exe'] -or
-        $report.content_sha256 -ne $expected['AbyssProtocol.pck'] -or $report.checks.Count -ne 3) {
-        throw 'The report does not verify this rendered Windows release.'
-    }
-    foreach ($stage in @('campaign', 'write', 'read')) {
-        $matching = @($report.checks | Where-Object { $_.stage -eq $stage })
-        if ($matching.Count -ne 1 -or $matching[0].exit_code -ne 0 -or $matching[0].summary -notmatch ': \d+ checks, 0 failures$') {
-            throw "Incomplete verification stage: $stage"
+        $phase = '核对自检结果'
+        $markers = @($lines | Where-Object { $_.StartsWith('ABYSS WINDOWS REPORT: ') })
+        if ($markers.Count -ne 1) { throw 'The verifier did not return exactly one completed report.' }
+        $reportPath = [IO.Path]::GetFullPath($markers[0].Substring('ABYSS WINDOWS REPORT: '.Length))
+        $runDirectory = Split-Path -Parent $reportPath
+        $runName = Split-Path -Leaf $runDirectory
+        if ($runName -notmatch '^abyss-windows-[0-9a-f]{32}$' -or
+            -not [string]::Equals([IO.Path]::GetFullPath((Split-Path -Parent $runDirectory)).TrimEnd('\'), $temporary.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'The returned report is outside the local verification fixture.'
         }
-    }
+        [void](Read-AcceptanceReport -RunDirectory $runDirectory -Expected $expected)
 
-    Write-Host '游戏自动测试已通过。'
-    $phase = '保存和回传报告'
-    $publication = Publish-AcceptanceEvidence -RunDirectory $runDirectory -DestinationRoot (Join-Path $PSScriptRoot '验收记录')
+        Write-Host '游戏自动测试已通过。'
+        $phase = '保存和回传报告'
+        $publication = Publish-AcceptanceEvidence -RunDirectory $runDirectory -DestinationRoot $DestinationRoot
+    }
     Write-Host ('本地报告和截图：' + $publication.local_directory)
+    if ($publication.local_archive) { Write-Host ('可直接转交的报告 ZIP：' + $publication.local_archive) }
+    elseif ($publication.archive_error) { Write-Host ('ZIP 未生成，仍可转交上面的 diagnostics 目录：' + $publication.archive_error) }
     if ($publication.published) {
         Write-Host ('报告和截图已回传：' + $publication.destination)
     } else {
         Write-Host '游戏自动测试通过，但报告回传失败；本地结果已保留。' -ForegroundColor Yellow
         Write-Host ('回传目标：' + $publication.destination)
         Write-Host ('回传错误：' + $publication.error)
-        Write-Host '可将上面的本地报告目录复制到有写入权限的位置，再提供给开发者。无需以管理员身份重跑游戏。'
+        Write-Host '请转交上面的报告 ZIP 或 diagnostics 目录。可双击“仅回传验收报告.cmd”补传，不需要管理员权限或重跑游戏。'
+        if ($publication.local_archive) {
+            try { Start-Process -FilePath 'explorer.exe' -ArgumentList ('/select,"' + $publication.local_archive + '"') | Out-Null }
+            catch { Write-Host '未能打开资源管理器，请按上面的路径找到报告 ZIP。' }
+        }
     }
     Write-Host '接下来仍需用两只实体手柄试玩，并检查 2560×1440 全屏、声音、断线恢复及操作手感。'
     if ($publication.published) { exit 0 }
