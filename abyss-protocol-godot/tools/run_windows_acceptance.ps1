@@ -3,7 +3,7 @@
 param(
     [switch]$ReportOnly,
     [string]$RunDirectory = '',
-    [string]$DestinationRoot = ''
+    [string]$DestinationRoot = '__ABYSS_REPORT_ROOT__'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -81,28 +81,27 @@ function Publish-AcceptanceEvidence([string]$RunDirectory, [string]$DestinationR
         $archiveError = $_.Exception.Message
         $archive = ''
     }
-    $destination = Join-Path $DestinationRoot $runName
-    $operation = '创建回传目录'
+    $archiveName = "Windows验收报告-$AcceptanceVersion-$runName"
+    $destination = Join-Path $DestinationRoot ($archiveName + '.zip')
+    $operation = '检查报告目标目录'
     $target = $destination
     try {
-        # Preserve both completed results and interrupted uploads. No overwrite/rename.
+        if (-not $archive) { throw ('无法生成报告 ZIP：' + $archiveError) }
+        if (-not (Test-Path -LiteralPath $DestinationRoot -PathType Container)) {
+            throw '报告目标目录不存在。请指定已有的可写目录。'
+        }
+        # A single file goes directly into the selected directory. Do not require
+        # create-subdirectory or rename permissions on the receiving share.
+        # Preserve both completed archives and interrupted uploads.
         if (Test-Path -LiteralPath $destination) {
-            $destination = Join-Path $DestinationRoot ($runName + '-retry-' + [Guid]::NewGuid().ToString('N'))
+            $destination = Join-Path $DestinationRoot ($archiveName + '-retry-' + [Guid]::NewGuid().ToString('N') + '.zip')
         }
         $target = $destination
-        New-Item -ItemType Directory -Path $destination | Out-Null
-        $target = Join-Path $destination 'storage with spaces'
-        New-Item -ItemType Directory -Path $target | Out-Null
-        # The receipt is always copied last; an interrupted upload is never accepted.
-        foreach ($relative in ($evidence + @('handoff.json'))) {
-            $source = Join-Path $local $relative
-            $target = Join-Path $destination $relative
-            $operation = '复制回传文件'
-            Copy-Item -LiteralPath $source -Destination $target
-            $operation = '回读校验文件'
-            if ((Get-FileHash -LiteralPath $source).Hash -ne (Get-FileHash -LiteralPath $target).Hash) {
-                throw "Evidence upload failed integrity verification: $relative"
-            }
+        $operation = '复制报告 ZIP'
+        [IO.File]::Copy($archive, $destination, $false)
+        $operation = '回读校验报告 ZIP'
+        if ((Get-FileHash -LiteralPath $archive).Hash -ne (Get-FileHash -LiteralPath $destination).Hash) {
+            throw 'Report ZIP upload failed integrity verification.'
         }
         return @{ published = $true; destination = $destination; local_directory = $local; local_archive = $archive; archive_error = $archiveError; error = '' }
     } catch {
@@ -173,7 +172,7 @@ try {
         throw 'This handoff must be run on the Windows test computer.'
     }
     if ($RunDirectory -and -not $ReportOnly) { throw '-RunDirectory requires -ReportOnly.' }
-    Write-Host "Windows 验收工具 · $AcceptanceVersion / 修订 4"
+    Write-Host "Windows 验收工具 · $AcceptanceVersion / 修订 5"
     $phase = '核对发行文件'
     $package = Join-Path $PSScriptRoot ('深渊协议 ' + $AcceptanceVersion)
     $expected = @{
@@ -191,7 +190,8 @@ try {
     $localData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
     $candidates = @([IO.Path]::GetTempPath())
     if ($localData) { $candidates += (Join-Path $localData 'AbyssProtocol-QA') }
-    if (-not $DestinationRoot) { $DestinationRoot = Join-Path $PSScriptRoot '验收记录' }
+    if (-not $DestinationRoot) { $DestinationRoot = $PSScriptRoot }
+    Write-Host ('报告 ZIP 直接保存到：' + $DestinationRoot)
     if ($ReportOnly) {
         $phase = '整理已有验收报告'
         Write-Host '仅整理并回传已有报告，不启动游戏、不重复测试。'

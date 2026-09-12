@@ -8,7 +8,7 @@ never overwritten; --output may select a fresh directory for another revision.
 import argparse
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import stat
 import sys
@@ -89,11 +89,16 @@ def windows_text(value):
     return value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r\n").encode("utf-8-sig")
 
 
-def generate(report_path, archive_path=None, output=None):
+def generate(report_path, archive_path=None, output=None, destination_root=""):
+    if destination_root and (not PureWindowsPath(destination_root).is_absolute()
+                             or re.search(r"[\x00-\x1f]", destination_root)):
+        raise ValueError("Report destination must be an absolute Windows directory")
     report_path = Path(report_path)
     version, archive_hash, files = verify_build(report_path, archive_path)
     template = (ROOT / "tools/run_windows_acceptance.ps1").read_text(encoding="utf-8-sig")
-    replacements = {VERSION_TOKEN: version, **{token: files[name] for name, token in TOKENS.items()}}
+    replacements = {VERSION_TOKEN: version,
+                    "__ABYSS_REPORT_ROOT__": destination_root.replace("'", "''"),
+                    **{token: files[name] for name, token in TOKENS.items()}}
     for token, value in replacements.items():
         if template.count(token) != 1:
             raise ValueError("Acceptance template must contain exactly one " + token)
@@ -106,6 +111,7 @@ def generate(report_path, archive_path=None, output=None):
     if VERSION_TOKEN not in instructions:
         raise ValueError("Acceptance instructions are missing their version placeholder")
     instructions = instructions.replace(VERSION_TOKEN, version)
+    instructions = instructions.replace("__ABYSS_REPORT_LOCATION__", destination_root or "验收入口所在目录")
     if "__ABYSS_" in template or "__ABYSS_" in instructions:
         raise ValueError("An acceptance template placeholder was not resolved")
     outputs = {
@@ -115,7 +121,8 @@ def generate(report_path, archive_path=None, output=None):
         "Windows验收说明.txt": windows_text(instructions),
     }
     manifest = {
-        "schema": 1, "version": version, "tool_revision": 4,
+        "schema": 1, "version": version, "tool_revision": 5,
+        "report_destination": destination_root or "script directory",
         "archive_sha256": archive_hash,
         "release_files": {name: files[name] for name in TOKENS},
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in outputs.items()},
@@ -141,8 +148,9 @@ def main():
     parser.add_argument("--report", type=Path, required=True, help="Explicit JSON build report from export_windows.py")
     parser.add_argument("--archive", type=Path, help="Matching ZIP; defaults to the report's sibling archive")
     parser.add_argument("--output", type=Path, help="Fresh handoff directory; defaults to builds/acceptance-<version>")
+    parser.add_argument("--destination-root", default="", help="Existing Windows directory receiving report ZIPs directly; defaults to the script directory")
     args = parser.parse_args()
-    print("Prepared verified acceptance handoff: " + str(generate(args.report, args.archive, args.output)))
+    print("Prepared verified acceptance handoff: " + str(generate(args.report, args.archive, args.output, args.destination_root)))
     return 0
 
 

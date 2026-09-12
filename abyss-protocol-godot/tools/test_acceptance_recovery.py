@@ -76,6 +76,7 @@ $expected = @{ 'AbyssProtocol.exe' = ('a' * 64); 'AbyssProtocol.pck' = ('b' * 64
         # Recovery runs through its real public function; a game cannot be invoked.
         self.run_ps(r'''
 function Start-Process { throw 'Report recovery must never launch a game.' }
+[void][IO.Directory]::CreateDirectory((Join-Path $root 'share'))
 $result = Restore-AcceptanceEvidence -Candidates @($root) -Expected $expected -DestinationRoot (Join-Path $root 'share')
 if (-not $result.published) { throw $result.error }
 if ((Split-Path -Leaf $result.run_directory) -ne 'abyss-windows-00000000000000000000000000000002') { throw 'Wrong report selected.' }

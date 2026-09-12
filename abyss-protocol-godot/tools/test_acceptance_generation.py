@@ -81,11 +81,23 @@ class AcceptanceGenerationTests(unittest.TestCase):
         self.assertIn('-ReportOnly', recovery)
         manifest = json.loads((self.output / "acceptance-manifest.json").read_text())
         self.assertEqual(manifest["version"], self.version)
-        self.assertEqual(manifest["tool_revision"], 4)
+        self.assertEqual(manifest["tool_revision"], 5)
         self.assertEqual(manifest["archive_sha256"], self.report["sha256"])
         self.assertEqual(manifest["release_files"], {name: self.files[name] for name in prepare.TOKENS})
         for name, expected in manifest["files"].items():
             self.assertEqual(prepare.digest(self.output / name), expected)
+
+    def test_destination_is_bound_and_powershell_quotes_are_literal(self):
+        target = r"\\test-server\Games\owner's reports"
+        prepare.generate(self.report_path, output=self.output, destination_root=target)
+        script = (self.output / "Run-Windows-Acceptance.ps1").read_text(encoding="utf-8-sig")
+        self.assertIn("[string]$DestinationRoot = '" + target.replace("'", "''") + "'", script)
+        manifest = json.loads((self.output / "acceptance-manifest.json").read_text())
+        self.assertEqual(manifest["report_destination"], target)
+        self.assertIn(target, (self.output / "Windows验收说明.txt").read_text(encoding="utf-8-sig"))
+        for invalid in ("relative", "C:relative", "C:\\Games\nInjected"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                prepare.generate(self.report_path, output=self.root / "invalid", destination_root=invalid)
 
     def test_default_output_is_a_separate_versioned_build_directory(self):
         fixture_project = self.root / "project"

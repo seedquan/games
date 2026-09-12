@@ -1,4 +1,5 @@
 """Exercise acceptance filesystem failures without running a game or touching saves."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ class AcceptanceIOTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.denied = self.root / "denied"
         self.denied.mkdir()
+        (self.root / 'share').mkdir()
         # Real filesystem denial, rather than a mocked PowerShell exception.
         self.denied.chmod(0o500)
 
@@ -36,6 +38,7 @@ if ($errors.Count) { throw ($errors | Out-String) }
 foreach ($function in $ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]}, $false)) {
     . ([scriptblock]::Create($function.Extent.Text))
 }
+$AcceptanceVersion = '0.11.1'
 $root = $env:ABYSS_IO_ROOT
 $denied = Join-Path $root 'denied'
 ''' + body, encoding="utf-8")
@@ -102,6 +105,8 @@ if (-not $chosen.StartsWith($fallback) -or -not (Test-Path -LiteralPath $chosen 
             for relative in expected - {"handoff.json"}:
                 self.assertEqual(archive.read(relative), (run / relative).read_bytes())
             self.assertEqual(archive.read("handoff.json"), (Path(publication["local_directory"]) / "handoff.json").read_bytes())
+            receipt = json.loads(archive.read("handoff.json").decode("utf-8-sig"))
+            self.assertEqual(receipt["report_sha256"], hashlib.sha256(archive.read("report.json")).hexdigest())
 
     @unittest.skipIf(os.name == "nt", "This regression uses POSIX directory permissions")
     def test_denied_share_preserves_local_evidence_without_failing_test_result(self):
@@ -129,17 +134,19 @@ $result | ConvertTo-Json -Compress
 $runDirectory = Join-Path $root 'abyss-windows-0123456789abcdef0123456789abcdef'
 $result = Publish-AcceptanceEvidence -RunDirectory $runDirectory -DestinationRoot (Join-Path $root 'share')
 if (-not $result.published) { throw $result.error }
-$receipt = Get-Content -LiteralPath (Join-Path $result.destination 'handoff.json') -Raw | ConvertFrom-Json
-$hash = (Get-FileHash -LiteralPath (Join-Path $result.destination 'report.json')).Hash.ToLowerInvariant()
-if ($receipt.report_sha256 -ne $hash) { throw 'Receipt is not bound to copied report.' }
-if (Test-Path -LiteralPath (Join-Path $result.destination 'storage with spaces/profile.cfg')) { throw 'Player fixture copied.' }
-if (Test-Path -LiteralPath (Join-Path $result.destination 'storage with spaces/settings.cfg')) { throw 'Player settings copied.' }
+if (-not (Test-Path -LiteralPath $result.destination -PathType Leaf)) { throw 'Report must be a file directly in the target directory.' }
+if ((Get-FileHash -LiteralPath $result.destination).Hash -ne (Get-FileHash -LiteralPath $result.local_archive).Hash) { throw 'Archive copy differs.' }
 $result | ConvertTo-Json -Compress
 ''')
-        self.assert_local_archive(json.loads(output), run)
+        publication = json.loads(output)
+        self.assert_local_archive(publication, run)
+        target = Path(publication["destination"])
+        self.assertEqual(target.parent, self.root / "share")
+        self.assertEqual(list(target.parent.iterdir()), [target])
+        self.assertEqual(target.read_bytes(), Path(publication["local_archive"]).read_bytes())
         self.assert_original_files_unchanged(originals)
 
-    def test_unavailable_zip_dependency_keeps_diagnostics_and_publishes_files(self):
+    def test_unavailable_zip_dependency_preserves_local_diagnostics_without_creating_target_directories(self):
         run = self.evidence()
         originals = self.snapshot_files(run)
         output = self.run_ps(r'''
@@ -148,7 +155,7 @@ $result | ConvertTo-Json -Compress
 function Add-Type { throw 'Synthetic compression dependency unavailable' }
 $runDirectory = Join-Path $root 'abyss-windows-0123456789abcdef0123456789abcdef'
 $result = Publish-AcceptanceEvidence -RunDirectory $runDirectory -DestinationRoot (Join-Path $root 'share')
-if (-not $result.published) { throw ('ZIP failure must not prevent file publication: ' + $result.error) }
+if ($result.published -or -not $result.error) { throw 'ZIP failure must not claim publication.' }
 if ($result.local_archive -or -not $result.archive_error.Contains('Synthetic compression dependency unavailable')) {
     throw 'ZIP dependency failure must be reported separately from publication.'
 }
@@ -156,17 +163,15 @@ $result | ConvertTo-Json -Compress
 ''')
         publication = json.loads(output)
         local = Path(publication["local_directory"])
-        remote = Path(publication["destination"])
+        self.assertFalse(Path(publication["destination"]).exists())
+        self.assertEqual(list((self.root / "share").iterdir()), [])
         self.assertTrue((local / "handoff.json").is_file())
-        self.assertEqual((local / "handoff.json").read_bytes(), (remote / "handoff.json").read_bytes())
         for path, content in originals.items():
             relative = path.relative_to(run)
             if path.name in ("profile.cfg", "settings.cfg"):
                 self.assertFalse((local / relative).exists())
-                self.assertFalse((remote / relative).exists())
             else:
                 self.assertEqual((local / relative).read_bytes(), content)
-                self.assertEqual((remote / relative).read_bytes(), content)
         self.assert_original_files_unchanged(originals)
 
     @unittest.skipIf(os.name == "nt", "This regression uses POSIX directory permissions")
@@ -196,12 +201,13 @@ if (Get-ChildItem -LiteralPath $root -Recurse -Filter 'handoff.json') { throw 'R
     def assert_retry_preserves_remote_run(self, completed):
         run = self.evidence()
         originals = self.snapshot_files(run)
-        remote = self.root / "share" / run.name
-        remote.mkdir(parents=True)
-        (remote / "report.json").write_text("existing evidence must not change")
+        remote = self.root / "share" / f"Windows验收报告-0.11.1-{run.name}.zip"
         if completed:
-            (remote / "handoff.json").write_text("existing completed receipt must not change")
-        remote_originals = self.snapshot_files(remote)
+            with zipfile.ZipFile(remote, "w") as archive:
+                archive.writestr("handoff.json", "existing evidence must not change")
+        else:
+            remote.write_bytes(b"interrupted ZIP upload")
+        remote_original = remote.read_bytes()
         output = self.run_ps(r'''
 $runDirectory = Join-Path $root 'abyss-windows-0123456789abcdef0123456789abcdef'
 $result = Publish-AcceptanceEvidence -RunDirectory $runDirectory -DestinationRoot (Join-Path $root 'share')
@@ -211,10 +217,9 @@ $result | ConvertTo-Json -Compress
         publication = json.loads(output)
         destination = Path(publication["destination"])
         self.assertEqual(destination.parent, remote.parent)
-        self.assertRegex(destination.name, "^" + re.escape(run.name) + r"-retry-[0-9a-f]{32}$")
-        self.assertEqual(self.snapshot_files(remote), remote_originals, "Retry must not add, remove or replace old evidence")
-        self.assertTrue((destination / "handoff.json").is_file())
-        self.assertEqual((destination / "report.json").read_bytes(), (run / "report.json").read_bytes())
+        self.assertRegex(destination.name, "^" + re.escape(remote.stem) + r"-retry-[0-9a-f]{32}\.zip$")
+        self.assertEqual(remote.read_bytes(), remote_original, "Retry must preserve previous complete or partial archives")
+        self.assertEqual(destination.read_bytes(), Path(publication["local_archive"]).read_bytes())
         self.assert_local_archive(publication, run)
         self.assert_original_files_unchanged(originals)
 
