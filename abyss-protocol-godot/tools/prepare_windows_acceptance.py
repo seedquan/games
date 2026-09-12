@@ -111,10 +111,11 @@ def generate(report_path, archive_path=None, output=None):
     outputs = {
         "Run-Windows-Acceptance.ps1": windows_text(template),
         "一键Windows验收.cmd": (ROOT / "tools/run_windows_acceptance.cmd").read_bytes(),
+        "仅回传验收报告.cmd": (ROOT / "tools/recover_windows_acceptance.cmd").read_bytes(),
         "Windows验收说明.txt": windows_text(instructions),
     }
     manifest = {
-        "schema": 1, "version": version, "tool_revision": 3,
+        "schema": 1, "version": version, "tool_revision": 4,
         "archive_sha256": archive_hash,
         "release_files": {name: files[name] for name in TOKENS},
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in outputs.items()},

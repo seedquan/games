@@ -77,8 +77,11 @@ class AcceptanceGenerationTests(unittest.TestCase):
         self.assertIn("深渊协议 0.11.0", instructions.decode("utf-8-sig"))
         self.assertEqual((self.output / "一键Windows验收.cmd").read_bytes(),
                          (prepare.ROOT / "tools/run_windows_acceptance.cmd").read_bytes())
+        recovery = (self.output / "仅回传验收报告.cmd").read_text(encoding="ascii")
+        self.assertIn('-ReportOnly', recovery)
         manifest = json.loads((self.output / "acceptance-manifest.json").read_text())
         self.assertEqual(manifest["version"], self.version)
+        self.assertEqual(manifest["tool_revision"], 4)
         self.assertEqual(manifest["archive_sha256"], self.report["sha256"])
         self.assertEqual(manifest["release_files"], {name: self.files[name] for name in prepare.TOKENS})
         for name, expected in manifest["files"].items():
@@ -86,7 +89,7 @@ class AcceptanceGenerationTests(unittest.TestCase):
 
     def test_default_output_is_a_separate_versioned_build_directory(self):
         fixture_project = self.root / "project"
-        for relative in ("tools/run_windows_acceptance.ps1", "tools/run_windows_acceptance.cmd", "docs/windows-acceptance.txt"):
+        for relative in ("tools/run_windows_acceptance.ps1", "tools/run_windows_acceptance.cmd", "tools/recover_windows_acceptance.cmd", "docs/windows-acceptance.txt"):
             target = fixture_project / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(prepare.ROOT / relative, target)
@@ -177,6 +180,15 @@ if ($errors.Count) { throw ($errors | Out-String) }
                                 capture_output=True, text=True, timeout=30)
         self.assertNotEqual(source.returncode, 0)
         self.assertIn("unrendered acceptance template", source.stdout + source.stderr)
+        if os.name != "nt":
+            # The real generated entry point must stop before package access on a
+            # non-Windows host, including report-only mode. No game is available.
+            entry = subprocess.run(["pwsh", "-NoLogo", "-NoProfile", "-File",
+                                    str(self.output / "Run-Windows-Acceptance.ps1"), "-ReportOnly"],
+                                   capture_output=True, text=True, timeout=30)
+            self.assertEqual(entry.returncode, 1, entry.stdout + entry.stderr)
+            self.assertIn("must be run on the Windows test computer", entry.stdout)
+            self.assertFalse((self.output / "验收记录").exists())
 
 
 if __name__ == "__main__":
