@@ -349,3 +349,19 @@ Windows 已部署到 `\\Rog-xx\Games\深渊协议-0.11.0-Windows-x64\深渊协�
 23 项 Python/PowerShell 工具测试通过，包含真实只读文件系统失败、旧目录重试保护、ZIP 精确内容与压缩依赖失败、当前版本报告恢复、Wine/旧版本/失败阶段拒绝、生成编码和非 Windows 入口保护。独立审查确认报告补传分支不调用游戏验证器；Mac 的函数及流程测试不作为 Windows PowerShell 5.1 实机结果。
 
 修订 4 的五个外层附件已部署至 `smb://Rog-xx/Games/深渊协议-0.11.0-Windows-x64/`，逐字节及 SHA-256 回读一致；七个游戏文件与原 ZIP 哈希仍匹配 0.11.0，其他版本保留。交付记录为 `builds/deployments/acceptance-0.11.0-r4-rog-xx.json`。运行源码/资源未变，沿用已通过的 21,061 项场景检查及发行包验证；未重复游戏回归。目标 Windows 的新补传入口仍需运行确认。
+
+### 2026-09-12 · 0.11.1 祝福卡按住态对比度
+
+原生输入复现了祝福卡按住时的浅底浅字问题：子 Label 保持浅色，而 Button 切换到通用浅金背景，说明文字最低 1.10:1、标题 1.81:1。修复仅为卡片的 `pressed` 和 `hover_pressed` 设置不透明深色背景，保留元素边框；普通按钮、祝福数值与选择逻辑未变。九类祝福在普通与高对比文字下的静止/焦点、悬停、鼠标按住和设备 3 手柄按住状态均由真实输入事件验证，按住后松开才提交选择。新增对比度段 475 项，修改前 108 项对比度失败，修改后零失败；所测文字最低 5.48:1、按住态最低 6.11:1。
+
+最终 `python3 verify.py` 完成资源导入与十六套场景，共 21,524 项、零失败；其中 production 728 项，其余套件数量同 0.11.0。Mac 原生 production 738 项通过，含上述 475 项对比度检查，未发现脚本错误。鼠标与手柄按住的 1440×900 截图位于 `builds/qa/blessing-mouse-pressed.png`、`blessing-controller-pressed.png`；只生成并查看项目外 1024×640、各约 39 KB 的 JPEG 预览。卡片标题、收益与说明在按住状态清晰，未发现裁切。23 项 Python/PowerShell 工具测试亦通过。
+
+181 项源码/资源哈希相对 0.11.0 仅 `scripts/hud.gd`、`project.godot` 和 `export_presets.cfg` 变化，后两者为版本元数据；清单为 `builds/qa/source-0.11.1.json`。地图与战斗实现未改，沿用前版原生 QHD、双人性能与完整流程的证据；没有将静态样式修复扩展为重复压力采样。
+
+Mac universal 发行包通过归档 CRC、ad-hoc 签名、独立战役 84 项、首次写盘 15 项和第二进程续档 70 项。Windows x86_64 发行包通过 PE 身份/图标/版本与资源检查；在带标记的隔离 Wine prefix 中通过 headless 84 + 15 + 70 项及 OpenGL 窗口 84 + 18 + 74 项。两次导出使用 `--skip-checks` 复用刚完成的全套源码验证，发行包自身的战役与存档检查均完整执行；181 项源码/资源哈希在导出后再次核对一致。Wine 不作为 Windows 硬件或 ANGLE 通过证据。
+
+Windows ZIP 为 `builds/深渊协议-0.11.1-Windows-x64.zip`，121,510,199 字节，SHA-256 `549022a0cdefac42b78259aa499512a33c28d88559e3f99e72f296cf9a022684`。Mac ZIP 为 `builds/深渊协议-0.11.1-macOS.zip`，144,306,589 字节，SHA-256 `a1abecc71404787e1a0e163110688620cfd03789dc58fc6c46c1c7efd3dba29e`。Mac 未公证、Windows 未签发行者证书，均未上传公共发行渠道。
+
+已核实 `//macshare@Rog-xx/Games` 挂载并部署到新的 `深渊协议-0.11.1-Windows-x64/`，七个游戏文件、修订 4 的五个验收附件及共享根目录 ZIP 均从目标读回并验证 SHA-256。部署记录为 `builds/deployments/windows-0.11.1-rog-xx.json`。旧版 ZIP 与验收附件基线保持一致，没有覆盖旧版本或其他游戏。旧版已通过报告应使用 0.11.0 外层的“仅回传验收报告.cmd”补传；0.11.1 入口只接受与新包匹配的结果。
+
+0.11.0 的 Windows 通过反馈仍有效，但原生报告尚未取回；0.11.1 Windows 实机、实体双手柄、DPI/Alt-Tab 与真人难度体验仍待对应结果。本次完成可读性修复和候选包交付，不将这些自动检查称为 production 总目标完成。
