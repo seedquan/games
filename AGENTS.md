@@ -8,7 +8,7 @@ This file is canonical; `CLAUDE.md` is a symlink to it.
 NEON ARCADE — a collection of self-contained browser games deployed to GitHub
 Pages. `index.html` at the root is the arcade hub linking to each game.
 
-Two kinds of projects live here:
+Three kinds of projects live here:
 
 - **Single-file games** (`abyss-protocol/`, `comet-dash/`, `crimson-command/`,
   `neon-fury/`, `neon-stack/`, `nova-breaker/`, `orbit-drift/`, `singularity/`,
@@ -18,6 +18,10 @@ Two kinds of projects live here:
   `src/`, `test/`, `build.mjs` (bundles source into a self-contained
   `index.html`), and `server.mjs` (an optional local AI bridge). Their
   `index.html` is a **committed build artifact**.
+- **Native Godot projects** (`abyss-protocol-godot/`): independent Godot 4
+  scenes, GDScript, and local assets. Open `project.godot` in Godot. These are
+  source-only desktop projects, not Pages targets; any future Web export needs
+  explicit packaging plus hub/deployment allowlist integration.
 
 ## Commands that exist
 
@@ -37,6 +41,14 @@ npm start          # local server on http://127.0.0.1:4320/westworld/
 
 Single-file games have no commands; open their `index.html` in a browser.
 There is no repo-wide test runner, linter, or formatter.
+
+For `abyss-protocol-godot/`, run `./godot.sh` to open the editor, or
+`./godot.sh --play` to play. In that directory, run `python3 verify.py` for
+import and all scene suites: smoke, weapons, campaign/persistence, Chinese
+story/UI, player services, checkpoints, animation, presentation and aiming,
+plus local two-controller co-op, five-region navigation, artwork collision,
+blessing balance and legacy/checkpoint compatibility, with script-error detection and timeouts.
+Player-facing text is Chinese.
 
 ## Invariants
 
@@ -78,6 +90,10 @@ Preserve that framing in any UI or documentation text you touch.
   mechanic; there are no automated tests.
 - Do not stage, commit, push, or deploy unless the user asks. Testing is never
   permission to publish.
+- The user has authorized Windows game builds to be deployed to
+  `smb://Rog-xx/Games` (currently mounted at `/Volumes/Games`). Verify the mount
+  destination, preserve other games/versions, and check destination file hashes.
+  This authorization does not cover GitHub Pages or other public publishing.
 
 ## Agent Notes
 
