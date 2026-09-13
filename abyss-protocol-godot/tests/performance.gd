@@ -90,8 +90,10 @@ func run() -> void:
 		Input.action_release(member.action("slash"))
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
 	check(game.sound.voices.size() == 12, "Stress retains the bounded audio pool")
+	game.show_menu("paused")
 	game.abandon_to_title()
 	game.start_run(3102)
+	game.show_menu("paused")
 	game.abandon_to_title()
 	for i in range(8):
 		await frame()
@@ -102,7 +104,9 @@ func run() -> void:
 		for enemy in get_nodes_in_group("enemies"):
 			enemy.take_damage(1000000, Vector2.ZERO)
 		await frame()
+		game.show_menu("paused")
 		game.abandon_to_title()
+		check(game.state == "title" and game.encounter.pending.is_empty(), "Restart returns to the dock and cancels pending reinforcement")
 		for j in range(3):
 			await frame()
 		check(get_node_count() <= baseline + 4, "Restart %d returns to a stable node count" % i)
