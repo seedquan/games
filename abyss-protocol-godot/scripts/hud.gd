@@ -992,6 +992,22 @@ func build_help() -> void:
 		actions.add_child(label("慢动作图解 · 橙色爆区仍需移动或冲刺躲开", 16, MUTED))
 		defense_demo.playback_changed.connect(refresh_defense_demo)
 		refresh_defense_demo()
+		content.add_child(label("冰霜 · 雪花才是冻结", 23, MINT))
+		var ice_row := HBoxContainer.new()
+		ice_row.add_theme_constant_override("separation", 24)
+		content.add_child(ice_row)
+		var ice_icon := TextureRect.new()
+		ice_icon.name = "FreezeGuide"
+		ice_icon.texture = preload("res://assets/ui/ice_meter.svg")
+		ice_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		ice_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		ice_icon.custom_minimum_size = Vector2(288, 36)
+		ice_row.add_child(ice_icon)
+		var ice_tip := label("菱形显示一、二层寒冷，第三次冰霜命中后变成雪花。\n雪花表示真正冻结，可接火焰或电击；普通硬直不算冻结，新星可直接冻结。", 20, Color("bfd1d4"))
+		ice_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ice_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		ice_tip.focus_mode = Control.FOCUS_ALL
+		ice_row.add_child(ice_tip)
 		content.add_child(label("毒素 · 三层后接火焰", 23, MINT))
 		var poison_row := HBoxContainer.new()
 		poison_row.add_theme_constant_override("separation", 24)

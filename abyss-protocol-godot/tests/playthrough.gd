@@ -21,6 +21,8 @@ var damage_events: Array = []
 var projectile_defense := "--projectile-defense" in OS.get_cmdline_user_args()
 var countershots := 0
 var frost_build := "--frost-build" in OS.get_cmdline_user_args()
+var trace_freeze := "--trace-freeze" in OS.get_cmdline_user_args()
+var freeze_observer = preload("res://tests/freeze_observer.gd").new()
 var controls = preload("res://tests/bot_input.gd").new()
 var skill_activations := {"dash": 0, "freeze": 0, "parry": 0}
 var previous_cooldowns: Dictionary = {}
@@ -29,7 +31,9 @@ func _initialize() -> void:
 	run.call_deferred()
 
 func count_combat_frame() -> void:
-	if is_instance_valid(game) and game.state == "playing": combat_physics_frames += 1
+	if is_instance_valid(game) and game.state == "playing":
+		combat_physics_frames += 1
+		if trace_freeze: freeze_observer.observe(game)
 
 func axis(negative: String, positive: String, value: float, player) -> void:
 	negative = player.action(negative)
@@ -121,6 +125,7 @@ func record_room() -> void:
 	if visited_room != game.room:
 		if visited_room:
 			var entry := {"room": visited_room, "elapsed": snappedf(game.elapsed - room_started, 0.1), "hp_after": snappedf(game.player.hp, 0.1)}
+			if trace_freeze: entry.builds = game.team().map(func(member): return member.enchantments.duplicate())
 			reports.append(entry)
 			print("ABYSS PLAYTHROUGH ROOM: ", JSON.stringify(entry))
 		visited_room = game.room
@@ -262,6 +267,7 @@ func run() -> void:
 	report.skill_activations = skill_activations
 	report.countershots = countershots
 	report.build_policy = "ice/shock cards first; skip fire/poison purchases" if frost_build else "damage/leech cards; buy available supplies"
+	if trace_freeze: report.freeze_observations = freeze_observer.summary
 	if trace_damage: report.damage_events = damage_events
 	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate()})
 	report.physics_seconds = combat_physics_frames / 60.0
@@ -274,6 +280,7 @@ func run() -> void:
 	if projectile_defense: output = output.trim_suffix(".json") + "-defense.json"
 	if trace_damage: output = output.trim_suffix(".json") + "-damage-trace.json"
 	if frost_build: output = output.trim_suffix(".json") + "-frost-build.json"
+	if trace_freeze: output = output.trim_suffix(".json") + "-freeze-trace.json"
 	var file := FileAccess.open(output, FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()
