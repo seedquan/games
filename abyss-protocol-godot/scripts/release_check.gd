@@ -190,6 +190,9 @@ func frost_conduction_release() -> void:
 	await frame()
 	var guide = game.hud.menu_margin.find_child("ConductionGuide", true, false)
 	check(is_instance_valid(guide) and guide.texture.atlas.get_height() == 216, "packed guide contains the three-recipe SVG atlas")
+	var ice_guide = game.hud.menu_margin.find_child("FreezeGuide", true, false)
+	check(is_instance_valid(ice_guide) and ice_guide.texture.get_size() == Vector2(192, 24), "packed guide contains the live frost status atlas")
+	check(targets[0].ice_marker_level() == 3 and targets[0].freeze_outline_visible() and targets[1].ice_marker_level() == 0, "packed feedback distinguishes frozen source and unfrozen neighbours")
 
 func clear_encounter() -> void:
 	# State verification applies damage directly, but the packaged encounter must
