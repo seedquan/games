@@ -4,7 +4,7 @@ extends RefCounted
 static func clear(game) -> void:
 	var tree: SceneTree = game.get_tree()
 	var previous_speed := Engine.time_scale
-	Engine.time_scale = 4.0
+	Engine.time_scale = 32.0
 	var deadline := Time.get_ticks_msec() + 12000
 	while game.state == "playing" and Time.get_ticks_msec() < deadline:
 		for enemy in tree.get_nodes_in_group("enemies"):

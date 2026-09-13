@@ -12,6 +12,7 @@ var game
 var kind := "stalker"
 var hp := 60.0
 var max_hp := 60.0
+var scrap_reward := 6
 var radius := 19.0
 var speed := 110.0
 var damage := 13.0

@@ -107,7 +107,7 @@ func clear_encounter() -> void:
 	# State verification applies damage directly, but the packaged encounter must
 	# schedule and finish every real warning. Never bypass or erase queued waves.
 	var previous_speed := Engine.time_scale
-	Engine.time_scale = 4.0
+	Engine.time_scale = 32.0
 	var deadline := Time.get_ticks_msec() + 10000
 	while game.state == "playing" and Time.get_ticks_msec() < deadline:
 		for member in game.team():

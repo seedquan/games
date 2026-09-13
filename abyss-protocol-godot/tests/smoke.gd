@@ -105,8 +105,7 @@ func run() -> void:
 	check(game.elapsed == paused_time and not player.can_process(), "Pause stops world simulation and run timer")
 	game.resume_run()
 	check(game.state == "playing", "Resume restores the run")
-	for current in get_nodes_in_group("enemies"):
-		current.take_damage(10000.0, Vector2.ZERO)
+	await ENCOUNTER_FIXTURE.clear(game)
 	await frames(3)
 	check(game.state == "reward", "Room clear opens upgrade selection")
 	var old_damage: float = player.damage
@@ -134,7 +133,7 @@ func run() -> void:
 	check(boss.kind == "boss" and boss.hp > 700.0, "Boss has its own archetype and scaled health")
 	boss.release_attack()
 	check(game.get_node("World/Projectiles").get_child_count() >= 12, "Boss emits its radial bullet pattern")
-	boss.take_damage(10000.0, Vector2.ZERO)
+	boss.take_damage(boss.hp, Vector2.ZERO)
 	await frames(3)
 	check(game.state == "victory", "Boss defeat completes the run")
 	game.start_run()

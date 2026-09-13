@@ -596,7 +596,7 @@ func enemy_defeated(enemy: Node2D) -> void:
 	if enemy == active_boss:
 		active_boss = null
 	kills += 1
-	scrap += 20 if enemy.kind in ["boss", "warden"] else 6
+	scrap += 20 if enemy.kind in ["boss", "warden"] else enemy.scrap_reward
 	effect(enemy.position, Color("ffba79"), 80.0)
 	play_tone(260.0, 0.1, 0.06)
 	var sprite: Sprite2D = enemy.get_node("Sprite")
