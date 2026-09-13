@@ -52,6 +52,13 @@ func run() -> void:
 	await frame()
 	check(game.state == "story" and game.story_id == "awakening", "opening story")
 	game.continue_story()
+	game.open_build()
+	await frame()
+	check(game.state == "build" and not game.world.can_process(), "packed build overview freezes combat")
+	check("26.0" in game.BUILD_INFO.attack_text(game.player.weapon.definition, game.player.damage), "packed overview reads current weapon")
+	game.close_build()
+	check(game.state == "paused", "packed overview closes safely")
+	game.resume_run()
 	var start: Vector2 = game.player.position
 	var stick := InputEventJoypadMotion.new()
 	stick.device = 3
@@ -92,7 +99,8 @@ func run() -> void:
 	await cooperative_release()
 	print("ABYSS RELEASE: %d checks, %d failures" % [checks, failures])
 	game.queue_free()
-	await get_tree().process_frame
+	# Audio playback references are retired by the mixer after nodes are freed.
+	await get_tree().create_timer(0.2).timeout
 	get_tree().quit(0 if failures == 0 else 1)
 
 func clear_encounter() -> void:
@@ -201,7 +209,7 @@ func storage_roundtrip() -> void:
 		check(game.state == "victory" and game.team().size() == 2, "resumed co-op reaches the ending in the real release executable")
 	print("ABYSS STORAGE %s: %d checks, %d failures" % [game.verification_stage.to_upper(), checks, failures])
 	game.queue_free()
-	await get_tree().process_frame
+	await get_tree().create_timer(0.2).timeout
 	get_tree().quit(0 if failures == 0 else 1)
 
 func pad_tap(device: int, button: JoyButton) -> void:
