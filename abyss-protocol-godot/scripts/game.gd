@@ -466,7 +466,6 @@ func next_room(data: Dictionary) -> void:
 	if is_instance_valid(active_boss):
 		camera.position = player.position.lerp(active_boss.position, 0.5)
 		camera.reset_smoothing()
-	announce("%02d / %s" % [room, data.name], Color(ROOMS.TYPES[data.kind].color))
 	arrival_story()
 	save_checkpoint()
 
