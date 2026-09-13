@@ -6,6 +6,8 @@ const CORE = preload("res://assets/core.webp")
 const WARDEN = preload("res://assets/warden.webp")
 const POISON_METER = preload("res://assets/ui/poison_meter.svg")
 const POISON_FRAME := Vector2(88, 24)
+const ICE_METER = preload("res://assets/ui/ice_meter.svg")
+const ICE_FRAME := Vector2(64, 24)
 const MELEE_REACH := 105.0
 const MELEE_HALF_ANGLE := acos(0.1)
 const ATTACK_LABELS := {"ground": "地面锁定", "spread": "扇形齐射", "radial": "环形弹幕", "shot": "瞄准射击", "melee": "近身挥击", "cross": "十字交火",
@@ -118,7 +120,7 @@ func _physics_process(delta: float) -> void:
 	if frozen > 0.0:
 		velocity = knockback
 		move_and_slide()
-		$Sprite.modulate = Color("8cd9ff")
+		$Sprite.modulate = Color("8cd9ff") if freeze_outline_visible() else Color("e3dfb8")
 		queue_redraw()
 		return
 	$Sprite.modulate = Color.WHITE.lerp(Color(2.8, 2.0, 2.0), float(game.settings.values.flash)) if flash > 0.0 else Color.WHITE
@@ -379,6 +381,20 @@ func poison_marker_rect() -> Rect2:
 	var top := -140.0 if kind in ["boss", "warden"] else -72.0
 	return Rect2(Vector2(-44 * scale, top - 28 * scale), POISON_FRAME * scale)
 
+func ice_marker_level() -> int:
+	if dead or game.campaign_version < 2: return 0
+	if ice_frozen_left > 0: return 3
+	return clampi(chill_stacks, 0, 2) if chill_left > 0 else 0
+
+func ice_marker_rect() -> Rect2:
+	var scale := 1.0 / maxf(0.55, game.camera.zoom.x)
+	var top := -140.0 if kind in ["boss", "warden"] else -72.0
+	var row := 2 if poison_marker_level() > 0 else 1
+	return Rect2(Vector2(-32 * scale, top - 28 * row * scale), ICE_FRAME * scale)
+
+func freeze_outline_visible() -> bool:
+	return not dead and (ice_frozen_left > 0 if game.campaign_version >= 2 else frozen > 0)
+
 func _draw() -> void:
 	draw_circle(Vector2(0, 5), radius * 1.3, Color(0, 0, 0, 0.4))
 	var color := Color("ed80eb") if kind == "boss" else Color("ff7088")
@@ -389,10 +405,13 @@ func _draw() -> void:
 		draw_rect(Rect2(-25, top, 50 * hp / max_hp, 4), color)
 	if attacking:
 		draw_attack_warning(color)
-	if frozen > 0.0:
+	if freeze_outline_visible():
 		draw_arc(Vector2.ZERO, radius + 10.0, 0, TAU, 6, Color("a0e4ff"), 2.0, true)
-	elif chill_left > 0.0:
+	elif game.campaign_version < 2 and chill_left > 0.0:
 		draw_arc(Vector2.ZERO, radius + 8.0, 0, TAU * float(chill_stacks) / 3.0, 30, Color("7fd8ff"), 2.0, true)
+	var ice_level := ice_marker_level()
+	if ice_level > 0:
+		draw_texture_rect_region(ICE_METER, ice_marker_rect(), Rect2(Vector2((ice_level - 1) * 64, 0), ICE_FRAME))
 	if burn_left > 0.0:
 		draw_arc(Vector2.ZERO, radius + 13.0, clock, clock + PI * 1.5, 30, Color("ff7a3c"), 2.0, true)
 	var poison_level := poison_marker_level()
