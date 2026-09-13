@@ -40,6 +40,8 @@ cd games/abyss-protocol-godot
 
 ## 战斗与武器
 
+**0.14.0：约两分钟的舱室攻防。** 战斗采用有限增援，近卫、混合与交叉火力交替，每批最多六敌，清完即可领奖。投送有完整预警；每清完一批，为存活队员补修两点耐久。守卫保留更多攻击循环，攻击前摇和伤害保持原值。新增敌人共享原来的整舱废料预算，成长与商店经济保持稳定。速射枪单/双人完整输入机器人实测战斗舱中位数约 107 / 108 秒，近战和精英可能更久；详见[战斗基线](docs/balance.md)。
+
 红色扇区标记近身攻击的完整范围，带箭头的射线预示弹道方向。首领周围的三环预示地面锁定，随后出现的橙色地面圈才是爆炸落点；首领血条旁会显示正在准备的攻击名称。
 
 共享技能包括等离子弹、冲刺、冰冻新星与弹反。冲刺挡住攻击可触发完美闪避，返还冲刺并短暂增伤。弹反窗口很短；橙色区域爆炸需要移动或冲刺躲避，不能弹反。
@@ -129,7 +131,7 @@ cd games/abyss-protocol-godot
 python3 verify.py
 ```
 
-该命令依次完成 Godot 资源导入与十九套真实场景检查：
+该命令依次完成 Godot 资源导入与二十套真实场景检查：
 
 - `tests/smoke.gd`：移动、碰撞、技能、三十舱室流程、胜负与重开。
 - `tests/weapons.gd`：十八种武器的伤害、穿透、回程、蓄力、元素与掩体。
@@ -149,6 +151,7 @@ python3 verify.py
 - `tests/reward_checkpoints.gd`：成长封顶后仅剩一至两项有效祝福时的写盘与冷启恢复。
 - `tests/build_info.gd` 与 `tests/build_menu.gd`：实际武器伤害与显示值、当前/下一符文等级、旧版元素、构筑菜单只读性、手柄返回焦点、双人查看与重配对、长说明排版。
 - `tests/settings_menu.gd`：四个分类的实际鼠标/手柄导航、全屏按钮和 F11、音量边界、独立预览、焦点恢复、双人断线恢复与多尺寸布局。
+- `tests/encounter_pacing.gd`：有限增援、同时敌人数、每敌与整舱废料预算、波间修复和旧版边界。
 - `tests/map_art.gd`：十张插画的实物碰撞、可行走地标、两种体型连通性及守卫回避空间。
 
 验证入口会把脚本错误、超时或缺失测试总结视为失败，即使 Godot 返回了零退出码。Python 仅用于统一验证；游戏运行不依赖 Python。存档测试使用独立临时文件，不读取或覆盖玩家的正常存档。
@@ -171,7 +174,7 @@ python3 export_macos.py --rendered
 
 脚本检查引擎与模板版本、运行全部验证、导出通用 Mac 应用、验证压缩包与本地签名，再从独立目录运行发行包里的完整战役自检。`--rendered` 使用静音的原生窗口验证战役、首次存档与冷启动续档；省略时使用无界面检查。输出 `.zip`、SHA-256 校验与构建记录到 `builds/`。`--skip-checks` 只用于刚通过源码验证的工作树；不会跳过独立发行包自检。
 
-当前源码 `0.13.0` 是五区域候选版本，Mac 包使用 ad-hoc 签名，未经过 Apple 公证、未上传。包含 Apple Silicon 与 Intel 二进制；实际验证平台为 Apple M4 Pro，Intel Mac 尚未实测。
+当前源码 `0.14.0` 是五区域候选版本，Mac 包使用 ad-hoc 签名，未经过 Apple 公证、未上传。包含 Apple Silicon 与 Intel 二进制；实际验证平台为 Apple M4 Pro，Intel Mac 尚未实测。
 
 导出后的运行资源全部打包，测试源码和构建目录排除。发行模板不支持编辑器的 `--script` 入口，因此使用显式 `-- --verify-release` 自检参数：默认禁用玩家存档读写，在真实发行程序内检查武器、剧情、三十舱室和胜负后退出。导出脚本还创建独立且带标记的临时存档目录，分别启动两个发行进程：首次游玩并购买强化，关闭后重新加载设置、按键和商店记录，再完成结局。这些文件与正式玩家数据隔离。普通启动不运行这些检查。
 
@@ -182,7 +185,7 @@ python3 export_macos.py --rendered
 Windows 存档位于 `%APPDATA%\Godot\app_userdata\深渊协议\`；更新时解压新版本不会覆盖此目录。
 包内 `游玩说明.txt` 提供操作、更新、显卡兼容和验证说明，`ThirdPartyNotices.txt` 包含引擎、第三方库及字体许可。
 
-本地已生成 **0.13.0** Windows x64 包，与 Mac 使用相同内容；Wine 无界面和窗口战役/续档检查通过。交付设备目前不可达，**0.13.0 尚未传送到 Games**。本版验收附件仍将报告 ZIP 直接写到 Games 根目录。
+本地已生成 **0.14.0** Windows x64 包，与 Mac 使用相同内容；Wine 无界面和窗口战役/续档检查通过。交付设备目前不可达，**0.14.0 尚未传送到 Games**。本版验收附件仍将报告 ZIP 直接写到 Games 根目录。
 
 Windows 共享交付目录为 `smb://Rog-xx/Games`。2026-09-12 已将 **0.11.1** 交付到
 `深渊协议-0.11.1-Windows-x64/深渊协议 0.11.1/`，在 Windows 打开目录中的 `AbyssProtocol.exe` 即可。
@@ -200,7 +203,7 @@ Windows 共享交付目录为 `smb://Rog-xx/Games`。2026-09-12 已将 **0.11.1*
 回传不创建子目录或重命名目录；已有报告 ZIP 保留，重名时使用新的 ZIP 文件名。共享盘仍不可写时会在资源管理器选中本地 ZIP，便于转交。显式指定原报告或可写目标的方法见验收说明。
 退出码 0 为测试和回传成功，2 为测试通过但回传失败，1 为测试或本地报告准备未完成。
 ZIP 包含绑定报告哈希的 `handoff.json`，复制后回读整个 ZIP 校验，匹配才报告成功；自动运行结果与实体双手柄、真人体验分别记录。
-开发者可用 `python3 tools/prepare_windows_acceptance.py --report builds/深渊协议-0.11.1-Windows-x64.json` 生成新版本入口；加 `--destination-root` 可绑定已有的 Windows 报告目录，未指定时直接写到验收入口旁。已有输出目录不会被覆盖。
+开发者可用 `python3 tools/prepare_windows_acceptance.py --report builds/深渊协议-0.14.0-Windows-x64.json` 生成新版本入口；加 `--destination-root` 可绑定已有的 Windows 报告目录，未指定时直接写到验收入口旁。已有输出目录不会被覆盖。
 
 开发环境需要 Godot 4.7.2 标准版和 Python 3.11 或更新版本。Windows 下将 `GODOT_BIN` 指向 Godot 可执行文件；已有 `verify.py` 原生支持 Windows。
 
@@ -211,8 +214,8 @@ python export_windows.py --rendered
 ```
 
 模板准备脚本从 Godot 官方发布下载，并校验固定 SHA-256 后提取 x86_64 模板；约 1.28 GB 的原始模板包缓存在忽略的 `builds/templates/`。
-导出脚本验证引擎/模板版本、执行十六套源码检查、写入 Windows 图标和版本资源、验证 PE 架构、排除开发文件，再从包含中文与空格的独立目录验证发行程序。
-输出 `builds/深渊协议-0.11.1-Windows-x64.zip`、SHA-256、逐文件校验清单与构建/运行报告。Windows 包当前未进行发行者证书签名，只交付到授权共享盘，未上传公共发行渠道。
+导出脚本验证引擎/模板版本、执行二十套源码检查、写入 Windows 图标和版本资源、验证 PE 架构、排除开发文件，再从包含中文与空格的独立目录验证发行程序。
+输出 `builds/深渊协议-0.14.0-Windows-x64.zip`、SHA-256、逐文件校验清单与构建/运行报告。Windows 包当前未进行发行者证书签名，只交付到授权共享盘，未上传公共发行渠道。
 
 Windows 包中的 `Verify-Windows.ps1` 可直接运行，自动完成完整战役和两次独立进程的存档验证。加 `-Rendered` 使用真实窗口，加 `-Renderer opengl3_angle` 测试 ANGLE 兼容渲染。日志、截图和报告写入单独临时目录；验证不读写正常玩家存档。
 
@@ -228,16 +231,16 @@ Mac 上也可交叉导出：`python3 export_windows.py --wine '/absolute/path/to
 ## 补充原生验收
 
 ```sh
-./godot.sh --script res://tests/production.gd
-./godot.sh --script res://tests/presentation.gd
-./godot.sh --script res://tests/performance.gd
-./godot.sh --script res://tests/performance.gd -- --desktop-size
-./godot.sh --headless --script res://tests/playthrough.gd
-./godot.sh --script res://tests/playtest.gd
-./godot.sh --script res://tests/coop.gd
-./godot.sh --resolution 2560x1440 --position 100,150 --script res://tests/performance.gd -- --coop --expanded
-./godot.sh --resolution 2560x1440 --position 100,150 --script res://tests/level_presentation.gd
-./godot.sh --headless --script res://tests/playthrough.gd -- --coop
+./godot.sh --audio-driver Dummy --script res://tests/production.gd
+./godot.sh --audio-driver Dummy --script res://tests/presentation.gd
+./godot.sh --audio-driver Dummy --script res://tests/performance.gd
+./godot.sh --audio-driver Dummy --script res://tests/performance.gd -- --desktop-size
+./godot.sh --audio-driver Dummy --headless --script res://tests/playthrough.gd
+./godot.sh --audio-driver Dummy --script res://tests/playtest.gd
+./godot.sh --audio-driver Dummy --script res://tests/coop.gd
+./godot.sh --audio-driver Dummy --resolution 2560x1440 --position 100,150 --script res://tests/performance.gd -- --coop --expanded
+./godot.sh --audio-driver Dummy --resolution 2560x1440 --position 100,150 --script res://tests/level_presentation.gd
+./godot.sh --audio-driver Dummy --headless --script res://tests/playthrough.gd -- --coop
 ```
 
 前两项输出真实渲染截图到 `builds/qa/`。性能套件必须在原生窗口执行，记录帧时间及四十次重开回收；`--desktop-size` 使用实际默认窗口大小，包含 Retina 缩放。playthrough 是普通角色数值的输入机器人，用于检查完整战役能靠真实攻击推进并记录结果；不是人类易用性研究。playtest 开启可手动操作的独立游戏会话。所有这些入口均禁用玩家正式存档读写。
