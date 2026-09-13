@@ -57,6 +57,8 @@ func run() -> void:
 	await frame()
 	check(game.state == "build" and not game.world.can_process(), "packed build overview freezes combat")
 	check("26.0" in game.BUILD_INFO.attack_text(game.player.weapon.definition, game.player.damage), "packed overview reads current weapon")
+	check("还缺火焰" in game.hud.upgrade_details(game.PROGRESSION.rune("poison"), game.player), "packed reward names missing combo elements")
+	check("冰冻新星" in game.hud.upgrade_details(game.PROGRESSION.rune("fire"), game.player), "packed fire reward knows the shared freeze skill")
 	game.close_build()
 	check(game.state == "paused", "packed overview closes safely")
 	game.open_help()

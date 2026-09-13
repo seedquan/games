@@ -152,6 +152,54 @@ func menu_cases() -> void:
 		await snapshot("size-%d" % dimensions.x)
 		game.close_build()
 
+func reaction_choices() -> void:
+	# The same shared rune has different readiness on the two weapons.
+	game.coop.enabled = true
+	game.coop.devices.assign([3, 7])
+	game.coop.weapons.assign(["frost", "ember"])
+	game.start_run(921)
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	for member in game.team():
+		member.set_physics_process(false)
+		member.position = Vector2(800, 650)
+	game.player.enchantments = {"ice": 3, "fire": 0}
+	game.boon_choices = [game.PROGRESSION.rune("poison"), game.PROGRESSION.rune("fire"), game.PROGRESSION.rune("ice")]
+	for dimensions in [Vector2i(960, 600), Vector2i(2560, 1440)]:
+		root.size = dimensions
+		for state in ["reward", "shop"]:
+			game.set_shop_stock("poison")
+			game.show_menu(state)
+			await frames(4)
+			var bounds: Rect2 = game.get_viewport_rect().grow(1)
+			for option in game.hud.menu_buttons():
+				check(bounds.encloses(option.get_global_rect()), "Reaction choice navigation fits " + state + str(dimensions))
+				check(option.size.x + 1 >= option.get_combined_minimum_size().x and option.size.y + 1 >= option.get_combined_minimum_size().y, "Reaction choice respects its minimum content size")
+				for text in option.find_children("*", "Label", true, false):
+					check(option.get_global_rect().grow(1).encloses(text.get_global_rect()), "Reaction text stays inside its selectable card")
+			await snapshot("reaction-%s-%d" % [state, dimensions.x])
+	game.show_menu("reward")
+	await frames()
+	var before := var_to_bytes([game.player.enchantments, game.companion.enchantments, game.boon_choices, game.rng.state, game.profile.checkpoint])
+	await pad(JOY_BUTTON_DPAD_RIGHT)
+	await pad(JOY_BUTTON_DPAD_LEFT)
+	check(before == var_to_bytes([game.player.enchantments, game.companion.enchantments, game.boon_choices, game.rng.state, game.profile.checkpoint]), "Browsing contextual cards changes no build, offers or checkpoint")
+	await pad(JOY_BUTTON_A)
+	check(game.state == "route" and game.player.enchantments.get("poison") == 1 and game.companion.enchantments.get("poison") == 1, "Confirm applies the displayed poison reward to both seats exactly once")
+	var target = game.spawn_enemy("stalker", Vector2(875, 650))
+	var neighbour = game.spawn_enemy("stalker", Vector2(975, 650))
+	for enemy in [target, neighbour]:
+		enemy.hp = 10000
+		enemy.max_hp = 10000
+		enemy.set_physics_process(false)
+	for i in range(3): game.player.weapon_hit(target, 20, Vector2.ZERO, "ice")
+	check(target.poison_stacks == 3 and neighbour.hp == 10000, "Promised frost-seat setup stores poison without igniting it")
+	game.companion.weapon_hit(target, 20, Vector2.ZERO, "fire")
+	check(target.poison_stacks == 0 and neighbour.hp < 10000, "Promised partner fire actually consumes poison and damages a neighbour")
+
 func run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
 	game.persistence_enabled = false
@@ -162,6 +210,7 @@ func run() -> void:
 	game.muted = true
 	game.apply_settings()
 	await menu_cases()
+	await reaction_choices()
 	game.queue_free()
 	# Let the audio thread retire its paused ambience playback before engine exit.
 	await create_timer(0.2).timeout
