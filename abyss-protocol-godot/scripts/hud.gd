@@ -3,6 +3,7 @@ extends Control
 const MINT := Color("e6b879")
 const DISPLAY_FONT = preload("res://assets/fonts/NotoSerifCJKsc-SemiBold.otf")
 const CROSSHAIR = preload("res://assets/crosshair.svg")
+const BUILD_SYMBOLS = preload("res://assets/ui/build_symbols.svg")
 const INK := Color("111d22")
 const MUTED := Color("afb8b5")
 const BOON_COLORS := {"damage": "e8b27a", "health": "b5caa0", "speed": "92c4d0", "fire": "e7a274", "ice": "9bcbd9", "shock": "dccb83", "poison": "b2bf82", "leech": "d6a0a0", "execute": "c4aed8"}
@@ -238,6 +239,9 @@ func show_menu(kind: String) -> void:
 	if kind == "help":
 		build_help()
 		return
+	if kind == "build":
+		build_run_overview()
+		return
 	if kind == "confirm":
 		build_confirmation()
 		return
@@ -266,7 +270,7 @@ func show_menu(kind: String) -> void:
 			title = "连接\n已暂停"
 			description = "休整片刻，七号。恢复连接后继续救援。\n退出或返回船坞后，将从本舱入口的存档继续。"
 		"reward":
-			title = "选择\n强化协议"
+			title = "选择强化协议"
 			description = "舱室已清理，选择一项全队共享强化。\n两人各恢复十二点耐久，并补满能量。" if game.coop.enabled else "舱室已清理，选择一项本局强化。\n每次选择还会恢复十二点耐久，并补满能量。"
 		"dead":
 			title = "机体\n已离线"
@@ -274,7 +278,7 @@ func show_menu(kind: String) -> void:
 		"victory":
 			title = "救援\n已完成"
 			description = "封锁解除，三百一十二名乘客正在归航。"
-	var heading := label(title, 54, Color("ece8d9"))
+	var heading := label(title, 42 if kind == "reward" else 54, Color("ece8d9"))
 	heading.add_theme_font_override("font", DISPLAY_FONT)
 	content.add_child(heading)
 	content.add_child(label(description, 18, MUTED))
@@ -284,19 +288,16 @@ func show_menu(kind: String) -> void:
 		content.add_child(choices)
 		for i in range(game.boon_choices.size()):
 			var boon: Dictionary = game.boon_choices[i]
-			var level := ""
-			if boon.stat in game.PROGRESSION.ELEMENTS:
-				level = " / %d 级" % (int(game.player.enchantments.get(boon.stat, 0)) + 1)
-			var details: String = game.PROGRESSION.describe(boon, game.player, game.campaign_version)
+			var details: String = upgrade_details(boon, game.player)
 			if game.coop.enabled:
-				var partner_details: String = game.PROGRESSION.describe(boon, game.companion, game.campaign_version)
+				var partner_details: String = upgrade_details(boon, game.companion)
 				if partner_details != details:
 					details = "一号席：" + details + "\n二号席：" + partner_details
-			var option := button("%d / %s%s\n\n%s\n\n%s" % [i + 1, boon.tag, level, boon.name, details], game.choose_boon.bind(i))
+			var option := button("%d / %s\n\n%s\n\n%s" % [i + 1, boon.tag, boon.name, details], game.choose_boon.bind(i))
 			option.tooltip_text = option.text
 			if "accessibility_name" in option: option.set("accessibility_name", option.text)
 			option.text = ""
-			option.custom_minimum_size = Vector2(350, 260)
+			option.custom_minimum_size = Vector2(350, 360 if game.coop.enabled else 260)
 			option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			option.add_theme_font_size_override("font_size", 16)
 			var accent := Color(BOON_COLORS.get(boon.stat, "e6b879"))
@@ -314,7 +315,7 @@ func show_menu(kind: String) -> void:
 			card_content.alignment = BoxContainer.ALIGNMENT_CENTER
 			card_content.add_theme_constant_override("separation", 14)
 			inset.add_child(card_content)
-			card_content.add_child(label("%02d  /  %s%s" % [i + 1, boon.tag, level], 14, accent))
+			card_content.add_child(label("%02d  /  %s" % [i + 1, boon.tag], 14, accent))
 			var card_title := label(boon.name, 28, Color("ece8d9"))
 			card_title.add_theme_font_override("font", DISPLAY_FONT)
 			card_content.add_child(card_title)
@@ -326,7 +327,12 @@ func show_menu(kind: String) -> void:
 				option.grab_focus()
 		var shortcuts: Array[String] = []
 		for index in range(game.boon_choices.size()): shortcuts.append(str(index + 1))
-		content.add_child(label("点击卡片，或按 " + " / ".join(shortcuts) + " 选择", 13, MUTED))
+		var footer := HBoxContainer.new()
+		content.add_child(footer)
+		var hint := label("点击卡片，或按 " + " / ".join(shortcuts) + " 选择", 13, MUTED)
+		hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		footer.add_child(hint)
+		add_build_button(footer)
 	else:
 		if kind in ["dead", "victory"]:
 			content.add_child(label("抵达第 %02d 舱　/　清除 %d 个目标　/　用时 %s\n本局已保存 %d 枚核心　/　航线编号 %d" % [game.room, game.kills, elapsed_text(), game.earned_cores, game.run_seed], 15, MINT))
@@ -334,7 +340,10 @@ func show_menu(kind: String) -> void:
 		var action_caption := "继续救援 / 第 %02d 舱" % game.profile.checkpoint.room.depth if can_continue else "开始救援 / 回车"
 		var action := button("恢复连接 / Esc" if kind == "paused" else action_caption, game.resume_run if kind == "paused" else game.continue_saved_run if can_continue else game.request_new_run, true)
 		action.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		content.add_child(action)
+		var actions := HBoxContainer.new()
+		content.add_child(actions)
+		actions.add_child(action)
+		if kind == "paused": add_build_button(actions)
 		action.grab_focus()
 		if can_continue:
 			var fresh := button("开始新的救援", game.start_single_rescue)
@@ -557,7 +566,11 @@ func build_progress_menu(kind: String) -> void:
 			var price: String = "已购完" if item.id in game.purchased else "%d 份废料" % item.cost
 			var description: String = ("全队：" if game.coop.enabled else "") + item.description
 			if game.campaign_version >= 2 and item.id != "repair":
-				description = ("全队：" if game.coop.enabled else "") + game.PROGRESSION.describe({"stat": item.id}, game.player, game.campaign_version)
+				description = upgrade_details({"stat": item.id}, game.player)
+				if game.coop.enabled:
+					var partner_details := upgrade_details({"stat": item.id}, game.companion)
+					if partner_details != description:
+						description = "一号：" + description + "\n二号：" + partner_details
 			var option := button("%d / %s\n\n%s\n\n%s" % [i + 1, item.name, description, price], game.buy_item.bind(i))
 			option.custom_minimum_size = Vector2(380, 200)
 			option.add_theme_font_size_override("font_size", 14)
@@ -572,6 +585,119 @@ func build_progress_menu(kind: String) -> void:
 		var depart := button("继续救援", game.leave_supply, true)
 		column.add_child(depart)
 		depart.grab_focus()
+	add_build_button(column)
+
+func upgrade_details(boon: Dictionary, member) -> String:
+	var details: String = game.PROGRESSION.describe(boon, member, game.campaign_version)
+	if boon.stat in ["damage", "tuning"]:
+		var changes: Dictionary = game.PROGRESSION.effects(boon, member, game.campaign_version)
+		return game.BUILD_INFO.damage_comparison(member, changes.damage) + "\n基础攻击 %.1f → %.1f\n主武器与等离子弹同步增强。" % [member.damage, member.damage + changes.damage]
+	if boon.stat in game.PROGRESSION.ELEMENTS:
+		var rank := int(member.enchantments.get(boon.stat, 0))
+		var next := mini(3, rank + 1)
+		var innate: bool = member.weapon.definition.get("element", "") == boon.stat
+		var prefix := "符文 %d → %d 级" % [rank, next] if rank < 3 else "符文已满级"
+		if innate: prefix += " · 武器自带同元素"
+		return prefix + "\n" + game.BUILD_INFO.rune_comparison(boon.stat, rank, innate, game.campaign_version)
+	return details
+
+func add_build_button(parent: Control) -> void:
+	var inspect := button("局内构筑 / Tab", game.open_build)
+	inspect.custom_minimum_size = Vector2(225, 42)
+	inspect.add_theme_font_size_override("font_size", 16)
+	parent.add_child(inspect)
+
+func menu_buttons() -> Array[BaseButton]:
+	var result: Array[BaseButton] = []
+	for node in menu_margin.find_children("*", "BaseButton", true, false):
+		if not node.disabled and node.is_visible_in_tree(): result.append(node)
+	return result
+
+func restore_menu_focus(index: int) -> void:
+	var buttons := menu_buttons()
+	if game.state == game.build_return and index >= 0 and index < buttons.size():
+		buttons[index].grab_focus()
+
+func build_run_overview() -> void:
+	var member = game.team()[clampi(game.build_seat, 0, game.team().size() - 1)]
+	var column := utility_column("局内构筑 / 第 %02d 舱" % game.room)
+	var seats := HBoxContainer.new()
+	column.add_child(seats)
+	for seat in range(game.team().size()):
+		var tab := button(("一号席" if seat == 0 else "二号席") + " · " + game.team()[seat].weapon.definition.name, game.choose_build_seat.bind(seat), seat == game.build_seat)
+		tab.custom_minimum_size = Vector2(300, 48)
+		seats.add_child(tab)
+		if seat == game.build_seat: tab.grab_focus()
+	var scroll := ScrollContainer.new()
+	scroll.name = "BuildScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	column.add_child(scroll)
+	var grid := GridContainer.new()
+	grid.columns = 2
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 14)
+	scroll.add_child(grid)
+	var definition: Dictionary = member.weapon.definition
+	build_info_card(grid, definition.name, game.BUILD_INFO.attack_text(definition, member.damage) + "\n" + definition.description.replace("\n", " ") + "\n以上为常态直接伤害；元素、终结与临时增伤另计。", MINT, 0)
+	var status := "耐久 %.0f / %.0f　·　能量 %.0f / 100\n移动速度 %.0f　·　冲刺冷却 %.2f 秒\n能量每秒回复 %.0f　·　基础攻击 %.1f" % [member.hp, member.max_hp, member.energy, member.move_speed, member.dash_recharge, member.energy_regen, member.damage]
+	if member.empowered > 0: status += "\n临时增伤 50%% · 剩余 %.1f 秒" % member.empowered
+	if member.hp <= 0: status += "\n机体离线，等待队友修复。"
+	build_info_card(grid, "机体状态", status, MINT, 1)
+	for id in game.PROGRESSION.ELEMENTS:
+		var rank := int(member.enchantments.get(id, 0))
+		var innate: bool = definition.get("element", "") == id
+		build_info_card(grid, game.BUILD_INFO.element_heading(id, rank, innate, game.campaign_version), game.BUILD_INFO.element_detail(id, rank, innate, game.campaign_version), Color(BOON_COLORS[id]), 2 + game.PROGRESSION.ELEMENTS.find(id), rank)
+	build_info_card(grid, "战斗联动", "\n".join(game.BUILD_INFO.synergies(member)), MINT, 8)
+	build_info_card(grid, "本局成长", "废料 %d · 本局已传回 %d 枚核心\n船坞升级在派遣时已计入机体属性。\n祝福由全队共享，实际收益取决于各自武器与属性。" % [game.scrap, game.earned_cores], MINT, 9)
+	var back := button("返回原界面 / Esc · Tab", game.close_build)
+	column.add_child(back)
+
+func build_info_card(parent: Control, heading: String, body: String, accent: Color, symbol: int, rank := -1) -> void:
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size.x = 460
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.focus_mode = Control.FOCUS_ALL
+	var normal := style(INK, Color(accent, 0.45), 16)
+	var focused := style(Color("203036"), accent, 16)
+	panel.add_theme_stylebox_override("panel", normal)
+	panel.focus_entered.connect(func(): panel.add_theme_stylebox_override("panel", focused))
+	panel.focus_exited.connect(func(): panel.add_theme_stylebox_override("panel", normal))
+	if "accessibility_name" in panel: panel.set("accessibility_name", heading + "。" + body)
+	parent.add_child(panel)
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 10)
+	panel.add_child(content)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 12)
+	content.add_child(header)
+	var icon := TextureRect.new()
+	var atlas := AtlasTexture.new()
+	atlas.atlas = BUILD_SYMBOLS
+	atlas.region = Rect2(symbol * 64, 0, 64, 64)
+	icon.texture = atlas
+	icon.custom_minimum_size = Vector2(32, 32)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.self_modulate = accent
+	header.add_child(icon)
+	var title := label(heading, 19, accent)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(title)
+	if rank >= 0:
+		for level in range(3):
+			var mark := ColorRect.new()
+			mark.custom_minimum_size = Vector2(8, 18)
+			mark.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			mark.color = accent if level < rank else Color("34424b")
+			header.add_child(mark)
+	var detail := label(body, 17, MUTED)
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(detail)
+	set_mouse_passthrough(content)
 
 func build_armory() -> void:
 	dashboard.hide()
