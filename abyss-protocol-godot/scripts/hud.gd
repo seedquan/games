@@ -641,15 +641,20 @@ func build_progress_menu(kind: String) -> void:
 			option.disabled = not game.can_buy(i)
 			cards.add_child(option)
 		column.add_child(label("每项补给限购一次。机体受损时才可购买维修。", 14, MUTED))
+		var actions := HBoxContainer.new()
+		actions.add_theme_constant_override("separation", 16)
+		column.add_child(actions)
 		var depart := button("继续救援", game.leave_supply, true)
-		column.add_child(depart)
+		depart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		actions.add_child(depart)
+		add_build_button(actions)
 		depart.grab_focus()
 	else:
 		column.add_child(label("已恢复最大耐久的百分之三十五，最高不超过上限。\n能量已补满。每次抵达维修站只执行一次修复。", 21, MUTED))
 		var depart := button("继续救援", game.leave_supply, true)
 		column.add_child(depart)
 		depart.grab_focus()
-	add_build_button(column)
+	if kind != "shop": add_build_button(column)
 
 func team_upgrade_details(boon: Dictionary) -> String:
 	var first := upgrade_details(boon, game.player, false)
@@ -761,7 +766,7 @@ func build_info_card(parent: Control, heading: String, body: String, accent: Col
 		illustration.texture = diagram
 		illustration.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		illustration.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		illustration.custom_minimum_size.y = 126
+		illustration.custom_minimum_size.y = 126.0 * diagram.get_height() / 144.0
 		illustration.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		content.add_child(illustration)
 	var header := HBoxContainer.new()
@@ -1006,6 +1011,25 @@ func build_help() -> void:
 		poison_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		poison_tip.focus_mode = Control.FOCUS_ALL
 		poison_row.add_child(poison_tip)
+		content.add_child(label("霜链 · 冻结后接电击", 23, MINT))
+		var conduction_row := HBoxContainer.new()
+		conduction_row.add_theme_constant_override("separation", 24)
+		content.add_child(conduction_row)
+		var conduction_icon := TextureRect.new()
+		conduction_icon.name = "ConductionGuide"
+		var conduction_texture := AtlasTexture.new()
+		conduction_texture.atlas = preload("res://assets/ui/element_combos.svg")
+		conduction_texture.region = Rect2(0, 144, 480, 72)
+		conduction_icon.texture = conduction_texture
+		conduction_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		conduction_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		conduction_icon.custom_minimum_size = Vector2(336, 60)
+		conduction_row.add_child(conduction_icon)
+		var conduction_tip := label("先用冰霜或冰冻新星冻结，再接自己或队友的电击。\n保留冻结，向附近最近两名可见敌人传导伤害；掩体能阻挡，传导不会继续触发符文。", 20, Color("bfd1d4"))
+		conduction_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		conduction_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		conduction_tip.focus_mode = Control.FOCUS_ALL
+		conduction_row.add_child(conduction_tip)
 	content.add_child(preload("res://scripts/danger_guide.gd").new())
 	var counter_tip := "\n成功弹反会将一枚弹丸沿来路返还，可触发主武器元素与符文。" if game.campaign_version >= 2 else ""
 	for section in [

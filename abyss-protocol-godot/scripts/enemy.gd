@@ -279,6 +279,9 @@ func apply_element(element: String, power: float, level := 1) -> void:
 		# A lethal fire hit can still detonate the states already on its target.
 		if element == "fire" and game.campaign_version >= 2:
 			fire_reactions(power)
+		elif element == "shock" and game.campaign_version >= 2 and ice_frozen_left > 0 and shock_guard <= 0:
+			shock_guard = 0.8
+			frost_conduction(power)
 		return
 	match element:
 		"fire":
@@ -306,8 +309,31 @@ func apply_element(element: String, power: float, level := 1) -> void:
 				var duration: float = (0.1 if guardian else 0.22) if game.campaign_version < 2 else game.PROGRESSION.shock_duration(level, guardian)
 				frozen = maxf(frozen, duration)
 				shock_guard = 0.8
+				if game.campaign_version >= 2 and ice_frozen_left > 0:
+					frost_conduction(power)
 				if game.campaign_version >= 2 and level > 1:
 					take_damage(power * game.PROGRESSION.shock_fraction(level), Vector2.ZERO)
+
+func frost_conduction(power: float) -> void:
+	# Relay direct damage once from this frozen source. It cannot apply elements,
+	# leech, or recursively relay; the ordinary shock guard limits its cadence.
+	var origin := global_position
+	var targets: Array = []
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		if enemy == self or enemy.dead: continue
+		if origin.distance_to(enemy.global_position) <= game.PROGRESSION.CONDUCTION_RANGE and game.has_sight(origin, enemy.global_position):
+			targets.append(enemy)
+	targets.sort_custom(func(a, b):
+		var first := origin.distance_squared_to(a.global_position)
+		var second := origin.distance_squared_to(b.global_position)
+		return a.get_instance_id() < b.get_instance_id() if is_equal_approx(first, second) else first < second)
+	var links := PackedVector2Array()
+	for enemy in targets.slice(0, game.PROGRESSION.CONDUCTION_TARGETS):
+		links.append(enemy.global_position - origin)
+		enemy.take_damage(power * game.PROGRESSION.CONDUCTION_FRACTION, Vector2.ZERO)
+	if not links.is_empty():
+		game.reaction_effect(origin + Vector2(0, -28), Color("9bd9ed"), 0, "conduction", links)
+		game.announce("霜链", Color("9bd9ed"))
 
 func fire_reactions(power: float) -> void:
 	var modern: bool = game.campaign_version >= 2

@@ -6,6 +6,7 @@ var duration := 0.4
 var elapsed := 0.0
 var reaction := ""
 var intensity := 1.0
+var links := PackedVector2Array()
 
 func _process(delta: float) -> void:
 	elapsed += delta
@@ -15,6 +16,17 @@ func _process(delta: float) -> void:
 
 func _draw() -> void:
 	var progress := clampf(elapsed / duration, 0.0, 1.0)
+	if reaction == "conduction":
+		var fade := 1.0 - progress
+		for endpoint in links:
+			var side := endpoint.normalized().orthogonal() * 5
+			var points := PackedVector2Array([Vector2.ZERO, endpoint * 0.3 + side, endpoint * 0.5 - side, endpoint * 0.7 + side, endpoint])
+			draw_polyline(points, Color(color, fade * 0.85), 2.0, true)
+			if intensity > 0:
+				draw_polyline(points, Color("e5f7ff", fade * intensity * 0.5), 1.0, true)
+			draw_line(endpoint - Vector2(5, 0), endpoint + Vector2(5, 0), Color(color, fade), 1.5, true)
+			draw_line(endpoint - Vector2(0, 5), endpoint + Vector2(0, 5), Color(color, fade), 1.5, true)
+		return
 	if not reaction.is_empty():
 		draw_reaction(progress)
 		return

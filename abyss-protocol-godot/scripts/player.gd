@@ -147,7 +147,7 @@ func weapon_hit(enemy: Node2D, amount: float, force: Vector2, element := "") -> 
 	# Innate and rune effects remain one application. New campaigns add their
 	# ranks so the first matching rune actually strengthens an elemental weapon.
 	for tag in ["ice", "poison", "shock", "fire"]:
-		if enemy.dead and (tag != "fire" or game.campaign_version < 2):
+		if enemy.dead and (tag not in ["shock", "fire"] or game.campaign_version < 2):
 			continue
 		var level: int = game.PROGRESSION.effective_element_level(int(enchantments.get(tag, 0)), element == tag, game.campaign_version)
 		if level > 0:

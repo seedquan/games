@@ -24,6 +24,9 @@ const MAX_HEALTH := 350.0
 const MAX_SPEED := 420.0
 const MIN_DASH_RECHARGE := 0.45
 const MAX_DAMAGE_GAIN := 13.0
+const CONDUCTION_RANGE := 220.0
+const CONDUCTION_FRACTION := 0.45
+const CONDUCTION_TARGETS := 2
 const ELEMENT_LABELS := {"fire": "火焰", "ice": "冰霜", "shock": "电击", "poison": "毒素", "leech": "汲取", "execute": "终结"}
 
 static func effects(boon: Dictionary, member, version := 2) -> Dictionary:

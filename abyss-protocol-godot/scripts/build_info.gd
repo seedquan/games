@@ -101,23 +101,31 @@ static func synergies(member) -> Array[String]:
 		result.append("联动机会：获得火焰，或让火焰队友引爆你冻结、叠毒的敌人。冻结触发热冲击，三层以上毒素触发爆燃。")
 	if modern and active.get("fire", 0) > 0:
 		result.append("队友可接力，引力井可先聚怪。爆发不伤友方，实体掩体可阻挡。")
+	if modern and active.get("shock", 0) > 0:
+		result.append("霜链：先冻结，再电击。保留冻结，向距离 %d 内最近 %d 名可见敌人各传导 %d%% 电击命中伤害；每目标间隔 0.8 秒。可用冰冻新星或队友冰霜准备，不伤友方、不追加符文。" % [PROGRESSION.CONDUCTION_RANGE, PROGRESSION.CONDUCTION_TARGETS, PROGRESSION.CONDUCTION_FRACTION * 100])
 	if result.is_empty(): result.append("完美闪避与成功弹反可短暂提高主武器伤害 50%。抓住敌人攻击前摇反击。")
 	if modern: result.append("弹反返弹：沿来路反射，伤害不低于 %.1f；可触发主武器元素与符文。" % member.damage)
 	return result
 
 static func has_reaction(member) -> bool:
-	return member.game.campaign_version >= 2 and (["fire", "ice", "poison"].any(func(id): return member.enchantments.get(id, 0) > 0 or member.weapon.definition.get("element", "") == id))
+	return member.game.campaign_version >= 2 and (["fire", "ice", "poison", "shock"].any(func(id): return member.enchantments.get(id, 0) > 0 or member.weapon.definition.get("element", "") == id))
 
 static func has_element(member, id: String) -> bool:
 	return member.enchantments.get(id, 0) > 0 or member.weapon.definition.get("element", "") == id
 
 static func reaction_hint(id: String, member, partner = null) -> String:
-	if member.game.campaign_version < 2 or id not in ["fire", "ice", "poison"]: return ""
+	if member.game.campaign_version < 2 or id not in ["fire", "ice", "poison", "shock"]: return ""
 	# Preview the selected rune without applying it. Cooldowns and temporary
 	# downed states do not change which combinations this build supports.
 	var fire := has_element(member, "fire")
 	var peer: bool = is_instance_valid(partner) and partner != member and member.game.coop.enabled
 	var status := "已有联动" if has_element(member, id) else "选后可用"
+	if id == "shock":
+		return status + " · 霜链\n" + ("冰霜冻结" if has_element(member, "ice") else "队友冰霜或新星" if peer and has_element(partner, "ice") else "冰冻新星") + " → 电击传导两敌"
+	if id == "ice" and has_element(member, "shock"):
+		return status + " · " + ("热冲击 / 霜链\n冻结 → 火焰爆发或电击传导" if fire else "霜链\n冰霜冻结 → 电击传导两敌")
+	if id == "ice" and not fire and peer and has_element(partner, "shock"):
+		return "队友接力 · 霜链\n冰霜冻结 → 队友电击传导"
 	if id == "fire":
 		if has_element(member, "poison"):
 			return status + " · 热冲击 / 爆燃\n冻结或三层毒 → 火焰引爆"
@@ -130,4 +138,6 @@ static func reaction_hint(id: String, member, partner = null) -> String:
 		return status + " · " + reaction + "\n" + setup + " → 火焰引爆"
 	if peer and has_element(partner, "fire"):
 		return "队友接力 · " + reaction + "\n" + setup + " → 队友火焰"
+	if id == "ice":
+		return "还缺火焰或电击 · 冻结联动\n冻结 → 火焰爆发／电击传导"
 	return "还缺火焰 · " + reaction + "\n" + setup + "后需火焰命中"
