@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="96" viewBox="0 0 192 96">
+  <!-- Diagram atlas: station turret, then seven's maintenance chassis. -->
+  <g stroke="#79847f" stroke-width="2" stroke-linejoin="round">
+    <path d="M14 28 32 16h31l15 18v39L61 83H30L14 68Z" fill="#26322f"/>
+    <path d="M25 34h36v33H25Z" fill="#46524a"/>
+    <path d="M49 40h35v16H49Z" fill="#60675a"/>
+    <path d="M82 38h7v20h-7Z" fill="#dd876d" stroke="#e5b194"/>
+    <path d="M25 25h22M22 75h28" stroke="#bbb6a1"/>
+  </g>
+  <g stroke="#b8c6be" stroke-width="2" stroke-linejoin="round">
+    <path d="M130 26v-8l8-7h20l8 7v17l-8 8h-20l-8-8Z" fill="#738477"/>
+    <path d="M132 22h27v10h-27Z" fill="#172d30" stroke="#819b93"/>
+    <path d="M136 27h9" stroke="#d4a373"/>
+    <path d="m131 44 17-5 17 5 4 27h-41Z" fill="#687567"/>
+    <path d="M144 47h8v14h-8Z" fill="#c9a078" stroke="none"/>
+    <path d="m128 45-12 8-5 15 9 4 10-15M166 46l11 9 3 16-9 2-7-17" fill="#69766c"/>
+    <path d="m133 71-3 15h13l4-15M151 71l3 15h13l-5-15" fill="#48574f"/>
+  </g>
+</svg>
