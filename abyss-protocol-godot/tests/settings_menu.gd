@@ -73,6 +73,10 @@ func run() -> void:
 	await click(contrast)
 	check(game.settings.values.high_contrast and contrast.text == "已开启", "Pointer toggle applies contrast immediately")
 	await inspect_settings("high contrast")
+	var motion: Button = game.hud.menu_margin.find_child("story_motion", true, false)
+	await pad_focus(motion)
+	await pad_tap(JOY_BUTTON_A)
+	check(not game.settings.values.story_motion and motion.text == "已关闭", "Controller selects static narrative illustrations")
 	# Save only preferences in a unique fixture; never enable profile persistence.
 	game.settings.save_path = temp_path
 	check(game.settings.save() == OK, "Save edited preferences in isolated fixture")

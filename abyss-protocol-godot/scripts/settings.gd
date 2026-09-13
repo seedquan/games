@@ -3,7 +3,7 @@ extends RefCounted
 
 const DEFAULTS := {
 	"volume": 0.8, "effects_volume": 0.8, "ambience_volume": 0.5,
-	"fullscreen": false, "shake": 0.65, "flash": 0.4, "aim_assist": true, "tutorial": true, "high_contrast": false,
+	"fullscreen": false, "shake": 0.65, "flash": 0.4, "aim_assist": true, "tutorial": true, "high_contrast": false, "story_motion": true,
 }
 const KEYS := {
 	"move_up": KEY_W, "move_down": KEY_S, "move_left": KEY_A, "move_right": KEY_D,
