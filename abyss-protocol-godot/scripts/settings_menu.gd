@@ -107,7 +107,7 @@ func build() -> void:
 			slider_row(form, "shake", "屏幕震动", "保留打击感，或调至零让画面保持稳定。")
 			slider_row(form, "flash", "命中闪光", "降低命中亮度，不影响攻击范围提示。")
 			toggle_row(form, "high_contrast", "高对比文字", "提高文字亮度，并增加清晰描边。")
-			toggle_row(form, "story_motion", "剧情动画", "关闭后显示静态插画，仍可阅读完整剧情。")
+			toggle_row(form, "story_motion", "剧情与指南动画", "关闭后使用静态插画与图解，完整内容仍可阅读。")
 			var demo: Button = hud.button("预览震动与闪光", preview.demonstrate)
 			demo.custom_minimum_size = Vector2(240, 48)
 			visual.add_child(demo)

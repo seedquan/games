@@ -59,6 +59,16 @@ func run() -> void:
 	check("26.0" in game.BUILD_INFO.attack_text(game.player.weapon.definition, game.player.damage), "packed overview reads current weapon")
 	game.close_build()
 	check(game.state == "paused", "packed overview closes safely")
+	game.open_help()
+	await frame()
+	var diagram = game.hud.menu_margin.find_child("DefenseDemo", true, false)
+	check(is_instance_valid(diagram) and diagram.ART.get_width() == 192, "packed defense illustration is available")
+	var guide_time: float = game.elapsed
+	if is_instance_valid(diagram):
+		diagram.toggle_playback()
+		for i in range(3): await frame()
+		check(diagram.is_processing() and game.elapsed == guide_time and not game.world.can_process(), "packed defense demonstration keeps combat paused")
+	game.show_menu("paused")
 	game.resume_run()
 	var start: Vector2 = game.player.position
 	var stick := InputEventJoypadMotion.new()

@@ -37,6 +37,9 @@ var loadout: Label
 var controls_hint: Label
 var settings_view
 var story_scene
+var defense_demo
+var defense_instruction: Label
+var defense_playback: Button
 var settings_feedback: Label
 var save_notice: Label
 var tutorial: Label
@@ -281,6 +284,9 @@ func button(text: String, callback: Callable, primary := false) -> Button:
 
 func show_menu(kind: String) -> void:
 	settings_view = null
+	defense_demo = null
+	defense_instruction = null
+	defense_playback = null
 	if DisplayServer.get_name() != "headless":
 		Input.set_custom_mouse_cursor(null)
 	overlay.show()
@@ -945,6 +951,27 @@ func build_help() -> void:
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	content.add_theme_constant_override("separation", 22)
 	scroll.add_child(content)
+	if game.campaign_version >= 2:
+		content.add_child(label("弹反 · 把来弹送回去", 23, MINT))
+		defense_demo = preload("res://scripts/defense_demo.gd").new()
+		defense_demo.name = "DefenseDemo"
+		defense_demo.motion_enabled = game.settings.values.story_motion
+		defense_demo.auto_pause_enabled = game.auto_pause_enabled
+		content.add_child(defense_demo)
+		defense_instruction = label("", 20, Color("ede4cc"))
+		defense_instruction.name = "DefenseInstruction"
+		defense_instruction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		content.add_child(defense_instruction)
+		var actions := HBoxContainer.new()
+		actions.add_theme_constant_override("separation", 20)
+		content.add_child(actions)
+		defense_playback = button("播放演示", defense_demo.toggle_playback)
+		defense_playback.name = "DefensePlayback"
+		defense_playback.visible = defense_demo.motion_enabled
+		actions.add_child(defense_playback)
+		actions.add_child(label("慢动作图解 · 橙色爆区仍需移动或冲刺躲开", 16, MUTED))
+		defense_demo.playback_changed.connect(refresh_defense_demo)
+		refresh_defense_demo()
 	content.add_child(preload("res://scripts/danger_guide.gd").new())
 	var counter_tip := "\n成功弹反会将一枚弹丸沿来路返还，可触发主武器元素与符文。" if game.campaign_version >= 2 else ""
 	for section in [
@@ -963,6 +990,11 @@ func build_help() -> void:
 	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	column.add_child(back)
 	back.grab_focus()
+
+func refresh_defense_demo() -> void:
+	if not is_instance_valid(defense_demo): return
+	defense_instruction.text = defense_demo.instruction(game.action_label("parry"))
+	defense_playback.text = ("重播演示" if defense_demo.has_played else "播放演示") if defense_demo.elapsed >= defense_demo.DURATION else "继续演示" if defense_demo.paused else "暂停演示"
 
 func build_confirmation() -> void:
 	var column := utility_column("确认操作")
@@ -991,6 +1023,7 @@ func elapsed_text() -> String:
 	return "%02d:%02d" % [int(game.elapsed) / 60, int(game.elapsed) % 60]
 
 func update_status() -> void:
+	if game.state == "help": refresh_defense_demo()
 	if DisplayServer.get_name() != "headless":
 		var cursor_mode := Input.MOUSE_MODE_HIDDEN if game.using_gamepad and not overlay.visible else Input.MOUSE_MODE_VISIBLE
 		if Input.mouse_mode != cursor_mode:
