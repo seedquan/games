@@ -153,7 +153,7 @@ func countershot_release() -> void:
 	target.hp = 10000
 	target.poison_stacks = 0
 	game.player.weapon.fire()
-	check(is_equal_approx(target.hp, 10000 - game.player.damage * 1.1) and target.poison_stacks == 1, "packed thrust contacts the body's edge and applies one rune")
+	check(game.player.empowered > 0 and is_equal_approx(target.hp, 10000 - game.player.damage * 1.1 * 1.5) and target.poison_stacks == 1, "packed empowered thrust contacts the body's edge and applies one rune")
 	target.position = game.player.position + Vector2.from_angle(0.3) * 178 + Vector2.from_angle(0.3 + PI / 4) * 20
 	var prior_hp: float = target.hp
 	game.player.slash_cooldown = 0
