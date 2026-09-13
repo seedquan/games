@@ -22,7 +22,8 @@ const LAST_ROOM := ROOMS.LAST_ROOM
 var settings = SETTINGS.new()
 var sound
 var settings_return := "title"
-var settings_tab := "comfort"
+var settings_tab := "display"
+var settings_focus := -1
 var settings_notice := ""
 var rebind_action := ""
 var using_gamepad := false
@@ -216,6 +217,7 @@ func _unhandled_input(event: InputEvent) -> void:
 					"shop": buy_item(i)
 
 func controller_changed(_device: int, connected: bool) -> void:
+	hud.refresh_settings_visuals()
 	if not connected and (coop.enabled or state == "coop_lobby"):
 		coop.disconnected(_device)
 		return
@@ -229,6 +231,7 @@ func action_label(action: String) -> String:
 func apply_settings() -> void:
 	if is_instance_valid(hud):
 		hud.apply_text_contrast()
+		hud.refresh_settings_visuals()
 	if is_instance_valid(sound):
 		var master := 0.0 if muted else float(settings.values.volume)
 		sound.update_gain(master * float(settings.values.effects_volume), master * float(settings.values.ambience_volume))
@@ -253,15 +256,19 @@ func save_settings() -> void:
 		hud.settings_feedback.text = settings_notice
 
 func open_settings() -> void:
+	if state == "settings": return
 	settings_return = state
-	settings_tab = "comfort"
+	settings_focus = hud.menu_buttons().find(get_viewport().gui_get_focus_owner())
+	settings_tab = "display"
 	show_menu("settings")
 
 func close_settings() -> void:
 	rebind_action = ""
 	show_menu(settings_return)
+	hud.restore_menu_focus.call_deferred(settings_focus, settings_return)
 
 func choose_settings_tab(tab: String) -> void:
+	if tab not in ["display", "audio", "keys", "controller"]: return
 	rebind_action = ""
 	settings_tab = tab
 	hud.show_menu("settings")
