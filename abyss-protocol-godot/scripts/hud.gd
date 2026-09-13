@@ -36,6 +36,7 @@ var dashboard: MarginContainer
 var loadout: Label
 var controls_hint: Label
 var settings_view
+var story_scene
 var settings_feedback: Label
 var save_notice: Label
 var tutorial: Label
@@ -813,6 +814,10 @@ func build_armory() -> void:
 
 func build_story() -> void:
 	dashboard.hide()
+	story_scene = null
+	if game.story_id in ["awakening", "calibration", "ending"]:
+		build_animated_story()
+		return
 	var beat: Dictionary = game.STORY.BEATS[game.story_id]
 	var column := VBoxContainer.new()
 	column.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -827,6 +832,74 @@ func build_story() -> void:
 	var proceed := button(beat.action, game.continue_story, true)
 	proceed.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	column.add_child(proceed)
+	proceed.grab_focus()
+
+func build_animated_story() -> void:
+	var beat: Dictionary = game.STORY.BEATS[game.story_id]
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 40)
+	menu_margin.add_child(row)
+	var artwork := VBoxContainer.new()
+	artwork.custom_minimum_size.x = 520
+	artwork.add_theme_constant_override("separation", 8)
+	row.add_child(artwork)
+	story_scene = preload("res://scripts/story_scene.gd").new()
+	story_scene.name = "StoryScene"
+	story_scene.beat = game.story_id
+	story_scene.motion_enabled = game.settings.values.story_motion
+	story_scene.auto_pause_enabled = game.auto_pause_enabled
+	story_scene.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	artwork.add_child(story_scene)
+	var playback := button("暂停", story_scene.toggle_playback)
+	playback.name = "StoryPlayback"
+	playback.custom_minimum_size = Vector2(132, 42)
+	playback.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	playback.flat = true
+	playback.expand_icon = true
+	playback.add_theme_constant_override("icon_max_width", 18)
+	playback.visible = story_scene.motion_enabled
+	artwork.add_child(playback)
+	var scene = story_scene
+	var refresh_playback := func():
+		var frame := 2 if scene.elapsed >= scene.DURATION else (1 if scene.paused else 0)
+		var icon := AtlasTexture.new()
+		icon.atlas = preload("res://assets/story/playback.svg")
+		icon.region = Rect2(frame * 48, 0, 48, 48)
+		playback.icon = icon
+		playback.text = ["暂停", "播放", "重播"][frame]
+		playback.tooltip_text = playback.text + "过场动画"
+	scene.playback_changed.connect(refresh_playback)
+	refresh_playback.call()
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_theme_constant_override("separation", 20)
+	row.add_child(column)
+	var title := label(beat.chapter, 34, Color("ece8d9"))
+	title.add_theme_font_override("font", DISPLAY_FONT)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(title)
+	var speaker := label(beat.speaker, 16, MINT)
+	speaker.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(speaker)
+	var scroll := ScrollContainer.new()
+	scroll.name = "StoryText"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.focus_mode = Control.FOCUS_ALL
+	column.add_child(scroll)
+	var body := label(beat.body, 21, Color("bfd1d4"))
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("line_spacing", 5)
+	scroll.add_child(body)
+	var proceed := button(beat.action, game.continue_story, true)
+	proceed.name = "StoryContinue"
+	column.add_child(proceed)
+	proceed.focus_neighbor_top = proceed.get_path_to(scroll)
+	scroll.focus_neighbor_bottom = scroll.get_path_to(proceed)
+	if playback.visible:
+		proceed.focus_neighbor_left = proceed.get_path_to(playback)
+		playback.focus_neighbor_right = playback.get_path_to(proceed)
 	proceed.grab_focus()
 
 func utility_column(title: String) -> VBoxContainer:
