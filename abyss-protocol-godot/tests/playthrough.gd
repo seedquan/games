@@ -83,6 +83,8 @@ func combat_input(player) -> void:
 	for danger in game.get_node("World/Projectiles").get_children():
 		if danger.get_script() == game.HAZARD and player.position.distance_to(danger.position) < danger.radius + 35:
 			Input.action_press(player.action("dash"))
+		elif danger.get_script() == game.GUARDIAN_ATTACK and not danger.fired and danger.delay - danger.elapsed < 0.23 and danger.contains_point(player.position):
+			Input.action_press(player.action("dash"))
 
 func record_room() -> void:
 	if visited_room != game.room:

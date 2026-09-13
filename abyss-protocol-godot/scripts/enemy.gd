@@ -6,7 +6,8 @@ const CORE = preload("res://assets/core.webp")
 const WARDEN = preload("res://assets/warden.webp")
 const MELEE_REACH := 105.0
 const MELEE_HALF_ANGLE := acos(0.1)
-const ATTACK_LABELS := {"ground": "地面锁定", "spread": "扇形齐射", "radial": "环形弹幕", "shot": "瞄准射击", "melee": "近身挥击", "cross": "十字交火"}
+const ATTACK_LABELS := {"ground": "地面锁定", "spread": "扇形齐射", "radial": "环形弹幕", "shot": "瞄准射击", "melee": "近身挥击", "cross": "十字交火",
+	"sweep": "盾阵横扫", "coolant": "冷凝封路", "lattice": "档案光栅", "heat_ring": "熔炉热环", "sequence": "协议重排"}
 
 var game
 var kind := "stalker"
@@ -178,7 +179,11 @@ func release_attack() -> void:
 	var upcoming := next_attack()
 	var directions := warning_shot_directions()
 	pattern += 1
-	if upcoming == "ground":
+	if upcoming in game.GUARDIAN_ATTACK.IDS:
+		var targets: Array = game.team().filter(func(member): return member.hp > 0)
+		for spec in game.GUARDIAN_ATTACK.placements(upcoming, global_position, committed_direction, targets):
+			game.spawn_guardian_attack(spec, damage)
+	elif upcoming == "ground":
 		for offset in [Vector2(-65, 0), Vector2(65, 0), Vector2(0, 110)]:
 			var target = game.nearest_player(global_position)
 			if is_instance_valid(target):
@@ -226,7 +231,11 @@ func melee_warning_points() -> PackedVector2Array:
 	return points
 
 func draw_attack_warning(color: Color) -> void:
-	if next_attack() == "melee":
+	if next_attack() in game.GUARDIAN_ATTACK.IDS:
+		# This is a preparation glyph; placed shapes receive their own full timer.
+		var index: int = game.GUARDIAN_ATTACK.IDS.find(next_attack())
+		draw_texture_rect_region(preload("res://assets/ui/boss_signatures.svg"), Rect2(-36, 78, 72, 72), Rect2(index * 64, 0, 64, 64))
+	elif next_attack() == "melee":
 		var points := melee_warning_points()
 		draw_colored_polygon(points, Color(color, 0.1))
 		points.append(Vector2.ZERO)

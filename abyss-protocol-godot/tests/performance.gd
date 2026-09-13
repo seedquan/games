@@ -5,6 +5,7 @@ extends SceneTree
 var game
 var cooperative := "--coop" in OS.get_cmdline_user_args()
 var expanded := "--expanded" in OS.get_cmdline_user_args()
+var guardians := "--guardians" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
 var samples: Array[float] = []
@@ -77,6 +78,10 @@ func run() -> void:
 			game.player.weapon.fire(1.0)
 		if i % 90 == 0:
 			game.spawn_hazard(game.player.position + Vector2(120, 20), 95, 22)
+		if guardians and i % 120 == 0:
+			var id: String = game.GUARDIAN_ATTACK.IDS[(i / 120) % 5]
+			for spec in game.GUARDIAN_ATTACK.placements(id, game.player.position - Vector2(180, 0), Vector2.RIGHT, game.team()):
+				game.spawn_guardian_attack(spec, 22)
 		await frame()
 		var now := Time.get_ticks_usec()
 		samples.append((now - previous) / 1000.0)
@@ -117,11 +122,11 @@ func run() -> void:
 	var p99 := samples[int(samples.size() * 0.99)]
 	check(p95 <= 25.0 and p99 <= 50.0, "Native stress frame pacing meets the local 60 Hz acceptance envelope")
 	var report := {"rendering_device": RenderingServer.get_video_adapter_name(), "os": OS.get_name(), "engine": Engine.get_version_info().string,
-		"cooperative": cooperative, "expanded_map": expanded, "resolution": "%dx%d" % [root.size.x, root.size.y], "screen_scale": DisplayServer.screen_get_scale(), "samples": samples.size(), "frame_ms_p50": p50, "frame_ms_p95": p95, "frame_ms_p99": p99,
+		"cooperative": cooperative, "expanded_map": expanded, "guardian_signatures": guardians, "resolution": "%dx%d" % [root.size.x, root.size.y], "screen_scale": DisplayServer.screen_get_scale(), "samples": samples.size(), "frame_ms_p50": p50, "frame_ms_p95": p95, "frame_ms_p99": p99,
 		"frame_ms_max": samples[-1], "peak_nodes": peak_nodes, "peak_projectiles": peak_projectiles,
 		"restart_cycles": 40, "orphan_baseline": orphan_baseline, "failures": failures}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://builds/qa"))
-	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "")
+	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "")
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()
