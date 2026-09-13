@@ -108,10 +108,26 @@ static func synergies(member) -> Array[String]:
 static func has_reaction(member) -> bool:
 	return member.game.campaign_version >= 2 and (["fire", "ice", "poison"].any(func(id): return member.enchantments.get(id, 0) > 0 or member.weapon.definition.get("element", "") == id))
 
-static func reaction_hint(id: String, version: int) -> String:
-	if version < 2: return ""
-	match id:
-		"fire": return "冰冻 + 火焰 → 范围热冲击"
-		"ice": return "冻结后接火焰 → 碎冰波及邻敌"
-		"poison": return "三层毒 + 火焰 → 范围爆燃"
-	return ""
+static func has_element(member, id: String) -> bool:
+	return member.enchantments.get(id, 0) > 0 or member.weapon.definition.get("element", "") == id
+
+static func reaction_hint(id: String, member, partner = null) -> String:
+	if member.game.campaign_version < 2 or id not in ["fire", "ice", "poison"]: return ""
+	# Preview the selected rune without applying it. Cooldowns and temporary
+	# downed states do not change which combinations this build supports.
+	var fire := has_element(member, "fire")
+	var peer: bool = is_instance_valid(partner) and partner != member and member.game.coop.enabled
+	var status := "已有联动" if has_element(member, id) else "选后可用"
+	if id == "fire":
+		if has_element(member, "poison"):
+			return status + " · 热冲击 / 爆燃\n冻结或三层毒 → 火焰引爆"
+		if peer and has_element(partner, "poison"):
+			return status + " · 热冲击 / 接力爆燃\n新星冻结或队友叠三层毒 → 火焰"
+		return status + " · 热冲击\n" + ("冰霜冻结" if has_element(member, "ice") else "冰冻新星") + " → 火焰"
+	var reaction := "热冲击" if id == "ice" else "毒素爆燃"
+	var setup := "冰霜冻结" if id == "ice" else "三层毒"
+	if fire:
+		return status + " · " + reaction + "\n" + setup + " → 火焰引爆"
+	if peer and has_element(partner, "fire"):
+		return "队友接力 · " + reaction + "\n" + setup + " → 队友火焰"
+	return "还缺火焰 · " + reaction + "\n" + setup + "后需火焰命中"

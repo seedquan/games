@@ -355,11 +355,7 @@ func show_menu(kind: String) -> void:
 		content.add_child(choices)
 		for i in range(game.boon_choices.size()):
 			var boon: Dictionary = game.boon_choices[i]
-			var details: String = upgrade_details(boon, game.player)
-			if game.coop.enabled:
-				var partner_details: String = upgrade_details(boon, game.companion)
-				if partner_details != details:
-					details = "一号席：" + details + "\n二号席：" + partner_details
+			var details: String = team_upgrade_details(boon)
 			var option := button("%d / %s\n\n%s\n\n%s" % [i + 1, boon.tag, boon.name, details], game.choose_boon.bind(i))
 			option.tooltip_text = option.text
 			if "accessibility_name" in option: option.set("accessibility_name", option.text)
@@ -378,6 +374,9 @@ func show_menu(kind: String) -> void:
 			option.add_theme_stylebox_override("hover_pressed", pressed_card)
 			choices.add_child(option)
 			var inset := margin(option, 22)
+			# A Button does not inherit the minimum size of its child labels.
+			# Include wrapped per-seat text so it cannot spill past the card.
+			inset.minimum_size_changed.connect(func(): option.custom_minimum_size.y = maxf(360 if game.coop.enabled else 260, inset.get_combined_minimum_size().y))
 			var card_content := VBoxContainer.new()
 			card_content.alignment = BoxContainer.ALIGNMENT_CENTER
 			card_content.add_theme_constant_override("separation", 14)
@@ -635,11 +634,7 @@ func build_progress_menu(kind: String) -> void:
 			var price: String = "已购完" if item.id in game.purchased else "%d 份废料" % item.cost
 			var description: String = ("全队：" if game.coop.enabled else "") + item.description
 			if game.campaign_version >= 2 and item.id != "repair":
-				description = upgrade_details({"stat": item.id}, game.player)
-				if game.coop.enabled:
-					var partner_details := upgrade_details({"stat": item.id}, game.companion)
-					if partner_details != description:
-						description = "一号：" + description + "\n二号：" + partner_details
+				description = team_upgrade_details({"stat": item.id})
 			var option := button("%d / %s\n\n%s\n\n%s" % [i + 1, item.name, description, price], game.buy_item.bind(i))
 			option.custom_minimum_size = Vector2(380, 200)
 			option.add_theme_font_size_override("font_size", 14)
@@ -656,7 +651,27 @@ func build_progress_menu(kind: String) -> void:
 		depart.grab_focus()
 	add_build_button(column)
 
-func upgrade_details(boon: Dictionary, member) -> String:
+func team_upgrade_details(boon: Dictionary) -> String:
+	var first := upgrade_details(boon, game.player, false)
+	var first_hint := upgrade_reaction(boon, game.player)
+	if not game.coop.enabled or not is_instance_valid(game.companion):
+		return first + ("\n" + first_hint if not first_hint.is_empty() else "")
+	var second := upgrade_details(boon, game.companion, false)
+	var second_hint := upgrade_reaction(boon, game.companion)
+	# Shared numbers or recipes need only one copy. Keep seat labels wherever
+	# the same shared choice has a different benefit on each weapon.
+	if first_hint == second_hint:
+		var numbers := first if first == second else "一号席：" + first + "\n二号席：" + second
+		return numbers + ("\n" + first_hint if not first_hint.is_empty() else "")
+	if first == second:
+		return "全队：" + first + "\n一号席：" + first_hint + "\n二号席：" + second_hint
+	return "一号席：" + first + "\n" + first_hint + "\n二号席：" + second + "\n" + second_hint
+
+func upgrade_reaction(boon: Dictionary, member) -> String:
+	var partner = (game.companion if member == game.player else game.player) if game.coop.enabled else null
+	return game.BUILD_INFO.reaction_hint(boon.stat, member, partner)
+
+func upgrade_details(boon: Dictionary, member, include_reaction := true) -> String:
 	var details: String = game.PROGRESSION.describe(boon, member, game.campaign_version)
 	if boon.stat in ["damage", "tuning"]:
 		var changes: Dictionary = game.PROGRESSION.effects(boon, member, game.campaign_version)
@@ -667,7 +682,7 @@ func upgrade_details(boon: Dictionary, member) -> String:
 		var innate: bool = member.weapon.definition.get("element", "") == boon.stat
 		var prefix := "符文 %d → %d 级" % [rank, next] if rank < 3 else "符文已满级"
 		if innate: prefix += " · 武器自带同元素"
-		var hint: String = game.BUILD_INFO.reaction_hint(boon.stat, game.campaign_version)
+		var hint: String = upgrade_reaction(boon, member) if include_reaction else ""
 		return prefix + "\n" + game.BUILD_INFO.rune_comparison(boon.stat, rank, innate, game.campaign_version) + ("\n" + hint if not hint.is_empty() else "")
 	return details
 

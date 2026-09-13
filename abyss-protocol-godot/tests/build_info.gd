@@ -83,6 +83,49 @@ func element_cases() -> void:
 	game.campaign_version = 1
 	check(not INFO.synergies(game.player).any(func(text): return "范围" in text), "Legacy descriptions do not promise area reactions")
 
+func reaction_hint_cases() -> void:
+	await reset_case()
+	game.campaign_version = 2
+	var saved := var_to_bytes([game.player.enchantments, game.player.damage, game.rng.state, game.profile.checkpoint])
+	var poison: String = game.hud.upgrade_details(game.PROGRESSION.rune("poison"), game.player)
+	check("还缺火焰" in poison, "A plain weapon's poison reward must name the missing fire source")
+	check("选后可用" in game.hud.upgrade_details(game.PROGRESSION.rune("fire"), game.player), "Every weapon can combine a new fire rune with its shared nova")
+	check("冰冻新星" in game.hud.upgrade_details(game.PROGRESSION.rune("fire"), game.player), "Fire card explains the freeze skill already available")
+	check(saved == var_to_bytes([game.player.enchantments, game.player.damage, game.rng.state, game.profile.checkpoint]), "Choice preview cannot apply runes, change damage, roll RNG or touch checkpoint")
+	game.player.weapon.equip("ember")
+	check("选后可用" in game.hud.upgrade_details(game.PROGRESSION.rune("poison"), game.player), "Innate fire makes the first poison rune usable immediately")
+	check("选后可用" in game.hud.upgrade_details(game.PROGRESSION.rune("ice"), game.player), "Innate fire supports the new primary-weapon freeze combo")
+	game.player.enchantments = {"poison": 3}
+	var capped: String = game.hud.upgrade_details(game.PROGRESSION.rune("poison"), game.player)
+	check("已有联动" in capped and "符文已满级" in capped and not "选后可用" in capped, "A capped rune describes an existing combination, not a newly gained one")
+	game.player.weapon.equip("frost")
+	game.player.enchantments = {}
+	check("冰霜冻结" in game.hud.upgrade_details(game.PROGRESSION.rune("fire"), game.player), "Innate frost is included in the fire recipe")
+	game.player.enchantments = {"fire": 1}
+	check("已有联动" in game.hud.upgrade_details(game.PROGRESSION.rune("ice"), game.player), "Innate ice already supports the rune fire combination")
+	game.coop.enabled = true
+	game.coop.devices.assign([3, 7])
+	game.coop.weapons.assign(["frost", "ember"])
+	game.start_run(921)
+	game.encounter.cancel()
+	game.player.set_physics_process(false)
+	game.companion.set_physics_process(false)
+	await frames()
+	var first: String = game.hud.upgrade_details(game.PROGRESSION.rune("poison"), game.player)
+	var second: String = game.hud.upgrade_details(game.PROGRESSION.rune("poison"), game.companion)
+	check("队友接力" in first and "队友火焰" in first, "Frost seat knows its partner can ignite its poison")
+	check("选后可用" in second and not "队友接力" in second, "Fire seat sees its own combo for the same shared reward")
+	game.companion.weapon.equip("rifle")
+	check("还缺火焰" in game.hud.upgrade_details(game.PROGRESSION.rune("ice"), game.player), "Another player is not automatically a source of fire")
+	game.companion.enchantments = {"fire": 1}
+	check("队友接力" in game.hud.upgrade_details(game.PROGRESSION.rune("ice"), game.player), "A partner rune also enables the relay")
+	game.coop.enabled = false
+	check("还缺火焰" in game.hud.upgrade_details(game.PROGRESSION.rune("ice"), game.player), "Disabled co-op never advertises a stale partner")
+	game.campaign_version = 1
+	for id in ["fire", "ice", "poison"]:
+		var legacy: String = game.hud.upgrade_details(game.PROGRESSION.rune(id), game.player)
+		check(not "选后可用" in legacy and not "队友接力" in legacy and not "范围" in legacy, "Legacy cards retain their original rules: " + id)
+
 func run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
 	game.persistence_enabled = false
@@ -93,6 +136,7 @@ func run() -> void:
 	game.muted = true
 	await damage_cases()
 	await element_cases()
+	await reaction_hint_cases()
 	game.queue_free()
 	await frames()
 	print("ABYSS BUILD INFO: %d checks, %d failures" % [checks, failures])
