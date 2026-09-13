@@ -182,7 +182,7 @@ python3 export_macos.py --rendered
 Windows 存档位于 `%APPDATA%\Godot\app_userdata\深渊协议\`；更新时解压新版本不会覆盖此目录。
 包内 `游玩说明.txt` 提供操作、更新、显卡兼容和验证说明，`ThirdPartyNotices.txt` 包含引擎、第三方库及字体许可。
 
-本地已生成 **0.12.0** Windows x64 包，与 Mac 使用相同内容；Wine 无界面和窗口战役/续档检查通过。交付设备目前不可达，**0.12.0 尚未传送到 Games**。本版验收附件仍将报告 ZIP 直接写到 Games 根目录。
+本地已生成 **0.13.0** Windows x64 包，与 Mac 使用相同内容；Wine 无界面和窗口战役/续档检查通过。交付设备目前不可达，**0.13.0 尚未传送到 Games**。本版验收附件仍将报告 ZIP 直接写到 Games 根目录。
 
 Windows 共享交付目录为 `smb://Rog-xx/Games`。2026-09-12 已将 **0.11.1** 交付到
 `深渊协议-0.11.1-Windows-x64/深渊协议 0.11.1/`，在 Windows 打开目录中的 `AbyssProtocol.exe` 即可。
