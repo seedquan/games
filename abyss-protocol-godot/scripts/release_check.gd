@@ -109,6 +109,7 @@ func run() -> void:
 	check(game.story_seen.size() == 6, "all story assets")
 	check(game.profile.checkpoint.is_empty(), "completed run invalidates checkpoint")
 	await countershot_release()
+	await frost_conduction_release()
 	game.start_run(5820)
 	game.continue_story()
 	game.player.invulnerable = 0
@@ -159,6 +160,36 @@ func countershot_release() -> void:
 	game.player.slash_cooldown = 0
 	game.player.weapon.fire()
 	check(target.hp == prior_hp, "packed thrust preserves a gap beyond its outer corner")
+
+func frost_conduction_release() -> void:
+	game.start_run(5822)
+	game.continue_story()
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	game.player.set_physics_process(false)
+	game.player.position = Vector2(800, 650)
+	game.player.aim = Vector2.RIGHT
+	game.player.weapon.equip("rifle")
+	game.player.enchantments = {"shock": 1}
+	var targets := []
+	for point in [Vector2(900, 650), Vector2(1000, 700), Vector2(950, 790), Vector2(1100, 630)]:
+		var enemy = game.spawn_enemy("stalker", point)
+		enemy.set_physics_process(false)
+		enemy.hp = 10000
+		enemy.max_hp = 10000
+		targets.append(enemy)
+	targets[0].freeze_for(1.8)
+	game.player.weapon.fire()
+	for i in range(15): await frame()
+	check(targets[0].hp < 10000 and targets[0].ice_frozen_left > 0 and targets[1].hp < 10000 and targets[2].hp < 10000 and targets[3].hp == 10000, "packed electric weapon conducts to two neighbours without consuming freeze")
+	check(game.get_node("World/Effects").get_children().any(func(n): return n.get_script() == game.EFFECT and n.reaction == "conduction" and n.links.size() == 2), "packed frost conduction renders its actual two links")
+	game.open_help()
+	await frame()
+	var guide = game.hud.menu_margin.find_child("ConductionGuide", true, false)
+	check(is_instance_valid(guide) and guide.texture.atlas.get_height() == 216, "packed guide contains the three-recipe SVG atlas")
 
 func clear_encounter() -> void:
 	# State verification applies damage directly, but the packaged encounter must
