@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="144" viewBox="0 0 480 144">
+  <defs>
+    <g id="fire" fill="none" stroke="#edb875" stroke-width="2.5" stroke-linejoin="round">
+      <path d="M0-20C-1-8-15-5-13 7C-12 20 13 22 15 7C16 0 10-6 8-9C8 0 3 2 3 2C5-7 1-14 0-20Z"/>
+      <path d="M0 4C-9 15 7 19 7 10C7 7 3 5 3 2"/>
+    </g>
+    <g id="plus" stroke="#6b7e82" stroke-width="2"><path d="M-5 0H5M0-5V5"/></g>
+    <g id="arrow" fill="none" stroke="#a9bab6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M-14 0H14L7-7M14 0L7 7"/></g>
+    <g id="enemy" fill="#233239" stroke="#95a6a1" stroke-width="1.7"><path d="M-7-9H7L11 0L7 9H-7L-11 0Z"/><path d="M-4-2H4M-3 3H3"/></g>
+  </defs>
+  <path d="M12 72H468" stroke="#34494e"/>
+  <g transform="translate(42 35)" stroke="#9bd9ed" stroke-width="2.5" stroke-linecap="round">
+    <path d="M-18 0H18M-9-16L9 16M9-16L-9 16M-13-5L-8 0L-13 5M13-5L8 0L13 5M-10-7L-4-7L-2-13M10 7L4 7L2 13M-2 13L-4 7L-10 7M2-13L4-7L10-7"/>
+  </g>
+  <use href="#plus" transform="translate(88 35)"/>
+  <use href="#fire" transform="translate(130 35)"/>
+  <use href="#arrow" transform="translate(184 35)"/>
+  <g transform="translate(248 35)" fill="none" stroke="#9bd9ed" stroke-width="2">
+    <circle r="28" stroke-opacity=".45"/>
+    <path d="M0-24L4-11L0-5L-4-11ZM24 0L11 4L5 0L11-4ZM0 24L-4 11L0 5L4 11ZM-24 0L-11-4L-5 0L-11 4Z"/>
+  </g>
+  <path d="M287 35H314M307 29L314 35L307 41" fill="none" stroke="#9bd9ed" stroke-width="2"/>
+  <use href="#enemy" transform="translate(345 35)"/>
+  <use href="#enemy" transform="translate(393 20)"/>
+  <use href="#enemy" transform="translate(429 45)"/>
+  <g transform="translate(42 108)" fill="#b7cd84" fill-opacity=".14" stroke="#b7cd84" stroke-width="2">
+    <path d="M-14-14C-16-9-22-5-22 0A8 8 0 0 0-6 0C-6-5-12-9-14-14Z"/>
+    <path d="M3-20C1-15-5-11-5-6A8 8 0 0 0 11-6C11-11 5-15 3-20Z"/>
+    <path d="M15-5C13 0 7 4 7 9A8 8 0 0 0 23 9C23 4 17 0 15-5Z"/>
+  </g>
+  <use href="#plus" transform="translate(88 108)"/>
+  <use href="#fire" transform="translate(130 108)"/>
+  <use href="#arrow" transform="translate(184 108)"/>
+  <g transform="translate(248 108)" fill="none" stroke="#b7cd84" stroke-width="2">
+    <circle r="28" stroke-opacity=".45"/>
+    <path d="M0-23L6-9L20-14L13 0L23 8L8 10L0 24L-6 10L-22 12L-12 0L-21-14L-6-9Z"/>
+    <circle r="5" fill="#edb875" stroke="none"/>
+  </g>
+  <path d="M287 108H314M307 102L314 108L307 114" fill="none" stroke="#b7cd84" stroke-width="2"/>
+  <use href="#enemy" transform="translate(345 108)"/>
+  <use href="#enemy" transform="translate(393 93)"/>
+  <use href="#enemy" transform="translate(429 118)"/>
+</svg>

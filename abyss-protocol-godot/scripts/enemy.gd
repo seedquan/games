@@ -265,23 +265,15 @@ func take_damage(amount: float, force: Vector2) -> void:
 
 func apply_element(element: String, power: float, level := 1) -> void:
 	if dead:
+		# A lethal fire hit can still detonate the states already on its target.
+		if element == "fire" and game.campaign_version >= 2:
+			fire_reactions(power)
 		return
 	match element:
 		"fire":
 			burn_left = 2.5
 			burn_damage = maxf(burn_damage, power * 0.12)
-			if ice_frozen_left > 0.0:
-				frozen = 0.0
-				ice_frozen_left = 0.0
-				take_damage(power * 0.7, Vector2.ZERO)
-				game.announce("热冲击", Color("ffb86b"))
-			if poison_stacks > 0:
-				var burst := poison_stacks * power * 0.18
-				poison_stacks = 0
-				poison_left = 0.0
-				take_damage(burst, Vector2.ZERO)
-				game.effect(position, Color("ffd27a"), 70.0)
-				game.announce("毒素爆燃", Color("b9df7b"))
+			fire_reactions(power)
 		"ice":
 			chill_left = 3.0
 			chill_stacks += 1
@@ -305,6 +297,36 @@ func apply_element(element: String, power: float, level := 1) -> void:
 				shock_guard = 0.8
 				if game.campaign_version >= 2 and level > 1:
 					take_damage(power * game.PROGRESSION.shock_fraction(level), Vector2.ZERO)
+
+func fire_reactions(power: float) -> void:
+	var modern: bool = game.campaign_version >= 2
+	if ice_frozen_left > 0.0:
+		# Consume before applying damage. Splash uses direct damage, so it cannot
+		# recursively detonate neighbours or multiply elemental/leech procs.
+		frozen = 0.0
+		ice_frozen_left = 0.0
+		reaction_burst(power * 0.7, 150.0 if modern else 0.0, "thermal")
+	if poison_stacks >= (3 if modern else 1):
+		var burst := poison_stacks * power * 0.18
+		poison_stacks = 0
+		poison_left = 0.0
+		if modern: poison_damage = 0.0
+		reaction_burst(burst, 185.0 if modern else 0.0, "combustion")
+
+func reaction_burst(amount: float, reach: float, reaction: String) -> void:
+	var origin := global_position
+	var color := Color("a0e4ff") if reaction == "thermal" else Color("b9df7b")
+	take_damage(amount, Vector2.ZERO)
+	if reach > 0.0:
+		for enemy in get_tree().get_nodes_in_group("enemies"):
+			if enemy == self or enemy.dead:
+				continue
+			if origin.distance_to(enemy.global_position) <= reach and game.has_sight(origin, enemy.global_position):
+				enemy.take_damage(amount, Vector2.ZERO)
+		game.reaction_effect(origin, color, reach, reaction)
+	elif reaction == "combustion":
+		game.effect(origin, Color("ffd27a"), 70.0)
+	game.announce("热冲击" if reaction == "thermal" else "毒素爆燃", color)
 
 func freeze_for(duration: float) -> void:
 	frozen = maxf(frozen, duration)

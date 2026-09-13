@@ -91,10 +91,26 @@ static func synergies(member) -> Array[String]:
 	var innate: String = member.weapon.definition.get("element", "")
 	if not innate.is_empty(): active[innate] = 1
 	var result: Array[String] = []
+	var modern: bool = member.game.campaign_version >= 2
 	if active.get("fire", 0) > 0:
 		# Every build can freeze with its shared nova, even without an ice rune.
-		result.append("热冲击：先用冰冻新星或冰霜冻结，再用火焰命中，解除冻结并造成额外伤害。")
+		result.append("热冲击：冻结后接火焰。解除冻结，范围 150，额外造成 70% 火焰命中伤害。" if modern else "热冲击：先用冰冻新星或冰霜冻结，再用火焰命中，解除冻结并造成额外伤害。")
 		if active.get("poison", 0) > 0:
-			result.append("毒素爆燃：火焰命中会消耗目标已有毒层，层数越多，爆燃越强。")
+			result.append("毒素爆燃：至少三层毒后接火焰。消耗毒层，范围 185，每层造成 18% 火焰命中伤害。" if modern else "毒素爆燃：火焰命中会消耗目标已有毒层，层数越多，爆燃越强。")
+	elif modern and (active.get("ice", 0) > 0 or active.get("poison", 0) > 0):
+		result.append("联动机会：获得火焰，或让火焰队友引爆你冻结、叠毒的敌人。冻结触发热冲击，三层以上毒素触发爆燃。")
+	if modern and active.get("fire", 0) > 0:
+		result.append("队友可接力，引力井可先聚怪。爆发不伤友方，实体掩体可阻挡。")
 	if result.is_empty(): result.append("完美闪避与成功弹反可短暂提高主武器伤害 50%。抓住敌人攻击前摇反击。")
 	return result
+
+static func has_reaction(member) -> bool:
+	return member.game.campaign_version >= 2 and (["fire", "ice", "poison"].any(func(id): return member.enchantments.get(id, 0) > 0 or member.weapon.definition.get("element", "") == id))
+
+static func reaction_hint(id: String, version: int) -> String:
+	if version < 2: return ""
+	match id:
+		"fire": return "冰冻 + 火焰 → 范围热冲击"
+		"ice": return "冻结后接火焰 → 碎冰波及邻敌"
+		"poison": return "三层毒 + 火焰 → 范围爆燃"
+	return ""

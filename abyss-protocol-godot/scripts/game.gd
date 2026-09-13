@@ -945,6 +945,16 @@ func effect(point: Vector2, color: Color, radius: float, duration := 0.4) -> voi
 	ring.duration = duration
 	$World/Effects.add_child(ring)
 
+func reaction_effect(point: Vector2, color: Color, radius: float, reaction: String) -> void:
+	var burst = EFFECT.new()
+	burst.position = point
+	burst.color = color
+	burst.radius = radius
+	burst.duration = 0.55
+	burst.reaction = reaction
+	burst.intensity = float(settings.values.flash)
+	$World/Effects.add_child(burst)
+
 func play_tone(frequency: float, duration: float, volume: float) -> void:
 	if not muted and is_instance_valid(sound):
 		sound.play_tone(frequency, duration, volume)

@@ -52,7 +52,8 @@ def main():
                           ("level_design", "ABYSS LEVEL DESIGN"), ("campaign_expansion", "ABYSS EXPANSION"),
                           ("legacy_campaign", "ABYSS LEGACY CAMPAIGN"), ("balance", "ABYSS BALANCE"),
                           ("reward_checkpoints", "ABYSS REWARD CHECKPOINTS"), ("map_art", "ABYSS MAP ART"),
-                          ("build_info", "ABYSS BUILD INFO"), ("build_menu", "ABYSS BUILD MENU"), ("settings_menu", "ABYSS SETTINGS MENU"), ("encounter_pacing", "ABYSS ENCOUNTER PACING")]:
+                          ("build_info", "ABYSS BUILD INFO"), ("build_menu", "ABYSS BUILD MENU"), ("settings_menu", "ABYSS SETTINGS MENU"), ("encounter_pacing", "ABYSS ENCOUNTER PACING"),
+                          ("element_reactions", "ABYSS ELEMENT REACTIONS")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1
     return 0
