@@ -91,7 +91,7 @@ def main():
     version = re.search(r'config/version="([0-9.]+)"', (ROOT / "project.godot").read_text(encoding="utf-8"))[1]
     if not args.skip_checks:
         print(run([sys.executable, str(ROOT / "verify.py")], timeout=420), end="", flush=True)
-    notices = run(COMMAND + ["--headless", "--script", "res://tools/export_notices.gd"])
+    notices = run(COMMAND + ["--audio-driver", "Dummy", "--headless", "--script", "res://tools/export_notices.gd"])
     if "ABYSS NOTICES: complete" not in notices:
         raise RuntimeError("Engine and font attribution generation did not finish")
     output = ROOT / "builds" / f"深渊协议-{version}-Windows-x64.zip"
@@ -101,7 +101,7 @@ def main():
         package = Path(temporary) / f"深渊协议 {version}"
         package.mkdir()
         executable = package / "AbyssProtocol.exe"
-        log = run(COMMAND + ["--headless", "--export-release", "Windows Desktop", str(executable)])
+        log = run(COMMAND + ["--audio-driver", "Dummy", "--headless", "--export-release", "Windows Desktop", str(executable)])
         (ROOT / "builds/qa").mkdir(exist_ok=True)
         (ROOT / "builds/qa/windows-export.log").write_text(log, encoding="utf-8")
         if re.search(r"Storing File: res://(?:tests|tools|builds|docs)/", log):

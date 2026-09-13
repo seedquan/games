@@ -37,13 +37,13 @@ def main():
     (ROOT / "builds/.gdignore").touch()
     if not args.skip_checks:
         print(run([sys.executable, str(ROOT / "verify.py")], timeout=420), end="")
-    notices = run([str(ROOT / "godot.sh"), "--headless", "--script", "res://tools/export_notices.gd"])
+    notices = run([str(ROOT / "godot.sh"), "--audio-driver", "Dummy", "--headless", "--script", "res://tools/export_notices.gd"])
     if "ABYSS NOTICES: complete" not in notices:
         raise RuntimeError("Engine and font attribution generation did not finish")
     version_match = re.search(r'application/short_version="([0-9.]+)"', (ROOT / "export_presets.cfg").read_text())
     app_version = version_match.group(1)
     output = ROOT / "builds" / f"深渊协议-{app_version}-macOS.zip"
-    run([str(ROOT / "godot.sh"), "--headless", "--export-release", "macOS", str(output)])
+    run([str(ROOT / "godot.sh"), "--audio-driver", "Dummy", "--headless", "--export-release", "macOS", str(output)])
     # Keep attributions beside the signed app without modifying its sealed bundle.
     with zipfile.ZipFile(output, "a", zipfile.ZIP_DEFLATED) as archive:
         archive.write(ROOT / "builds/ThirdPartyNotices.txt", "ThirdPartyNotices.txt")
