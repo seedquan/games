@@ -7,6 +7,7 @@ var cooperative := "--coop" in OS.get_cmdline_user_args()
 var expanded := "--expanded" in OS.get_cmdline_user_args()
 var guardians := "--guardians" in OS.get_cmdline_user_args()
 var melee := "--melee" in OS.get_cmdline_user_args()
+var poison := "--poison" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
 var samples: Array[float] = []
@@ -73,6 +74,8 @@ func run() -> void:
 	var peak_projectiles := 0
 	var peak_melee_traces := 0
 	var melee_frames := 0
+	var poison_frames := 0
+	var peak_poison_markers := 0
 	for i in range(900):
 		game.player.aim = Vector2.from_angle(i * 0.04)
 		if i % 45 == 0:
@@ -87,6 +90,14 @@ func run() -> void:
 				game.player.weapon.fire(1.0)
 		if i % 90 == 0:
 			game.spawn_hazard(game.player.position + Vector2(120, 20), 95, 22)
+			if poison:
+				# Refresh six-frame status art across the stress population. Zero
+				# poison power isolates its rendering cost from extra enemy deaths.
+				var index := 0
+				for enemy in get_nodes_in_group("enemies"):
+					enemy.poison_stacks = 0
+					for layer in range(index % 6 + 1): enemy.apply_element("poison", 0)
+					index += 1
 		if guardians and i % 120 == 0:
 			var id: String = game.GUARDIAN_ATTACK.IDS[(i / 120) % 5]
 			for spec in game.GUARDIAN_ATTACK.placements(id, game.player.position - Vector2(180, 0), Vector2.RIGHT, game.team()):
@@ -100,6 +111,13 @@ func run() -> void:
 		previous = now
 		peak_nodes = maxi(peak_nodes, get_node_count())
 		peak_projectiles = maxi(peak_projectiles, game.get_node("World/Projectiles").get_child_count())
+		if poison:
+			var visible_markers := 0
+			for enemy in get_nodes_in_group("enemies"):
+				var bounds: Rect2 = enemy.get_global_transform_with_canvas() * enemy.poison_marker_rect()
+				if enemy.poison_marker_level() > 0 and bounds.intersects(game.get_viewport_rect()): visible_markers += 1
+			peak_poison_markers = maxi(peak_poison_markers, visible_markers)
+			if visible_markers > 0: poison_frames += 1
 		if melee:
 			var count: int = game.get_node("World/Effects").get_children().filter(func(node): return node.get_script() == game.player.weapon.STROKE).size()
 			peak_melee_traces = maxi(peak_melee_traces, count)
@@ -109,6 +127,7 @@ func run() -> void:
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
 	check(game.sound.voices.size() == 12, "Stress retains the bounded audio pool")
 	if melee: check(melee_frames > 450 and peak_melee_traces >= 2, "Native stress renders overlapping melee feedback for both seats")
+	if poison: check(poison_frames > 450 and peak_poison_markers >= 6, "Native stress includes repeated frames with visible enemy status markers")
 	game.show_menu("paused")
 	game.abandon_to_title()
 	game.start_run(3102)
@@ -139,9 +158,10 @@ func run() -> void:
 		"cooperative": cooperative, "expanded_map": expanded, "guardian_signatures": guardians, "melee_weapons": melee, "resolution": "%dx%d" % [root.size.x, root.size.y], "screen_scale": DisplayServer.screen_get_scale(), "samples": samples.size(), "frame_ms_p50": p50, "frame_ms_p95": p95, "frame_ms_p99": p99,
 		"frame_ms_max": samples[-1], "peak_nodes": peak_nodes, "peak_projectiles": peak_projectiles,
 		"peak_melee_traces": peak_melee_traces, "frames_with_melee": melee_frames,
+		"poison_feedback": poison, "frames_with_poison": poison_frames, "peak_poison_markers": peak_poison_markers,
 		"restart_cycles": 40, "orphan_baseline": orphan_baseline, "failures": failures}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://builds/qa"))
-	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "")
+	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "") + ("-poison" if poison else "")
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

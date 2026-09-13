@@ -63,6 +63,8 @@ func run() -> void:
 	check(game.state == "paused", "packed overview closes safely")
 	game.open_help()
 	await frame()
+	var poison_guide = game.hud.menu_margin.find_child("PoisonGuide", true, false)
+	check(is_instance_valid(poison_guide) and poison_guide.texture.atlas.get_width() == 528, "packed poison status art and guide")
 	var diagram = game.hud.menu_margin.find_child("DefenseDemo", true, false)
 	check(is_instance_valid(diagram) and diagram.ART.get_width() == 192, "packed defense illustration is available")
 	var guide_time: float = game.elapsed

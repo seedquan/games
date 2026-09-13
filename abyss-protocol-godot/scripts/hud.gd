@@ -987,6 +987,25 @@ func build_help() -> void:
 		actions.add_child(label("慢动作图解 · 橙色爆区仍需移动或冲刺躲开", 16, MUTED))
 		defense_demo.playback_changed.connect(refresh_defense_demo)
 		refresh_defense_demo()
+		content.add_child(label("毒素 · 三层后接火焰", 23, MINT))
+		var poison_row := HBoxContainer.new()
+		poison_row.add_theme_constant_override("separation", 24)
+		content.add_child(poison_row)
+		var poison_icon := TextureRect.new()
+		poison_icon.name = "PoisonGuide"
+		var poison_texture := AtlasTexture.new()
+		poison_texture.atlas = preload("res://assets/ui/poison_meter.svg")
+		poison_texture.region = Rect2(176, 0, 88, 24)
+		poison_icon.texture = poison_texture
+		poison_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		poison_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		poison_icon.custom_minimum_size = Vector2(176, 48)
+		poison_row.add_child(poison_icon)
+		var poison_tip := label("敌人头顶每格是一层毒，前三格填满后，火焰图标表示毒素已可引爆。\n再接自己或队友的火焰武器／符文命中，产生范围爆燃；层数越多，爆燃越强。", 20, Color("bfd1d4"))
+		poison_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		poison_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		poison_tip.focus_mode = Control.FOCUS_ALL
+		poison_row.add_child(poison_tip)
 	content.add_child(preload("res://scripts/danger_guide.gd").new())
 	var counter_tip := "\n成功弹反会将一枚弹丸沿来路返还，可触发主武器元素与符文。" if game.campaign_version >= 2 else ""
 	for section in [

@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="528" height="24" viewBox="0 0 528 24">
+<!-- Six live poison counts. A divider marks the three-stack ignition threshold; the flame appears only at or above it. -->
+<g transform="translate(0 0)">
+<rect x=".75" y=".75" width="86.5" height="22.5" rx="2" fill="#0c171c" stroke="#597075" stroke-width="1.5"/>
+<path d="M10 5C8 8 5 11 5 14a5 5 0 0 0 10 0c0-3-3-6-5-9Z" fill="#b9df7b"/>
+<rect x="20" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="27" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="34" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="45" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="52" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="59" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<path d="M42 5v14" stroke="#859890" stroke-width="1"/>
+</g>
+<g transform="translate(88 0)">
+<rect x=".75" y=".75" width="86.5" height="22.5" rx="2" fill="#0c171c" stroke="#597075" stroke-width="1.5"/>
+<path d="M10 5C8 8 5 11 5 14a5 5 0 0 0 10 0c0-3-3-6-5-9Z" fill="#b9df7b"/>
+<rect x="20" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="27" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="34" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="45" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="52" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="59" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<path d="M42 5v14" stroke="#859890" stroke-width="1"/>
+</g>
+<g transform="translate(176 0)">
+<rect x=".75" y=".75" width="86.5" height="22.5" rx="2" fill="#0c171c" stroke="#597075" stroke-width="1.5"/>
+<path d="M10 5C8 8 5 11 5 14a5 5 0 0 0 10 0c0-3-3-6-5-9Z" fill="#b9df7b"/>
+<rect x="20" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="27" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="34" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="45" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="52" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="59" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<path d="M42 5v14" stroke="#859890" stroke-width="1"/>
+<path d="M76 4c0 5-7 6-7 11a7 7 0 0 0 14 0c0-3-3-5-3-6 0 3-2 4-3 4 2-4 0-7-1-9Z" fill="#f1c58d"/>
+</g>
+<g transform="translate(264 0)">
+<rect x=".75" y=".75" width="86.5" height="22.5" rx="2" fill="#0c171c" stroke="#597075" stroke-width="1.5"/>
+<path d="M10 5C8 8 5 11 5 14a5 5 0 0 0 10 0c0-3-3-6-5-9Z" fill="#b9df7b"/>
+<rect x="20" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="27" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="34" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="45" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="52" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<rect x="59" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<path d="M42 5v14" stroke="#859890" stroke-width="1"/>
+<path d="M76 4c0 5-7 6-7 11a7 7 0 0 0 14 0c0-3-3-5-3-6 0 3-2 4-3 4 2-4 0-7-1-9Z" fill="#f1c58d"/>
+</g>
+<g transform="translate(352 0)">
+<rect x=".75" y=".75" width="86.5" height="22.5" rx="2" fill="#0c171c" stroke="#597075" stroke-width="1.5"/>
+<path d="M10 5C8 8 5 11 5 14a5 5 0 0 0 10 0c0-3-3-6-5-9Z" fill="#b9df7b"/>
+<rect x="20" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="27" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="34" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="45" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="52" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="59" y="8" width="5" height="8" fill="#203037" stroke="#91a49d" stroke-width=".7"/>
+<path d="M42 5v14" stroke="#859890" stroke-width="1"/>
+<path d="M76 4c0 5-7 6-7 11a7 7 0 0 0 14 0c0-3-3-5-3-6 0 3-2 4-3 4 2-4 0-7-1-9Z" fill="#f1c58d"/>
+</g>
+<g transform="translate(440 0)">
+<rect x=".75" y=".75" width="86.5" height="22.5" rx="2" fill="#0c171c" stroke="#597075" stroke-width="1.5"/>
+<path d="M10 5C8 8 5 11 5 14a5 5 0 0 0 10 0c0-3-3-6-5-9Z" fill="#b9df7b"/>
+<rect x="20" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="27" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="34" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="45" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="52" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<rect x="59" y="8" width="5" height="8" fill="#d4edaa" stroke="#91a49d" stroke-width=".7"/>
+<path d="M42 5v14" stroke="#859890" stroke-width="1"/>
+<path d="M76 4c0 5-7 6-7 11a7 7 0 0 0 14 0c0-3-3-5-3-6 0 3-2 4-3 4 2-4 0-7-1-9Z" fill="#f1c58d"/>
+</g>
+</svg>
