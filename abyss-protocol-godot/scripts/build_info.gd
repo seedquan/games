@@ -102,6 +102,7 @@ static func synergies(member) -> Array[String]:
 	if modern and active.get("fire", 0) > 0:
 		result.append("队友可接力，引力井可先聚怪。爆发不伤友方，实体掩体可阻挡。")
 	if result.is_empty(): result.append("完美闪避与成功弹反可短暂提高主武器伤害 50%。抓住敌人攻击前摇反击。")
+	if modern: result.append("弹反返弹：沿来路反射，伤害不低于 %.1f；可触发主武器元素与符文。" % member.damage)
 	return result
 
 static func has_reaction(member) -> bool:

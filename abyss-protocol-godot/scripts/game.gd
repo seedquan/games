@@ -59,6 +59,7 @@ var persistence_enabled := DisplayServer.get_name() != "headless"
 var verification_directory := ""
 var verification_stage := ""
 var rng := RandomNumberGenerator.new()
+var visual_rng := RandomNumberGenerator.new()
 var run_seed := 0
 var scrap := 0
 var earned_cores := 0
@@ -361,7 +362,7 @@ func _process(delta: float) -> void:
 			coop.frame_camera(delta)
 			coop.tick(delta)
 		shake = maxf(0.0, shake - delta * 30.0)
-		camera.offset = Vector2(randf_range(-shake, shake), randf_range(-shake, shake)) * float(settings.values.shake)
+		camera.offset = Vector2(visual_rng.randf_range(-shake, shake), visual_rng.randf_range(-shake, shake)) * float(settings.values.shake)
 		if clear_pending:
 			clear_pending = false
 			complete_room()

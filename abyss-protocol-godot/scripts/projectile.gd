@@ -19,6 +19,7 @@ var returning := false
 var hit_ids: Array[int] = []
 var excluded: Array[RID] = []
 var visual_offset := Vector2.ZERO
+var reflected := false
 
 func configure(options: Dictionary) -> void:
 	visual = options.get("visual", "plasma")
@@ -75,8 +76,9 @@ func _physics_process(delta: float) -> void:
 			break
 		global_position = hit.position
 		var was_returning := returning
+		var previous_direction := direction
 		_on_body_entered(hit.collider)
-		if spent or (returning and not was_returning):
+		if spent or (returning and not was_returning) or not direction.is_equal_approx(previous_direction):
 			break
 		global_position += direction * 0.1
 	queue_redraw()
@@ -97,11 +99,18 @@ func _on_body_entered(body: Node2D) -> void:
 		return
 	if not body.has_method("take_damage"):
 		return
+	# A deferred mask change may leave queued callbacks from the incoming shot.
+	if not hostile and body.is_in_group("player"):
+		return
 	hit_ids.append(body.get_instance_id())
 	if body is CollisionObject2D:
 		excluded.append(body.get_rid())
 	if hostile:
+		var countering: bool = game.campaign_version >= 2 and body.is_in_group("player") and body.parry_left > 0.0
 		body.take_damage(damage, global_position - direction * 20.0)
+		if countering:
+			reflect_from(body)
+			return
 	elif is_instance_valid(shooter):
 		shooter.weapon_hit(body, damage, direction * 100.0, element)
 	else:
@@ -111,6 +120,30 @@ func _on_body_entered(body: Node2D) -> void:
 		pierce_remaining -= 1
 	else:
 		finish_impact()
+
+func reflect_from(defender: Node2D) -> void:
+	# Reuse the incoming projectile: no overlapping duplicates or spawn teleport.
+	# Its visual offset remains fixed so the visible turn happens at contact.
+	hostile = false
+	reflected = true
+	shooter = defender
+	direction = -direction
+	rotation = direction.angle()
+	damage = maxf(damage, defender.damage)
+	speed = maxf(620.0, speed * 1.8)
+	life = 1.25
+	flight_elapsed = 0.0
+	visual = "countershot"
+	tint = Color("e8c17a")
+	element = defender.weapon.definition.get("element", "")
+	explosion = 0.0
+	pierce_remaining = 0
+	hit_ids.clear()
+	excluded.clear()
+	# Area2D callbacks can arrive while physics is flushing contact queries.
+	set_deferred("collision_mask", 5)
+	game.effect(global_position + visual_offset, tint, 22.0, 0.18)
+	queue_redraw()
 
 func finish_impact() -> void:
 	if spent:
@@ -132,6 +165,11 @@ func _draw() -> void:
 	# raised presentation plane and start at the painted weapon's exact muzzle.
 	draw_set_transform(visual_offset.rotated(-rotation))
 	match visual:
+		"countershot":
+			draw_line(Vector2(-30, 0), Vector2(-5, 0), Color(tint, 0.45), 3.0, true)
+			draw_colored_polygon(PackedVector2Array([Vector2(10, 0), Vector2(-4, -6), Vector2(-1, 0), Vector2(-4, 6)]), tint)
+			draw_line(Vector2(-12, -5), Vector2(-7, 0), Color("ece8d9"), 1.5, true)
+			draw_line(Vector2(-12, 5), Vector2(-7, 0), Color("ece8d9"), 1.5, true)
 		"arrow":
 			draw_line(Vector2(-27, 0), Vector2(5, 0), Color("ddd8bf"), 2.0, true)
 			draw_colored_polygon(PackedVector2Array([Vector2(11, 0), Vector2(1, -4), Vector2(1, 4)]), tint)

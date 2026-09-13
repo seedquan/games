@@ -193,6 +193,8 @@ func take_damage(amount: float, source: Vector2, parryable := true) -> bool:
 		game.effect(global_position, Color("ffd090"), 155.0)
 		for enemy in get_tree().get_nodes_in_group("enemies"):
 			if global_position.distance_to(enemy.global_position) < 155.0:
+				if game.campaign_version >= 2 and not game.has_sight(global_position, enemy.global_position):
+					continue
 				enemy.frozen = 0.9
 				enemy.take_damage(damage, global_position.direction_to(enemy.global_position) * 330.0)
 		return false

@@ -94,6 +94,7 @@ func run() -> void:
 	check(game.state == "victory" and game.room == game.run_length, "complete all campaign chambers and ending")
 	check(game.story_seen.size() == 6, "all story assets")
 	check(game.profile.checkpoint.is_empty(), "completed run invalidates checkpoint")
+	await countershot_release()
 	game.start_run(5820)
 	game.continue_story()
 	game.player.invulnerable = 0
@@ -106,6 +107,31 @@ func run() -> void:
 	# Audio playback references are retired by the mixer after nodes are freed.
 	await get_tree().create_timer(0.2).timeout
 	get_tree().quit(0 if failures == 0 else 1)
+
+func countershot_release() -> void:
+	game.start_run(5821)
+	game.continue_story()
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	game.player.set_physics_process(false)
+	game.player.position = Vector2(800, 650)
+	game.player.weapon.equip("ember")
+	game.player.enchantments = {"poison": 1}
+	game.player.invulnerable = 0
+	var target = game.spawn_enemy("drone", Vector2(1100, 650))
+	target.set_physics_process(false)
+	target.hp = 10000
+	target.max_hp = 10000
+	await frame()
+	game.player.try_parry()
+	var shot = game.spawn_bolt(Vector2(840, 650), Vector2.LEFT, true, 13)
+	for i in range(8): await frame()
+	check(is_instance_valid(shot) and shot.reflected and not shot.hostile and shot.shooter == game.player, "packed parry reverses a real hostile projectile")
+	for i in range(35): await frame()
+	check(target.hp < 10000 and target.burn_left > 0 and target.poison_stacks == 1, "packed return carries the defender's weapon element and rune")
 
 func clear_encounter() -> void:
 	# State verification applies damage directly, but the packaged encounter must
