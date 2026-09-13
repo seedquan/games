@@ -18,7 +18,7 @@ def run_check(name, arguments, marker=None):
     with tempfile.TemporaryFile(mode="w+", encoding="utf-8") as output:
         try:
             result = subprocess.run(
-                COMMAND + arguments,
+                COMMAND + ["--audio-driver", "Dummy"] + arguments,
                 stdout=output,
                 stderr=subprocess.STDOUT,
                 timeout=60,
@@ -52,7 +52,7 @@ def main():
                           ("level_design", "ABYSS LEVEL DESIGN"), ("campaign_expansion", "ABYSS EXPANSION"),
                           ("legacy_campaign", "ABYSS LEGACY CAMPAIGN"), ("balance", "ABYSS BALANCE"),
                           ("reward_checkpoints", "ABYSS REWARD CHECKPOINTS"), ("map_art", "ABYSS MAP ART"),
-                          ("build_info", "ABYSS BUILD INFO"), ("build_menu", "ABYSS BUILD MENU")]:
+                          ("build_info", "ABYSS BUILD INFO"), ("build_menu", "ABYSS BUILD MENU"), ("settings_menu", "ABYSS SETTINGS MENU")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1
     return 0

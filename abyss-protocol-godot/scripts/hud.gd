@@ -28,6 +28,7 @@ var menu_margin: MarginContainer
 var dashboard: MarginContainer
 var loadout: Label
 var controls_hint: Label
+var settings_view
 var settings_feedback: Label
 var save_notice: Label
 var tutorial: Label
@@ -36,6 +37,7 @@ var boss_name: Label
 var boss_integrity: ProgressBar
 
 func build() -> void:
+	get_viewport().size_changed.connect(refresh_settings_visuals)
 	var theme_resource := Theme.new()
 	theme_resource.default_font_size = 16
 	theme_resource.default_font = preload("res://assets/fonts/NotoSansCJKsc-Regular.otf")
@@ -220,6 +222,7 @@ func button(text: String, callback: Callable, primary := false) -> Button:
 	return node
 
 func show_menu(kind: String) -> void:
+	settings_view = null
 	if DisplayServer.get_name() != "headless":
 		Input.set_custom_mouse_cursor(null)
 	overlay.show()
@@ -376,9 +379,10 @@ func show_menu(kind: String) -> void:
 			support.add_child(dock)
 		for item in [["设置", game.open_settings], ["操作指南", game.open_help], ["退出游戏", game.request_quit]]:
 			var option := button(item[0], item[1])
-			option.custom_minimum_size = Vector2(180, 50)
+			option.custom_minimum_size = Vector2(140, 50)
 			option.flat = true
 			support.add_child(option)
+		add_fullscreen_button(support)
 		content.add_child(label("移动、瞄准、闪避，寻找封锁系统的破绽。", 14, MUTED))
 		var art_column := VBoxContainer.new()
 		art_column.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -456,6 +460,7 @@ func build_title() -> void:
 		option.flat = true
 		option.custom_minimum_size = Vector2(140, 42)
 		support.add_child(option)
+	add_fullscreen_button(support)
 	content.add_child(label("单人 / 本地双人　·　十八种武器　·　版本 " + ProjectSettings.get_setting("application/config/version", "0.9.0"), 14, MUTED))
 	if not game.save_warning.is_empty():
 		var warning := label(game.save_warning, 16, MINT)
@@ -613,9 +618,9 @@ func menu_buttons() -> Array[BaseButton]:
 		if not node.disabled and node.is_visible_in_tree(): result.append(node)
 	return result
 
-func restore_menu_focus(index: int) -> void:
+func restore_menu_focus(index: int, expected_state := "") -> void:
 	var buttons := menu_buttons()
-	if game.state == game.build_return and index >= 0 and index < buttons.size():
+	if game.state == (game.build_return if expected_state.is_empty() else expected_state) and index >= 0 and index < buttons.size():
 		buttons[index].grab_focus()
 
 func build_run_overview() -> void:
@@ -766,92 +771,29 @@ func utility_column(title: String) -> VBoxContainer:
 	return column
 
 func build_settings() -> void:
-	var column := utility_column("终端设置")
-	var capture_button: Button
-	var tabs := HBoxContainer.new()
-	column.add_child(tabs)
-	for item in [["comfort", "声音与画面"], ["keys", "键盘按键"]]:
-		var tab := button(item[1], game.choose_settings_tab.bind(item[0]), game.settings_tab == item[0])
-		tab.custom_minimum_size = Vector2(240, 48)
-		tabs.add_child(tab)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	scroll.follow_focus = true
-	column.add_child(scroll)
-	var content := VBoxContainer.new()
-	content.custom_minimum_size.x = 1000
-	content.add_theme_constant_override("separation", 18)
-	scroll.add_child(content)
-	if game.settings_tab == "comfort":
-		for item in [["volume", "总音量"], ["effects_volume", "战斗音效"], ["ambience_volume", "空间站环境声"], ["shake", "屏幕震动"], ["flash", "命中闪光"]]:
-			if item[0] in ["volume", "shake"]:
-				content.add_child(label("声音" if item[0] == "volume" else "画面与舒适度", 23, MINT))
-			setting_slider(content, item[0], item[1])
-		for item in [["fullscreen", "无边框全屏 / 支持 2560 × 1440"], ["aim_assist", "辅助瞄准：鼠标闲置时锁定最近敌人"], ["high_contrast", "高对比文字：增强文字亮度与描边"], ["tutorial", "首舱操作提示"]]:
-			var toggle := CheckBox.new()
-			toggle.text = item[1]
-			toggle.custom_minimum_size.y = 50
-			toggle.button_pressed = game.settings.values[item[0]]
-			toggle.toggled.connect(func(value: bool): game.set_setting(item[0], value))
-			content.add_child(toggle)
-		content.add_child(label("无边框全屏跟随桌面分辨率，保留系统应用切换；按 F11 返回窗口。", 16, MUTED))
-		content.add_child(label("将震动和闪光调至零可关闭效果。攻击范围提示始终保留。", 16, MUTED))
-		content.add_child(label("手柄：左摇杆移动，右摇杆瞄准；十字键选择菜单，下键确认，右键返回。", 16, MUTED))
-	else:
-		content.add_child(label("点击操作后按新键。方向键、鼠标及菜单快捷键始终可用。", 17, MUTED))
-		var grid := GridContainer.new()
-		grid.columns = 3
-		grid.add_theme_constant_override("h_separation", 16)
-		grid.add_theme_constant_override("v_separation", 16)
-		content.add_child(grid)
-		for action in game.SETTINGS.KEYS:
-			var waiting: bool = game.rebind_action == action
-			var option := button(game.SETTINGS.LABELS[action] + " / " + ("等待按键…" if waiting else game.settings.key_label(action)), game.begin_rebind.bind(action), waiting)
-			option.custom_minimum_size = Vector2(360, 70)
-			grid.add_child(option)
-			if waiting:
-				capture_button = option
-		var reset := button("恢复默认按键", game.reset_controls)
-		reset.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-		content.add_child(reset)
-	settings_feedback = label(game.settings_notice, 16, Color("ffd27a"))
-	settings_feedback.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	column.add_child(settings_feedback)
-	var back := button("返回 / Esc", game.close_settings)
-	back.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	column.add_child(back)
-	if capture_button:
-		capture_button.grab_focus()
-	else:
-		back.grab_focus()
+	settings_view = preload("res://scripts/settings_menu.gd").new()
+	settings_view.game = game
+	settings_view.hud = self
+	settings_view.build()
 
-func setting_slider(parent: Node, id: String, title: String) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 24)
-	parent.add_child(row)
-	var caption := label(title, 19, Color("d5e8ea"))
-	caption.custom_minimum_size.x = 190
-	row.add_child(caption)
-	var slider := HSlider.new()
-	slider.name = id
-	slider.min_value = 0
-	slider.max_value = 100
-	slider.step = 5
-	slider.value = float(game.settings.values[id]) * 100.0
-	slider.add_theme_stylebox_override("slider", style(Color("44504f"), Color.TRANSPARENT, 3))
-	slider.add_theme_stylebox_override("grabber_area", style(MINT, Color.TRANSPARENT, 3))
-	slider.add_theme_stylebox_override("grabber_area_highlight", style(Color("f0d8ab"), Color.TRANSPARENT, 3))
-	slider.custom_minimum_size = Vector2(360, 48)
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(slider)
-	var value := label("%d%%" % slider.value, 19, MINT)
-	value.custom_minimum_size.x = 75
-	row.add_child(value)
-	slider.value_changed.connect(func(amount: float):
-		value.text = "%d%%" % amount
-		game.set_setting(id, amount / 100.0)
-	)
+func refresh_settings_visuals() -> void:
+	if not is_instance_valid(menu_margin): return
+	if settings_view != null:
+		settings_view.refresh()
+	for option in menu_margin.find_children("FullscreenAction", "Button", true, false):
+		option.text = "退出全屏" if game.settings.values.fullscreen else "全屏"
+
+func add_fullscreen_button(parent: Control, width := 140) -> void:
+	var option := button("", func(): game.set_setting("fullscreen", not game.settings.values.fullscreen))
+	option.name = "FullscreenAction"
+	option.custom_minimum_size = Vector2(width, 42)
+	option.icon = preload("res://scripts/settings_menu.gd").symbol(4)
+	option.expand_icon = true
+	option.add_theme_constant_override("icon_max_width", 22)
+	option.add_theme_color_override("icon_pressed_color", INK)
+	option.tooltip_text = "无边框全屏 / F11"
+	parent.add_child(option)
+	refresh_settings_visuals()
 
 func build_help() -> void:
 	var column := utility_column("七号 · 救援操作指南")

@@ -160,6 +160,7 @@ func controller_menus() -> void:
 	await pad_tap(JOY_BUTTON_B)
 	check(game.state == "title", "Controller returns from the armory")
 	await pad_activate("设置")
+	await pad_activate("声音")
 	var volume: HSlider = game.hud.menu_margin.find_child("volume", true, false)
 	await pad_focus(volume)
 	var previous: float = game.settings.values.volume
@@ -246,16 +247,16 @@ func controller_menus() -> void:
 
 func menu_pointer(position: Vector2, held := false) -> void:
 	var event := InputEventMouseMotion.new()
-	event.position = position
-	event.global_position = position
+	event.position = root.get_final_transform() * position
+	event.global_position = event.position
 	event.relative = Vector2(8, 0)
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT if held else 0
 	Input.parse_input_event(event)
 
 func menu_mouse(position: Vector2, pressed: bool) -> void:
 	var event := InputEventMouseButton.new()
-	event.position = position
-	event.global_position = position
+	event.position = root.get_final_transform() * position
+	event.global_position = event.position
 	event.button_index = MOUSE_BUTTON_LEFT
 	event.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
 	event.pressed = pressed
@@ -424,7 +425,7 @@ func inspect_menu(context: String) -> void:
 	var focus := root.gui_get_focus_owner()
 	check(is_instance_valid(focus) and focus.is_visible_in_tree(), context + " has a visible focus target")
 	for node in game.hud.menu_margin.get_children():
-		check(node.get_minimum_size().x <= 1260 and node.get_minimum_size().y <= 720, context + " fits the reference viewport")
+		check(node.get_minimum_size().x <= 1260 and node.get_minimum_size().y <= 720, context + " fits the reference viewport (%s)" % node.get_minimum_size())
 
 func snapshot(name: String) -> void:
 	if DisplayServer.get_name() == "headless":
