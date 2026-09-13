@@ -4,6 +4,8 @@ const DRONE = preload("res://assets/drone.webp")
 const BRUTE = preload("res://assets/brute.webp")
 const CORE = preload("res://assets/core.webp")
 const WARDEN = preload("res://assets/warden.webp")
+const POISON_METER = preload("res://assets/ui/poison_meter.svg")
+const POISON_FRAME := Vector2(88, 24)
 const MELEE_REACH := 105.0
 const MELEE_HALF_ANGLE := acos(0.1)
 const ATTACK_LABELS := {"ground": "地面锁定", "spread": "扇形齐射", "radial": "环形弹幕", "shot": "瞄准射击", "melee": "近身挥击", "cross": "十字交火",
@@ -341,6 +343,16 @@ func freeze_for(duration: float) -> void:
 	frozen = maxf(frozen, duration)
 	ice_frozen_left = maxf(ice_frozen_left, duration)
 
+func poison_marker_level() -> int:
+	# Use the same stack state that fire consumes, including the expiry tick.
+	return clampi(poison_stacks, 0, 6) if not dead and game.campaign_version >= 2 else 0
+
+func poison_marker_rect() -> Rect2:
+	# Keep the slots legible when co-op or a guardian pulls the camera back.
+	var scale := 1.0 / maxf(0.55, game.camera.zoom.x)
+	var top := -140.0 if kind in ["boss", "warden"] else -72.0
+	return Rect2(Vector2(-44 * scale, top - 28 * scale), POISON_FRAME * scale)
+
 func _draw() -> void:
 	draw_circle(Vector2(0, 5), radius * 1.3, Color(0, 0, 0, 0.4))
 	var color := Color("ed80eb") if kind == "boss" else Color("ff7088")
@@ -357,7 +369,10 @@ func _draw() -> void:
 		draw_arc(Vector2.ZERO, radius + 8.0, 0, TAU * float(chill_stacks) / 3.0, 30, Color("7fd8ff"), 2.0, true)
 	if burn_left > 0.0:
 		draw_arc(Vector2.ZERO, radius + 13.0, clock, clock + PI * 1.5, 30, Color("ff7a3c"), 2.0, true)
-	if poison_stacks > 0:
+	var poison_level := poison_marker_level()
+	if poison_level > 0:
+		draw_texture_rect_region(POISON_METER, poison_marker_rect(), Rect2(Vector2((poison_level - 1) * 88, 0), POISON_FRAME))
+	elif game.campaign_version < 2 and poison_stacks > 0:
 		draw_arc(Vector2.ZERO, radius + 16.0, 0, TAU * poison_stacks / 6.0, 40, Color("b9df7b"), 3.0, true)
 	if elite:
 		draw_arc(Vector2.ZERO, radius + 6.0, 0, TAU, 6, Color("ffd27a"), 2.0, true)
