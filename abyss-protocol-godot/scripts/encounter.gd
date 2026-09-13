@@ -55,10 +55,6 @@ func enemy_kind(index: int) -> String:
 		elif wave % 3 == 1: cadence = 4
 	return "drone" if game.room > 1 and index % cadence == 0 else "stalker"
 
-func wave_name() -> String:
-	if game.room == 1 and wave < 3: return "近卫推进"
-	return ["交叉火力", "近卫推进", "混合封锁"][wave % 3]
-
 func clearance(point: Vector2) -> float:
 	var distance := INF
 	for member in game.team():
@@ -97,7 +93,6 @@ func queue_wave() -> void:
 		marker.position = point
 		game.get_node("World/Effects").add_child(marker)
 		pending.append({"point": point, "kind": enemy_kind(spawn_cursor + i), "delay": WARNING_TIME, "marker": marker})
-	game.announce("%s %d / %d · 远离琥珀色投送标记" % [wave_name(), wave, waves.size()], Color("e5b378"))
 
 func tick(delta: float) -> void:
 	if game.state != "playing": return

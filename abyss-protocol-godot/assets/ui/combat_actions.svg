@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="48" viewBox="0 0 240 48">
+  <g fill="none" stroke="#ece8d9" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+    <!-- A tool blade, plasma bolt, escape motion, ice crystal and deflection. -->
+    <path d="M13 35 33 10 38 9 38 16 18 38M10 28 23 39M15 34 8 41"/>
+    <g transform="translate(48)"><path d="m28 7-17 20h12l-3 14 17-22H25Z"/></g>
+    <g transform="translate(96)"><path d="m25 11 13 13-13 13M12 13h9M7 24h22M12 35h9"/></g>
+    <g transform="translate(144)"><path d="M24 7v34M9 15l30 18M9 33l30-18M19 10l5 5 5-5M19 38l5-5 5 5M10 21l7-1-2-7M33 35l-2-7 7-1M15 35l2-7-7-1M38 21l-7-1 2-7"/></g>
+    <g transform="translate(192)"><path d="M24 7 37 12v12c0 8-7 14-13 17-6-3-13-9-13-17V12Z"/><path d="m19 29 11-11m-8 0h8v8"/></g>
+  </g>
+</svg>

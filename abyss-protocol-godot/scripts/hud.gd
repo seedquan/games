@@ -2,6 +2,9 @@ extends Control
 
 const MINT := Color("e6b879")
 const DISPLAY_FONT = preload("res://assets/fonts/NotoSerifCJKsc-SemiBold.otf")
+const COMBAT_ACTIONS = preload("res://assets/ui/combat_actions.svg")
+const ACTIONS := ["slash", "bolt", "dash", "freeze", "parry"]
+const ACTION_NAMES := ["主武器", "等离子", "冲刺", "冰冻", "弹反"]
 const CROSSHAIR = preload("res://assets/crosshair.svg")
 const BUILD_SYMBOLS = preload("res://assets/ui/build_symbols.svg")
 const INK := Color("111d22")
@@ -15,7 +18,11 @@ var partner_integrity: ProgressBar
 var partner_energy: ProgressBar
 var partner_loadout: Label
 var skill_row: HBoxContainer
-var coop_status: Label
+var partner_skills: Array[Label] = []
+var skill_icons: Array[TextureRect] = []
+var partner_skill_icons: Array[TextureRect] = []
+var partner_skill_group: HBoxContainer
+var first_seat: Label
 var integrity: ProgressBar
 var energy: ProgressBar
 var vitals: Label
@@ -46,17 +53,19 @@ func build() -> void:
 	hud_backdrop = preload("res://scripts/hud_backdrop.gd").new()
 	add_child(hud_backdrop)
 	hud_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	dashboard = margin(self, 30)
+	dashboard = margin(self, 24)
+	dashboard.add_theme_constant_override("margin_bottom", 16)
 	var stack := VBoxContainer.new()
-	stack.add_theme_constant_override("separation", 16)
+	stack.add_theme_constant_override("separation", 8)
 	dashboard.add_child(stack)
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override("separation", 30)
 	stack.add_child(top)
 	var status := VBoxContainer.new()
-	status.custom_minimum_size.x = 280
+	status.custom_minimum_size.x = 260
 	top.add_child(status)
-	status.add_child(label("七号 / 维修机体", 16, MUTED))
+	loadout = label("", 16, MINT)
+	status.add_child(loadout)
 	vitals = label("机体耐久  100 / 100", 18, Color("ece8d9"))
 	status.add_child(vitals)
 	integrity = bar(Color("b9cfac"), 10)
@@ -68,13 +77,14 @@ func build() -> void:
 	sector.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	top.add_child(sector)
 	counters = label("", 16, MUTED)
-	counters.custom_minimum_size.x = 220
+	counters.custom_minimum_size.x = 140
 	counters.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	top.add_child(counters)
 	partner_panel = VBoxContainer.new()
-	partner_panel.custom_minimum_size.x = 280
+	partner_panel.custom_minimum_size.x = 260
 	top.add_child(partner_panel)
-	partner_panel.add_child(label("二号席 / 协作机体", 16, MINT))
+	partner_loadout = label("", 16, MINT)
+	partner_panel.add_child(partner_loadout)
 	partner_vitals = label("", 18, Color("ece8d9"))
 	partner_panel.add_child(partner_vitals)
 	partner_integrity = bar(MINT, 10)
@@ -118,31 +128,23 @@ func build() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stack.add_child(spacer)
-	loadout = label("", 15, MINT)
-	loadout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stack.add_child(loadout)
 	skill_row = HBoxContainer.new()
 	skill_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	skill_row.add_theme_constant_override("separation", 10)
+	skill_row.add_theme_constant_override("separation", 24)
 	stack.add_child(skill_row)
-	for text in ["J / 主武器", "E / 等离子", "空格 / 冲刺", "Q / 冰冻", "L / 弹反"]:
-		var panel := PanelContainer.new()
-		panel.add_theme_stylebox_override("panel", style(Color(0, 0, 0, 0), Color.TRANSPARENT, 6))
-		panel.custom_minimum_size = Vector2(204, 50)
-		skill_row.add_child(panel)
-		var caption := label(text, 17, Color("ece8d9"))
-		caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		panel.add_child(caption)
-		skills.append(caption)
-	coop_status = label("", 17, Color("ece8d9"))
-	coop_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stack.add_child(coop_status)
-	coop_status.hide()
-	partner_loadout = label("", 16, MINT)
-	partner_loadout.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	stack.add_child(partner_loadout)
-	partner_loadout.hide()
-	controls_hint = label("方向键移动　鼠标瞄准　Esc 暂停", 16, MUTED)
+	var primary_group := HBoxContainer.new()
+	primary_group.add_theme_constant_override("separation", 8)
+	skill_row.add_child(primary_group)
+	first_seat = label("Ⅰ", 20, Color("8bb5bf"))
+	primary_group.add_child(first_seat)
+	build_action_strip(primary_group, skills, skill_icons)
+	partner_skill_group = HBoxContainer.new()
+	partner_skill_group.add_theme_constant_override("separation", 8)
+	skill_row.add_child(partner_skill_group)
+	partner_skill_group.add_child(label("Ⅱ", 20, MINT))
+	build_action_strip(partner_skill_group, partner_skills, partner_skill_icons)
+	partner_skill_group.hide()
+	controls_hint = label("鼠标瞄准　·　Tab 构筑　·　Esc 暂停", 14, MUTED)
 	controls_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(controls_hint)
 	set_mouse_passthrough(dashboard)
@@ -151,6 +153,47 @@ func build() -> void:
 	add_child(overlay)
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	menu_margin = margin(overlay, 90)
+
+func build_action_strip(parent: HBoxContainer, captions: Array[Label], icons: Array[TextureRect]) -> void:
+	for i in range(ACTIONS.size()):
+		var item := HBoxContainer.new()
+		item.custom_minimum_size = Vector2(112, 44)
+		item.add_theme_constant_override("separation", 8)
+		parent.add_child(item)
+		var icon := TextureRect.new()
+		icon.custom_minimum_size = Vector2(28, 28)
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var atlas := AtlasTexture.new()
+		atlas.atlas = COMBAT_ACTIONS
+		atlas.region = Rect2(i * 48, 0, 48, 48)
+		icon.texture = atlas
+		item.add_child(icon)
+		icons.append(icon)
+		var caption := label("", 15, Color("ece8d9"))
+		caption.custom_minimum_size.x = 76
+		caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		caption.clip_text = true
+		caption.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		item.add_child(caption)
+		captions.append(caption)
+
+func update_action_strip(member, captions: Array[Label], icons: Array[TextureRect]) -> void:
+	var cooldowns := [member.slash_cooldown, member.bolt_cooldown, member.dash_cooldown, member.freeze_cooldown, member.parry_cooldown]
+	for i in range(ACTIONS.size()):
+		var ready: bool = cooldowns[i] <= 0.0 and member.hp > 0
+		var value: String = game.CONTROLS.PAD_LABELS[ACTIONS[i]] if game.coop.enabled else game.action_label(ACTIONS[i])
+		if member.hp <= 0:
+			value = "—"
+		elif cooldowns[i] > 0:
+			value = "%.1f 秒" % cooldowns[i]
+		if i == 1 and member.energy < 24 and member.hp > 0:
+			value = "能量不足"
+			ready = false
+		if i == 0 and member.weapon.drawing and member.hp > 0:
+			value = "%d%%" % int(member.weapon.charge / float(member.weapon.definition.charge) * 100)
+		captions[i].text = ACTION_NAMES[i] + "\n" + value
+		icons[i].modulate = MINT if ready else MUTED
 
 func set_mouse_passthrough(node: Node) -> void:
 	if node is Control:
@@ -878,8 +921,6 @@ func update_status() -> void:
 		var cursor_mode := Input.MOUSE_MODE_HIDDEN if game.using_gamepad and not overlay.visible else Input.MOUSE_MODE_VISIBLE
 		if Input.mouse_mode != cursor_mode:
 			Input.mouse_mode = cursor_mode
-	loadout.visible = true
-	update_coop_status()
 	hud_backdrop.visible = dashboard.visible and not overlay.visible
 	save_notice.text = game.save_warning
 	save_notice.visible = not game.save_warning.is_empty()
@@ -895,7 +936,7 @@ func update_status() -> void:
 		boss_integrity.max_value = boss.max_hp
 		boss_integrity.value = boss.hp
 	partner_panel.visible = game.coop.enabled and is_instance_valid(game.companion)
-	controls_hint.text = "左摇杆移动　右摇杆瞄准　菜单键暂停" if game.using_gamepad else "方向键移动　鼠标瞄准　Esc 暂停"
+	controls_hint.text = "摇杆瞄准　·　菜单键 暂停 / 构筑" if game.using_gamepad else "鼠标瞄准　·　Tab 构筑　·　Esc 暂停"
 	if game.muted:
 		controls_hint.text += "　【已静音】"
 	announcement.visible = game.announcement_left > 0.0 and game.state == "playing"
@@ -903,7 +944,7 @@ func update_status() -> void:
 		return
 	var player = game.player
 	var aim_label: String = {"mouse": "鼠标瞄准", "stick": "摇杆瞄准", "assist": "辅助锁定", "heading": "移动朝向"}.get(player.aim_mode, "瞄准")
-	controls_hint.text = ("左摇杆移动　%s　菜单键暂停" if game.using_gamepad else "方向键移动　%s　Esc 暂停") % aim_label
+	controls_hint.text = ("%s　·　菜单键 暂停 / 构筑" if game.using_gamepad else "%s　·　Tab 构筑　·　Esc 暂停") % aim_label
 	if game.muted:
 		controls_hint.text += "　【已静音】"
 	tutorial.visible = game.state == "playing" and game.room == 1 and game.elapsed < 40 and game.settings.values.tutorial and player.tutorial_step < 3
@@ -913,32 +954,15 @@ func update_status() -> void:
 	integrity.max_value = player.max_hp
 	integrity.value = player.hp
 	energy.value = player.energy
-	vitals.text = "耐久 %03d / %03d　能量 %03d" % [player.hp, player.max_hp, player.energy]
-	sector.text = "第 %02d / %02d 舱\n%s" % [game.room, game.run_length, game.room_data.get("name", "")]
+	vitals.text = "耐久 %d / %d　能量 %d" % [player.hp, player.max_hp, player.energy]
+	sector.text = "%02d / %02d 舱" % [game.room, game.run_length]
+	if not boss_panel.visible:
+		sector.text += "　" + str(game.room_data.get("name", ""))
 	if game.state == "playing" and game.encounter.waves.size() > 1:
-		sector.text += " · 增援 %d / %d" % [game.encounter.wave, game.encounter.waves.size()]
-	counters.text = "用时 %s　/　清除 %02d 个目标\n废料 %d　/　核心 %d" % [elapsed_text(), game.kills, game.scrap, game.profile.cores]
-	var values := [player.slash_cooldown, player.bolt_cooldown, player.dash_cooldown, player.freeze_cooldown, player.parry_cooldown]
-	var names: Array[String] = []
-	for action in ["slash", "bolt", "dash", "freeze", "parry"]:
-		names.append(game.action_label(action) + " / " + game.SETTINGS.LABELS[action])
-	var definition: Dictionary = player.weapon.definition
-	loadout.text = definition.name + (" / 按住蓄力，松开射击" if definition.has("charge") else " / 按住 %s 攻击" % game.action_label("slash"))
-	loadout.modulate = Color.WHITE
-	if not player.enchantments.is_empty():
-		var runes: Array[String] = []
-		for element in player.enchantments:
-			runes.append("%s %d" % [game.PROGRESSION.ELEMENT_LABELS.get(element, element), player.enchantments[element]])
-		loadout.text += "\n" + "  /  ".join(runes)
-	for i in range(skills.size()):
-		var ready: bool = values[i] <= 0.0
-		skills[i].text = names[i] + ("\n就绪" if ready else "\n%.1f 秒" % values[i])
-		if i == 1 and player.energy < 24.0:
-			skills[i].text = game.action_label("bolt") + " / 能量不足"
-			ready = false
-		skills[i].modulate = Color.WHITE if ready or game.settings.values.high_contrast else Color("b5aaa0")
-	if player.weapon.drawing:
-		skills[0].text = "蓄力 %03d%%" % int(player.weapon.charge / float(definition.charge) * 100.0)
+		sector.text += "\n增援 %d / %d" % [game.encounter.wave, game.encounter.waves.size()]
+	counters.text = "废料 %d\n核心 %d" % [game.scrap, game.profile.cores]
+	loadout.text = player.weapon.definition.name
+	update_action_strip(player, skills, skill_icons)
 	update_coop_status()
 
 func build_coop_lobby() -> void:
@@ -973,25 +997,21 @@ func build_coop_lobby() -> void:
 
 func update_coop_status() -> void:
 	var active: bool = game.coop.enabled and is_instance_valid(game.companion)
-	partner_loadout.visible = active
-	coop_status.visible = active
-	skill_row.visible = not active
+	partner_skill_group.visible = active
+	first_seat.visible = active
 	if not active:
 		return
 	var partner = game.companion
-	partner_vitals.text = "耐久 %03d / %03d　能量 %03d" % [partner.hp, partner.max_hp, partner.energy]
+	loadout.text = "Ⅰ　" + game.player.weapon.definition.name
+	partner_loadout.text = "Ⅱ　" + partner.weapon.definition.name
+	partner_vitals.text = "耐久 %d / %d　能量 %d" % [partner.hp, partner.max_hp, partner.energy]
 	partner_integrity.max_value = partner.max_hp
 	partner_integrity.value = partner.hp
 	partner_energy.value = partner.energy
-	var rows: Array[String] = []
 	for member in game.team():
-		var values: Array[String] = []
-		for pair in [["冲刺", member.dash_cooldown], ["冰冻", member.freeze_cooldown], ["弹反", member.parry_cooldown]]:
-			values.append(pair[0] + ("就绪" if pair[1] <= 0.0 else " %.1f 秒" % pair[1]))
-		var status: String = "离线 / 队友靠近修复 %d%%" % int(member.revive_progress / 3.0 * 100) if member.hp <= 0 else "　".join(values)
-		rows.append("%d 号席 · %s　/　%s" % [member.seat + 1, member.weapon.definition.name, status])
-	coop_status.text = rows[0]
-	partner_loadout.text = rows[1]
-	loadout.visible = false
-	controls_hint.text = "左摇杆移动　右摇杆瞄准　右肩键攻击　左肩键等离子　下键冲刺　左键冰冻　右键弹反"
+		if member.hp <= 0:
+			var target: Label = vitals if member.seat == 0 else partner_vitals
+			target.text = "离线 · 靠近修复 %d%%" % int(member.revive_progress / 3.0 * 100)
+	update_action_strip(partner, partner_skills, partner_skill_icons)
+	controls_hint.text = "摇杆瞄准　·　菜单键 暂停 / 构筑" + ("　【已静音】" if game.muted else "")
 	tutorial.visible = false
