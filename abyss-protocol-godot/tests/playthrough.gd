@@ -14,6 +14,8 @@ var simulation_speed := 4
 var weapon_id := "rifle"
 var captured := {}
 var combat_physics_frames := 0
+var reactions: Dictionary = {}
+var guardian_shapes := 0
 
 func _initialize() -> void:
 	run.call_deferred()
@@ -116,6 +118,11 @@ func run() -> void:
 	game.persistence_enabled = false
 	game.auto_pause_enabled = false
 	root.add_child(game)
+	game.get_node("World/Effects").child_entered_tree.connect(func(node):
+		if node.get_script() == game.EFFECT and not node.reaction.is_empty():
+			reactions[node.reaction] = int(reactions.get(node.reaction, 0)) + 1)
+	game.get_node("World/Projectiles").child_entered_tree.connect(func(node):
+		if node.get_script() == game.GUARDIAN_ATTACK: guardian_shapes += 1)
 	if not game.WEAPONS.exists(weapon_id):
 		push_error("Unknown playthrough weapon")
 		quit(1)
@@ -179,6 +186,9 @@ func run() -> void:
 		"cooperative": cooperative, "weapon": weapon_id, "result": "segment_complete" if game.room > room_limit else game.state, "depth": game.room, "game_seconds": game.elapsed,
 		"hp": game.player.hp, "kills": game.kills, "story_beats": game.story_seen, "rooms": reports}
 	report.last_room = diagnostics()
+	report.element_reactions = reactions
+	report.guardian_shapes = guardian_shapes
+	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate()})
 	report.physics_seconds = combat_physics_frames / 60.0
 	report.clock_difference = absf(game.elapsed - combat_physics_frames / 60.0)
 	var clocks_match: bool = report.clock_difference <= maxf(2.0, game.elapsed * 0.01)
