@@ -238,14 +238,6 @@ func _draw() -> void:
 	draw_line(aim * 27.0, aim * 43.0, Color("e3fff9"), 2.0, true)
 	if dash_left > 0.0:
 		draw_line(-dash_direction * 20.0, -dash_direction * 90.0, Color(0.4, 1.0, 0.9, 0.4), 18.0, true)
-	if slash_left > 0.0 and weapon.definition.mode == "melee":
-		var angle := aim.angle()
-		var fade := slash_left / 0.18
-		var reach: float = weapon.definition.reach
-		var arc: float = weapon.definition.arc
-		var color := Color(weapon.definition.color)
-		draw_arc(Vector2.ZERO, reach - 10.0, angle - arc, angle + arc, 30, Color(color, fade), 9.0 * fade, true)
-		draw_arc(Vector2.ZERO, reach, angle - arc, angle + arc, 30, Color(0.9, 1.0, 1.0, fade), 2.0, true)
 	if weapon.drawing:
 		var fraction: float = weapon.charge / float(weapon.definition.charge)
 		draw_rect(Rect2(-26, -81, 52, 5), Color("263343"))
