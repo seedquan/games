@@ -603,7 +603,8 @@ func upgrade_details(boon: Dictionary, member) -> String:
 		var innate: bool = member.weapon.definition.get("element", "") == boon.stat
 		var prefix := "符文 %d → %d 级" % [rank, next] if rank < 3 else "符文已满级"
 		if innate: prefix += " · 武器自带同元素"
-		return prefix + "\n" + game.BUILD_INFO.rune_comparison(boon.stat, rank, innate, game.campaign_version)
+		var hint: String = game.BUILD_INFO.reaction_hint(boon.stat, game.campaign_version)
+		return prefix + "\n" + game.BUILD_INFO.rune_comparison(boon.stat, rank, innate, game.campaign_version) + ("\n" + hint if not hint.is_empty() else "")
 	return details
 
 func add_build_button(parent: Control) -> void:
@@ -655,12 +656,13 @@ func build_run_overview() -> void:
 		var rank := int(member.enchantments.get(id, 0))
 		var innate: bool = definition.get("element", "") == id
 		build_info_card(grid, game.BUILD_INFO.element_heading(id, rank, innate, game.campaign_version), game.BUILD_INFO.element_detail(id, rank, innate, game.campaign_version), Color(BOON_COLORS[id]), 2 + game.PROGRESSION.ELEMENTS.find(id), rank)
-	build_info_card(grid, "战斗联动", "\n".join(game.BUILD_INFO.synergies(member)), MINT, 8)
+	var diagram = preload("res://assets/ui/element_combos.svg") if game.BUILD_INFO.has_reaction(member) else null
+	build_info_card(grid, "战斗联动", "\n".join(game.BUILD_INFO.synergies(member)), MINT, 8, -1, diagram)
 	build_info_card(grid, "本局成长", "废料 %d · 本局已传回 %d 枚核心\n船坞升级在派遣时已计入机体属性。\n祝福由全队共享，实际收益取决于各自武器与属性。" % [game.scrap, game.earned_cores], MINT, 9)
 	var back := button("返回原界面 / Esc · Tab", game.close_build)
 	column.add_child(back)
 
-func build_info_card(parent: Control, heading: String, body: String, accent: Color, symbol: int, rank := -1) -> void:
+func build_info_card(parent: Control, heading: String, body: String, accent: Color, symbol: int, rank := -1, diagram: Texture2D = null) -> void:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size.x = 460
 	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -675,6 +677,14 @@ func build_info_card(parent: Control, heading: String, body: String, accent: Col
 	var content := VBoxContainer.new()
 	content.add_theme_constant_override("separation", 10)
 	panel.add_child(content)
+	if diagram != null:
+		var illustration := TextureRect.new()
+		illustration.texture = diagram
+		illustration.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		illustration.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		illustration.custom_minimum_size.y = 126
+		illustration.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		content.add_child(illustration)
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 12)
 	content.add_child(header)

@@ -77,9 +77,11 @@ func element_cases() -> void:
 	check("3.15 → 3.15" in INFO.rune_comparison("ice", 3, true, 2), "Capped rune comparison stays unchanged")
 	game.campaign_version = 2
 	game.player.weapon.equip("ember")
-	check(INFO.synergies(game.player).size() == 1, "Innate fire exposes the shared nova combination")
+	check(INFO.synergies(game.player).any(func(text): return "热冲击" in text and "150" in text), "Innate fire exposes the shared nova area combination")
 	game.player.enchantments.poison = 1
-	check(INFO.synergies(game.player).size() == 2, "Existing poison adds combustion combination")
+	check(INFO.synergies(game.player).any(func(text): return "毒素爆燃" in text and "三层" in text), "Existing poison adds the primed combustion combination")
+	game.campaign_version = 1
+	check(not INFO.synergies(game.player).any(func(text): return "范围" in text), "Legacy descriptions do not promise area reactions")
 
 func run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
