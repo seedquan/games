@@ -55,7 +55,8 @@ def main():
                           ("build_info", "ABYSS BUILD INFO"), ("build_menu", "ABYSS BUILD MENU"), ("settings_menu", "ABYSS SETTINGS MENU"), ("encounter_pacing", "ABYSS ENCOUNTER PACING"),
                           ("element_reactions", "ABYSS ELEMENT REACTIONS"), ("guardian_attacks", "ABYSS GUARDIAN ATTACKS"),
                           ("combat_hud", "ABYSS COMBAT HUD"), ("story_animation", "ABYSS STORY ANIMATION"),
-                          ("melee_motion", "ABYSS MELEE MOTION"), ("countershots", "ABYSS COUNTERSHOTS")]:
+                          ("melee_motion", "ABYSS MELEE MOTION"), ("countershots", "ABYSS COUNTERSHOTS"),
+                          ("input_clock", "ABYSS INPUT CLOCK")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1
     return 0
