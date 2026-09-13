@@ -10,6 +10,7 @@ const HAZARD = preload("res://scripts/hazard.gd")
 const WEAPONS = preload("res://scripts/weapons.gd")
 const ROOMS = preload("res://scripts/rooms.gd")
 const PROGRESSION = preload("res://scripts/progression.gd")
+const BUILD_INFO = preload("res://scripts/build_info.gd")
 const PROFILE = preload("res://scripts/profile.gd")
 const STORY = preload("res://scripts/story.gd")
 const RUN_SAVE = preload("res://scripts/run_save.gd")
@@ -28,6 +29,9 @@ var using_gamepad := false
 var last_gamepad_event := -1000
 var auto_pause_enabled := true
 var info_return := "title"
+var build_return := "paused"
+var build_seat := 0
+var build_focus := -1
 var confirm_return := "title"
 var pending_action := ""
 var player
@@ -170,6 +174,7 @@ func _input(event: InputEvent) -> void:
 			"workbench": workbench_back()
 			"settings": close_settings()
 			"help": show_menu(info_return)
+			"build": close_build()
 			"confirm": cancel_confirmation()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("mute"):
@@ -179,16 +184,22 @@ func _input(event: InputEvent) -> void:
 	elif event.is_action_pressed("fullscreen"):
 		set_setting("fullscreen", not settings.values.fullscreen)
 		get_viewport().set_input_as_handled()
-	elif event.is_action_pressed("armory") and state in ["title", "dead", "victory"]:
-		open_armory()
+	elif event.is_action_pressed("armory") and state in ["title", "dead", "victory", "playing", "paused", "reward", "route", "shop", "rest", "build"]:
+		if state in ["title", "dead", "victory"]:
+			open_armory()
+		elif state == "build":
+			close_build()
+		else:
+			open_build()
 		get_viewport().set_input_as_handled()
-	elif event.is_action_pressed("ui_cancel") and using_gamepad and state in ["settings", "help", "armory", "workbench", "confirm"]:
+	elif event.is_action_pressed("ui_cancel") and using_gamepad and state in ["settings", "help", "armory", "workbench", "confirm", "build"]:
 		match state:
 			"settings": close_settings()
 			"help": show_menu(info_return)
 			"armory": armory_back()
 			"workbench": workbench_back()
 			"confirm": cancel_confirmation()
+			"build": close_build()
 		get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -798,6 +809,24 @@ func abandon_to_title() -> void:
 		persist_profile()
 		clear_world()
 		show_menu("title")
+
+func open_build() -> void:
+	if state not in ["playing", "paused", "reward", "route", "shop", "rest"] or not is_instance_valid(player):
+		return
+	build_return = "paused" if state == "playing" else state
+	build_focus = hud.menu_buttons().find(get_viewport().gui_get_focus_owner()) if state != "playing" else 0
+	build_seat = 0
+	show_menu("build")
+
+func choose_build_seat(seat: int) -> void:
+	if state != "build" or seat < 0 or seat >= team().size(): return
+	build_seat = seat
+	hud.show_menu("build")
+
+func close_build() -> void:
+	if state != "build": return
+	show_menu(build_return)
+	hud.restore_menu_focus.call_deferred(build_focus)
 
 func show_menu(menu: String) -> void:
 	state = menu

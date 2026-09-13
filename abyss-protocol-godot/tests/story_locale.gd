@@ -31,7 +31,7 @@ func inspect_ui(context: String) -> void:
 			var text: String = node.text
 			for match_text in english.search_all(text):
 				var token: String = match_text.get_string()
-				check(token in ["WASD", "Esc", "J", "E", "Q", "L", "M", "F"], context + " has an untranslated UI token: " + token)
+				check(token in ["WASD", "Esc", "Tab", "J", "E", "Q", "L", "M", "F"], context + " has an untranslated UI token: " + token)
 			for i in range(text.length()):
 				var code := text.unicode_at(i)
 				if code >= 0x2000 and not checked_chars.has(code):

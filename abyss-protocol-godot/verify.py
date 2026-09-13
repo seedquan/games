@@ -51,7 +51,8 @@ def main():
                           ("aiming", "ABYSS AIMING"), ("coop", "ABYSS COOP"),
                           ("level_design", "ABYSS LEVEL DESIGN"), ("campaign_expansion", "ABYSS EXPANSION"),
                           ("legacy_campaign", "ABYSS LEGACY CAMPAIGN"), ("balance", "ABYSS BALANCE"),
-                          ("reward_checkpoints", "ABYSS REWARD CHECKPOINTS"), ("map_art", "ABYSS MAP ART")]:
+                          ("reward_checkpoints", "ABYSS REWARD CHECKPOINTS"), ("map_art", "ABYSS MAP ART"),
+                          ("build_info", "ABYSS BUILD INFO"), ("build_menu", "ABYSS BUILD MENU")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1
     return 0
