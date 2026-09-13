@@ -146,6 +146,19 @@ func countershot_release() -> void:
 	check(is_instance_valid(shot) and shot.reflected and not shot.hostile and shot.shooter == game.player, "packed parry reverses a real hostile projectile")
 	for i in range(35): await frame()
 	check(target.hp < 10000 and target.burn_left > 0 and target.poison_stacks == 1, "packed return carries the defender's weapon element and rune")
+	game.player.weapon.equip("lance")
+	game.player.aim = Vector2.RIGHT
+	game.player.slash_cooldown = 0
+	target.position = game.player.position + Vector2(110, 48)
+	target.hp = 10000
+	target.poison_stacks = 0
+	game.player.weapon.fire()
+	check(is_equal_approx(target.hp, 10000 - game.player.damage * 1.1) and target.poison_stacks == 1, "packed thrust contacts the body's edge and applies one rune")
+	target.position = game.player.position + Vector2.from_angle(0.3) * 178 + Vector2.from_angle(0.3 + PI / 4) * 20
+	var prior_hp: float = target.hp
+	game.player.slash_cooldown = 0
+	game.player.weapon.fire()
+	check(target.hp == prior_hp, "packed thrust preserves a gap beyond its outer corner")
 
 func clear_encounter() -> void:
 	# State verification applies damage directly, but the packaged encounter must

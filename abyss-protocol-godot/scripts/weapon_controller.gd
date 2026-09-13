@@ -95,9 +95,7 @@ func melee(amount: float) -> void:
 	var hit: Array[Node2D] = []
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		var offset: Vector2 = enemy.global_position - actor.global_position
-		if offset.length() > float(definition.reach) + enemy.radius:
-			continue
-		if actor.aim.dot(offset.normalized()) < cos(float(definition.arc)):
+		if not melee_contacts(offset, enemy.radius):
 			continue
 		if not actor.game.has_sight(actor.global_position, enemy.global_position):
 			continue
@@ -113,6 +111,24 @@ func melee(amount: float) -> void:
 	if definition.id == "prism":
 		actor.game.spawn_bolt(actor.global_position + actor.aim * 28.0, actor.aim, false, amount * 0.75,
 			{"visual": "rail", "color": definition.color, "speed": 1200.0, "visual_offset": to_global(Vector2(37, 0)) - (actor.global_position + actor.aim * 28.0), "pierce": 4, "life": 0.5, "shooter": actor})
+
+func melee_contacts(offset: Vector2, body_radius: float) -> bool:
+	var reach := float(definition.reach)
+	var arc := float(definition.arc)
+	if offset.length_squared() > pow(reach + body_radius, 2):
+		return false
+	if actor.game.campaign_version < 2:
+		return actor.aim.dot(offset.normalized()) >= cos(arc)
+	# Inside the wedge, the nearest boundary is the curved front. Outside it,
+	# use finite side segments so the two outer corners do not gain extra reach.
+	if offset.is_zero_approx() or absf(actor.aim.angle_to(offset)) <= arc:
+		return true
+	for side in [-1.0, 1.0]:
+		var tip: Vector2 = actor.aim.rotated(arc * side) * reach
+		var nearest := Geometry2D.get_closest_point_to_segment(offset, Vector2.ZERO, tip)
+		if offset.distance_squared_to(nearest) <= body_radius * body_radius + 0.001:
+			return true
+	return false
 
 func pose_direction() -> Vector2:
 	if definition.mode == "melee" and actor.slash_left > 0.0 and not attack_aim.is_zero_approx():
