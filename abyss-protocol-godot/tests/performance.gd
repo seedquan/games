@@ -8,6 +8,7 @@ var expanded := "--expanded" in OS.get_cmdline_user_args()
 var guardians := "--guardians" in OS.get_cmdline_user_args()
 var melee := "--melee" in OS.get_cmdline_user_args()
 var poison := "--poison" in OS.get_cmdline_user_args()
+var conduction := "--conduction" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
 var samples: Array[float] = []
@@ -76,6 +77,8 @@ func run() -> void:
 	var melee_frames := 0
 	var poison_frames := 0
 	var peak_poison_markers := 0
+	var conduction_frames := 0
+	var peak_conduction := 0
 	for i in range(900):
 		game.player.aim = Vector2.from_angle(i * 0.04)
 		if i % 45 == 0:
@@ -102,6 +105,12 @@ func run() -> void:
 			var id: String = game.GUARDIAN_ATTACK.IDS[(i / 120) % 5]
 			for spec in game.GUARDIAN_ATTACK.placements(id, game.player.position - Vector2(180, 0), Vector2.RIGHT, game.team()):
 				game.spawn_guardian_attack(spec, 22)
+		if conduction and i % 60 == 0:
+			# A deliberate dense proc fixture; normal-rule pacing is measured by
+			# the input bot. Use real freeze/shock paths and their existing guard.
+			for enemy in get_nodes_in_group("enemies"):
+				enemy.freeze_for(1.8)
+				enemy.apply_element("shock", 40)
 		await frame()
 		var now := Time.get_ticks_usec()
 		samples.append((now - previous) / 1000.0)
@@ -122,12 +131,22 @@ func run() -> void:
 			var count: int = game.get_node("World/Effects").get_children().filter(func(node): return node.get_script() == game.player.weapon.STROKE).size()
 			peak_melee_traces = maxi(peak_melee_traces, count)
 			if count > 0: melee_frames += 1
+		if conduction:
+			var visible_links := 0
+			for effect in game.get_node("World/Effects").get_children():
+				if effect.get_script() != game.EFFECT or effect.reaction != "conduction": continue
+				var transform: Transform2D = effect.get_global_transform_with_canvas()
+				for point in effect.links:
+					if Rect2(transform.origin, transform * point - transform.origin).abs().grow(5).intersects(game.get_viewport_rect()): visible_links += 1
+			peak_conduction = maxi(peak_conduction, visible_links)
+			if visible_links > 0: conduction_frames += 1
 	for member in game.team():
 		Input.action_release(member.action("slash"))
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
 	check(game.sound.voices.size() == 12, "Stress retains the bounded audio pool")
 	if melee: check(melee_frames > 450 and peak_melee_traces >= 2, "Native stress renders overlapping melee feedback for both seats")
 	if poison: check(poison_frames > 450 and peak_poison_markers >= 6, "Native stress includes repeated frames with visible enemy status markers")
+	if conduction: check(conduction_frames > 200 and peak_conduction >= 4, "Native stress includes visible overlapping frost conduction links")
 	game.show_menu("paused")
 	game.abandon_to_title()
 	game.start_run(3102)
@@ -159,9 +178,11 @@ func run() -> void:
 		"frame_ms_max": samples[-1], "peak_nodes": peak_nodes, "peak_projectiles": peak_projectiles,
 		"peak_melee_traces": peak_melee_traces, "frames_with_melee": melee_frames,
 		"poison_feedback": poison, "frames_with_poison": poison_frames, "peak_poison_markers": peak_poison_markers,
+		"frost_conduction": conduction, "frames_with_conduction": conduction_frames, "peak_conduction_links": peak_conduction,
 		"restart_cycles": 40, "orphan_baseline": orphan_baseline, "failures": failures}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://builds/qa"))
 	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "") + ("-poison" if poison else "")
+	if conduction: report_name += "-conduction"
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

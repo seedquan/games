@@ -57,7 +57,8 @@ def main():
                           ("combat_hud", "ABYSS COMBAT HUD"), ("story_animation", "ABYSS STORY ANIMATION"),
                           ("melee_motion", "ABYSS MELEE MOTION"), ("countershots", "ABYSS COUNTERSHOTS"),
                           ("input_clock", "ABYSS INPUT CLOCK"), ("defense_guide", "ABYSS DEFENSE GUIDE"),
-                          ("poison_feedback", "ABYSS POISON FEEDBACK"), ("melee_contact", "ABYSS MELEE CONTACT")]:
+                          ("poison_feedback", "ABYSS POISON FEEDBACK"), ("melee_contact", "ABYSS MELEE CONTACT"),
+                          ("frost_conduction", "ABYSS FROST CONDUCTION")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1
     return 0

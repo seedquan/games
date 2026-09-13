@@ -20,6 +20,7 @@ var trace_damage := "--trace-damage" in OS.get_cmdline_user_args()
 var damage_events: Array = []
 var projectile_defense := "--projectile-defense" in OS.get_cmdline_user_args()
 var countershots := 0
+var frost_build := "--frost-build" in OS.get_cmdline_user_args()
 var controls = preload("res://tests/bot_input.gd").new()
 var skill_activations := {"dash": 0, "freeze": 0, "parry": 0}
 var previous_cooldowns: Dictionary = {}
@@ -216,6 +217,11 @@ func run() -> void:
 				for i in range(game.boon_choices.size()):
 					if game.boon_choices[i].stat in ["damage", "leech"]:
 						choice = i
+				if frost_build:
+					# Choose from actual offered cards. Never insert or reroll a boon.
+					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire"]
+					for i in range(game.boon_choices.size()):
+						if priorities.find(game.boon_choices[i].stat) < priorities.find(game.boon_choices[choice].stat): choice = i
 				game.choose_boon(choice)
 			"route":
 				release_controls()
@@ -227,6 +233,7 @@ func run() -> void:
 			"shop":
 				release_controls()
 				for i in range(game.shop_stock.size()):
+					if frost_build and game.shop_stock[i].id in ["fire", "poison"]: continue
 					if game.can_buy(i):
 						game.buy_item(i)
 				game.leave_supply()
@@ -254,6 +261,7 @@ func run() -> void:
 	report.input_adapter = "state transitions only"
 	report.skill_activations = skill_activations
 	report.countershots = countershots
+	report.build_policy = "ice/shock cards first; skip fire/poison purchases" if frost_build else "damage/leech cards; buy available supplies"
 	if trace_damage: report.damage_events = damage_events
 	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate()})
 	report.physics_seconds = combat_physics_frames / 60.0
@@ -265,6 +273,7 @@ func run() -> void:
 	if weapon_id != "rifle" or room_limit < 30: output = "res://builds/qa/playthrough-%s-%s-%d.json" % [weapon_id, "coop" if cooperative else "solo", room_limit]
 	if projectile_defense: output = output.trim_suffix(".json") + "-defense.json"
 	if trace_damage: output = output.trim_suffix(".json") + "-damage-trace.json"
+	if frost_build: output = output.trim_suffix(".json") + "-frost-build.json"
 	var file := FileAccess.open(output, FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

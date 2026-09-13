@@ -946,13 +946,14 @@ func effect(point: Vector2, color: Color, radius: float, duration := 0.4) -> voi
 	ring.duration = duration
 	$World/Effects.add_child(ring)
 
-func reaction_effect(point: Vector2, color: Color, radius: float, reaction: String) -> void:
+func reaction_effect(point: Vector2, color: Color, radius: float, reaction: String, links := PackedVector2Array()) -> void:
 	var burst = EFFECT.new()
 	burst.position = point
 	burst.color = color
 	burst.radius = radius
 	burst.duration = 0.55
 	burst.reaction = reaction
+	burst.links = links
 	burst.intensity = float(settings.values.flash)
 	$World/Effects.add_child(burst)
 
