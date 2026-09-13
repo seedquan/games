@@ -200,7 +200,7 @@ python3 export_macos.py --rendered
 Windows 存档位于 `%APPDATA%\Godot\app_userdata\深渊协议\`；更新时解压新版本不会覆盖此目录。
 包内 `游玩说明.txt` 提供操作、更新、显卡兼容和验证说明，`ThirdPartyNotices.txt` 包含引擎、第三方库及字体许可。
 
-本地已生成 **0.16.0** Windows x64 包，与 Mac 使用相同内容；Wine 无界面和窗口战役/续档检查通过。交付设备目前不可达，**0.16.0 尚未传送到 Games**。用户允许 Windows 测试机未开机时先跳过 Windows 部分，因此本轮实机测试与共享交付先跳过，不再阻塞 Mac 交付，也不记录为 Windows 实机通过。本版包和验收附件保留，报告 ZIP 仍直接写到 Games 根目录。
+本地已生成 **0.17.0** Windows x64 包，与 Mac 使用相同内容；Wine 无界面和窗口战役/续档检查通过。Games 共享当前未挂载，**0.17.0 尚未传送到 Games**。用户允许 Windows 测试机未开机时先跳过 Windows 部分，因此本轮实机测试与共享交付先跳过，不再阻塞 Mac 交付，也不记录为 Windows 实机通过。本版包和验收附件保留，报告 ZIP 仍直接写到 Games 根目录。
 
 Windows 共享交付目录为 `smb://Rog-xx/Games`。2026-09-12 已将 **0.11.1** 交付到
 `深渊协议-0.11.1-Windows-x64/深渊协议 0.11.1/`，在 Windows 打开目录中的 `AbyssProtocol.exe` 即可。
@@ -218,7 +218,7 @@ Windows 共享交付目录为 `smb://Rog-xx/Games`。2026-09-12 已将 **0.11.1*
 回传不创建子目录或重命名目录；已有报告 ZIP 保留，重名时使用新的 ZIP 文件名。共享盘仍不可写时会在资源管理器选中本地 ZIP，便于转交。显式指定原报告或可写目标的方法见验收说明。
 退出码 0 为测试和回传成功，2 为测试通过但回传失败，1 为测试或本地报告准备未完成。
 ZIP 包含绑定报告哈希的 `handoff.json`，复制后回读整个 ZIP 校验，匹配才报告成功；自动运行结果与实体双手柄、真人体验分别记录。
-开发者可用 `python3 tools/prepare_windows_acceptance.py --report builds/深渊协议-0.16.0-Windows-x64.json` 生成新版本入口；加 `--destination-root` 可绑定已有的 Windows 报告目录，未指定时直接写到验收入口旁。已有输出目录不会被覆盖。
+开发者可用 `python3 tools/prepare_windows_acceptance.py --report builds/深渊协议-0.17.0-Windows-x64.json` 生成新版本入口；加 `--destination-root` 可绑定已有的 Windows 报告目录，未指定时直接写到验收入口旁。已有输出目录不会被覆盖。
 
 开发环境需要 Godot 4.7.2 标准版和 Python 3.11 或更新版本。Windows 下将 `GODOT_BIN` 指向 Godot 可执行文件；已有 `verify.py` 原生支持 Windows。
 
@@ -230,7 +230,7 @@ python export_windows.py --rendered
 
 模板准备脚本从 Godot 官方发布下载，并校验固定 SHA-256 后提取 x86_64 模板；约 1.28 GB 的原始模板包缓存在忽略的 `builds/templates/`。
 导出脚本验证引擎/模板版本、执行二十五套源码检查、写入 Windows 图标和版本资源、验证 PE 架构、排除开发文件，再从包含中文与空格的独立目录验证发行程序。
-输出 `builds/深渊协议-0.16.0-Windows-x64.zip`、SHA-256、逐文件校验清单与构建/运行报告。Windows 包当前未进行发行者证书签名，只交付到授权共享盘，未上传公共发行渠道。
+输出 `builds/深渊协议-0.17.0-Windows-x64.zip`、SHA-256、逐文件校验清单与构建/运行报告。Windows 包当前未进行发行者证书签名，只交付到授权共享盘，未上传公共发行渠道。
 
 Windows 包中的 `Verify-Windows.ps1` 可直接运行，自动完成完整战役和两次独立进程的存档验证。加 `-Rendered` 使用真实窗口，加 `-Renderer opengl3_angle` 测试 ANGLE 兼容渲染。日志、截图和报告写入单独临时目录；验证不读写正常玩家存档。
 
