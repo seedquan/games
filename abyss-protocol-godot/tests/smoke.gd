@@ -131,6 +131,8 @@ func run() -> void:
 	check(game.room == game.LAST_ROOM and get_nodes_in_group("enemies").size() == 1, "Final room contains a single boss")
 	var boss = get_nodes_in_group("enemies")[0]
 	check(boss.kind == "boss" and boss.hp > 700.0, "Boss has its own archetype and scaled health")
+	boss.pattern = boss.guardian_patterns.find("radial")
+	check(boss.pattern >= 0, "Final guardian retains its radial attack alongside its new signature")
 	boss.release_attack()
 	check(game.get_node("World/Projectiles").get_child_count() >= 12, "Boss emits its radial bullet pattern")
 	boss.take_damage(boss.hp, Vector2.ZERO)

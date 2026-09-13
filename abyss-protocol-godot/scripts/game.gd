@@ -5,6 +5,7 @@ const PLAYER = preload("res://scenes/player.tscn")
 const ENEMY = preload("res://scenes/enemy.tscn")
 const PROJECTILE = preload("res://scenes/projectile.tscn")
 const EFFECT = preload("res://scripts/effect.gd")
+const GUARDIAN_ATTACK = preload("res://scripts/guardian_attack.gd")
 const FIELD = preload("res://scripts/combat_field.gd")
 const HAZARD = preload("res://scripts/hazard.gd")
 const WEAPONS = preload("res://scripts/weapons.gd")
@@ -954,6 +955,14 @@ func reaction_effect(point: Vector2, color: Color, radius: float, reaction: Stri
 	burst.reaction = reaction
 	burst.intensity = float(settings.values.flash)
 	$World/Effects.add_child(burst)
+
+func spawn_guardian_attack(spec: Dictionary, damage: float):
+	var attack = GUARDIAN_ATTACK.new()
+	attack.game = self
+	attack.damage = damage
+	attack.configure(spec)
+	$World/Projectiles.add_child(attack)
+	return attack
 
 func play_tone(frequency: float, duration: float, volume: float) -> void:
 	if not muted and is_instance_valid(sound):

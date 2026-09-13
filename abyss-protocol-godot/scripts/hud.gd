@@ -34,6 +34,7 @@ var save_notice: Label
 var tutorial: Label
 var boss_panel: VBoxContainer
 var boss_name: Label
+var boss_mark: TextureRect
 var boss_integrity: ProgressBar
 
 func build() -> void:
@@ -94,9 +95,22 @@ func build() -> void:
 	boss_panel.custom_minimum_size.x = 540
 	boss_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	stack.add_child(boss_panel)
+	var boss_heading := HBoxContainer.new()
+	boss_heading.alignment = BoxContainer.ALIGNMENT_CENTER
+	boss_panel.add_child(boss_heading)
+	boss_mark = TextureRect.new()
+	boss_mark.custom_minimum_size = Vector2(30, 30)
+	boss_mark.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	boss_mark.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	boss_mark.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var boss_atlas := AtlasTexture.new()
+	boss_atlas.atlas = preload("res://assets/ui/boss_signatures.svg")
+	boss_atlas.region = Rect2(0, 0, 64, 64)
+	boss_mark.texture = boss_atlas
+	boss_heading.add_child(boss_mark)
 	boss_name = label("", 18, Color("ffb2dc"))
 	boss_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	boss_panel.add_child(boss_name)
+	boss_heading.add_child(boss_name)
 	boss_integrity = bar(Color("e68eef"), 10)
 	boss_panel.add_child(boss_integrity)
 	boss_panel.hide()
@@ -872,6 +886,8 @@ func update_status() -> void:
 	boss_panel.visible = is_instance_valid(game.active_boss) and game.state == "playing"
 	if boss_panel.visible:
 		var boss = game.active_boss
+		boss_mark.visible = game.campaign_version >= 2
+		(boss_mark.texture as AtlasTexture).region = Rect2(clampi((game.room - 1) / 6, 0, 4) * 64, 0, 64, 64)
 		var phase := "过载阶段" if boss.kind == "boss" and boss.hp < boss.max_hp * 0.5 else "防御阶段"
 		boss_name.text = game.room_data.get("name", "深渊主控体" if boss.kind == "boss" else "封锁卫士") + "　/　" + phase
 		if boss.attacking:
