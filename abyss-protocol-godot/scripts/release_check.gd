@@ -86,6 +86,9 @@ func run() -> void:
 		game.player.weapon.equip(form.id)
 		game.player.slash_cooldown = 0
 		check(game.player.weapon.fire(1.0 if form.has("charge") else -1.0), "attack " + form.id)
+		if form.mode == "melee":
+			var traces: Array = game.get_node("World/Effects").get_children().filter(func(node): return node.get_script() == game.player.weapon.STROKE and node.kind == form.id)
+			check(not traces.is_empty() and traces[-1].edge.size() == 33, "packed contact trace " + form.id)
 		await frame()
 	await complete_campaign()
 	check(game.state == "victory" and game.room == game.run_length, "complete all campaign chambers and ending")

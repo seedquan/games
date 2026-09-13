@@ -6,6 +6,7 @@ var game
 var cooperative := "--coop" in OS.get_cmdline_user_args()
 var expanded := "--expanded" in OS.get_cmdline_user_args()
 var guardians := "--guardians" in OS.get_cmdline_user_args()
+var melee := "--melee" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
 var samples: Array[float] = []
@@ -70,12 +71,20 @@ func run() -> void:
 	var previous := Time.get_ticks_usec()
 	var peak_nodes := 0
 	var peak_projectiles := 0
+	var peak_melee_traces := 0
+	var melee_frames := 0
 	for i in range(900):
 		game.player.aim = Vector2.from_angle(i * 0.04)
 		if i % 45 == 0:
-			game.player.weapon.equip(["scatter", "sbow", "ember", "rail"][i / 45 % 4])
-			game.player.slash_cooldown = 0
-			game.player.weapon.fire(1.0)
+			if melee:
+				for member in game.team():
+					member.weapon.equip(["fang", "blade", "lance", "maul", "arc", "whip", "prism"][(i / 45 + member.seat) % 7])
+					member.slash_cooldown = 0
+					member.weapon.fire()
+			else:
+				game.player.weapon.equip(["scatter", "sbow", "ember", "rail"][i / 45 % 4])
+				game.player.slash_cooldown = 0
+				game.player.weapon.fire(1.0)
 		if i % 90 == 0:
 			game.spawn_hazard(game.player.position + Vector2(120, 20), 95, 22)
 		if guardians and i % 120 == 0:
@@ -91,10 +100,15 @@ func run() -> void:
 		previous = now
 		peak_nodes = maxi(peak_nodes, get_node_count())
 		peak_projectiles = maxi(peak_projectiles, game.get_node("World/Projectiles").get_child_count())
+		if melee:
+			var count: int = game.get_node("World/Effects").get_children().filter(func(node): return node.get_script() == game.player.weapon.STROKE).size()
+			peak_melee_traces = maxi(peak_melee_traces, count)
+			if count > 0: melee_frames += 1
 	for member in game.team():
 		Input.action_release(member.action("slash"))
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
 	check(game.sound.voices.size() == 12, "Stress retains the bounded audio pool")
+	if melee: check(melee_frames > 450 and peak_melee_traces >= 2, "Native stress renders overlapping melee feedback for both seats")
 	game.show_menu("paused")
 	game.abandon_to_title()
 	game.start_run(3102)
@@ -122,11 +136,12 @@ func run() -> void:
 	var p99 := samples[int(samples.size() * 0.99)]
 	check(p95 <= 25.0 and p99 <= 50.0, "Native stress frame pacing meets the local 60 Hz acceptance envelope")
 	var report := {"rendering_device": RenderingServer.get_video_adapter_name(), "os": OS.get_name(), "engine": Engine.get_version_info().string,
-		"cooperative": cooperative, "expanded_map": expanded, "guardian_signatures": guardians, "resolution": "%dx%d" % [root.size.x, root.size.y], "screen_scale": DisplayServer.screen_get_scale(), "samples": samples.size(), "frame_ms_p50": p50, "frame_ms_p95": p95, "frame_ms_p99": p99,
+		"cooperative": cooperative, "expanded_map": expanded, "guardian_signatures": guardians, "melee_weapons": melee, "resolution": "%dx%d" % [root.size.x, root.size.y], "screen_scale": DisplayServer.screen_get_scale(), "samples": samples.size(), "frame_ms_p50": p50, "frame_ms_p95": p95, "frame_ms_p99": p99,
 		"frame_ms_max": samples[-1], "peak_nodes": peak_nodes, "peak_projectiles": peak_projectiles,
+		"peak_melee_traces": peak_melee_traces, "frames_with_melee": melee_frames,
 		"restart_cycles": 40, "orphan_baseline": orphan_baseline, "failures": failures}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://builds/qa"))
-	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "")
+	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "")
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

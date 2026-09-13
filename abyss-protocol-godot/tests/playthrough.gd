@@ -110,6 +110,8 @@ func diagnostics() -> Dictionary:
 	return {"room": game.room, "name": game.room_data.name, "state": game.state, "room_seconds": snappedf(game.elapsed - room_started, 0.1), "game_seconds": snappedf(game.elapsed, 0.1), "actors": actors, "enemies": hostiles, "wave": game.encounter.wave, "pending": game.encounter.pending.size()}
 
 func run() -> void:
+	# Enemy attack offsets and scattered projectiles use the global RNG.
+	seed(314159)
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--rooms="): room_limit = clampi(argument.get_slice("=", 1).to_int(), 1, 30)
 		if argument.begins_with("--speed="): simulation_speed = clampi(argument.get_slice("=", 1).to_int(), 1, 16)
@@ -173,8 +175,9 @@ func run() -> void:
 						game.buy_item(i)
 				game.leave_supply()
 			"rest": game.leave_supply()
+		# Sample input every simulated physics step, including accelerated runs.
+		# Waiting for render here reduces bot reaction speed as simulation speed rises.
 		await physics_frame
-		await process_frame
 		if DisplayServer.get_name() != "headless" and "--capture" in OS.get_cmdline_user_args() and game.state == "playing" and game.room == visited_room and game.room in [1, 2, 6] and not captured.has(game.room) and game.elapsed - room_started > 20:
 			await RenderingServer.frame_post_draw
 			DirAccess.make_dir_recursive_absolute("res://builds/qa")
@@ -186,6 +189,9 @@ func run() -> void:
 		"cooperative": cooperative, "weapon": weapon_id, "result": "segment_complete" if game.room > room_limit else game.state, "depth": game.room, "game_seconds": game.elapsed,
 		"hp": game.player.hp, "kills": game.kills, "story_beats": game.story_seen, "rooms": reports}
 	report.last_room = diagnostics()
+	report.input_updates = ticks
+	report.input_clock = "physics_frame"
+	report.global_rng_seed = 314159
 	report.element_reactions = reactions
 	report.guardian_shapes = guardian_shapes
 	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate()})

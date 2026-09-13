@@ -59,7 +59,7 @@ func step(side: int) -> Vector2:
 func update_pose() -> void:
 	if not is_instance_valid(actor) or not is_instance_valid(actor.weapon):
 		return
-	var aim_angle: float = actor.aim.angle()
+	var aim_angle: float = actor.weapon.pose_direction().angle()
 	if absf(angle_difference(float(facing) * PI / 4.0, aim_angle)) > PI / 8.0 + 0.04:
 		facing = posmod(roundi(aim_angle / (PI / 4.0)), 8)
 	projection = "side" if facing in [0, 4] else "south" if facing == 2 else "north" if facing == 6 else "front" if facing in [1, 3] else "rear"
@@ -72,7 +72,7 @@ func update_pose() -> void:
 	pose.clear()
 	visual_attack_angle = aim_angle
 	if actor.weapon.definition.mode == "melee" and actor.slash_left > 0.0:
-		visual_attack_angle += lerpf(-0.9, 0.9, 1.0 - actor.slash_left / 0.18)
+		visual_attack_angle += actor.weapon.melee_motion().x
 	if projection in ["south", "north"]:
 		var left_first := step(-1).x < step(1).x
 		if projection == "north":
@@ -177,8 +177,12 @@ func arm(side: int) -> void:
 		wrist = joints[1]
 	elif side > 0 and actor.slash_left > 0.0:
 		var target := shoulder + Vector2(cos(visual_attack_angle) * 32.0, 16 + sin(visual_attack_angle) * 20.0)
+		if actor.weapon.definition.mode == "melee":
+			target += actor.weapon.pose_direction() * actor.weapon.melee_motion().y
 		var joints := support_joints("fore" + suffix, shoulder, target, adjusted_width)
 		var amount := sin(PI * clampf(actor.slash_left / 0.18, 0.0, 1.0))
+		if actor.weapon.definition.mode == "melee" and actor.weapon.definition.id in ["lance", "whip", "maul"]:
+			amount = pow(clampf(actor.slash_left / 0.18, 0.0, 1.0), 0.6)
 		elbow = elbow.lerp(joints[0], amount)
 		wrist = wrist.lerp(joints[1], amount)
 	var palm := add_part("fore" + suffix, elbow, wrist, adjusted_width)

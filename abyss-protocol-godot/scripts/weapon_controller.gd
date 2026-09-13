@@ -3,6 +3,7 @@ extends Node2D
 
 const CATALOG = preload("res://scripts/weapons.gd")
 const ART = preload("res://scripts/weapon_art.gd")
+const STROKE = preload("res://scripts/melee_stroke.gd")
 var actor
 var definition: Dictionary = CATALOG.find("blade")
 var charge := 0.0
@@ -10,6 +11,7 @@ var drawing := false
 var combo := 0
 var combo_left := 0.0
 var active_glaive: WeakRef
+var attack_aim := Vector2.ZERO
 
 func _ready() -> void:
 	actor = get_parent()
@@ -21,6 +23,7 @@ func equip(id: String) -> bool:
 	cancel_charge()
 	combo = 0
 	combo_left = 0.0
+	attack_aim = Vector2.ZERO
 	if is_instance_valid(actor):
 		actor.get_node("Sprite").update_pose()
 	queue_redraw()
@@ -42,8 +45,6 @@ func tick(delta: float, held: bool, released: bool) -> void:
 			release_charge()
 	elif held:
 		fire()
-	position = Vector2(0, -19) + actor.aim * 18.0
-	rotation = actor.aim.angle()
 	queue_redraw()
 
 func release_charge() -> bool:
@@ -62,9 +63,10 @@ func fire(charge_fraction := -1.0) -> bool:
 		return false
 	actor.slash_cooldown = definition.cooldown
 	actor.slash_left = 0.18
-	actor.get_node("Sprite").update_pose()
+	attack_aim = actor.aim
 	combo += 1
 	combo_left = 0.85
+	actor.get_node("Sprite").update_pose()
 	var amount: float = actor.damage * float(definition.damage) * (1.5 if actor.empowered > 0.0 else 1.0)
 	match definition.mode:
 		"melee": melee(amount)
@@ -87,6 +89,9 @@ func fire(charge_fraction := -1.0) -> bool:
 	return true
 
 func melee(amount: float) -> void:
+	var stroke = STROKE.new()
+	stroke.configure(actor, definition, combo)
+	actor.game.get_node("World/Effects").add_child(stroke)
 	var hit: Array[Node2D] = []
 	for enemy in get_tree().get_nodes_in_group("enemies"):
 		var offset: Vector2 = enemy.global_position - actor.global_position
@@ -108,8 +113,23 @@ func melee(amount: float) -> void:
 	if definition.id == "prism":
 		actor.game.spawn_bolt(actor.global_position + actor.aim * 28.0, actor.aim, false, amount * 0.75,
 			{"visual": "rail", "color": definition.color, "speed": 1200.0, "visual_offset": to_global(Vector2(37, 0)) - (actor.global_position + actor.aim * 28.0), "pierce": 4, "life": 0.5, "shooter": actor})
-	if definition.id == "maul":
-		actor.game.effect(actor.global_position + actor.aim * 65.0, Color(definition.color), 70.0)
+
+func pose_direction() -> Vector2:
+	if definition.mode == "melee" and actor.slash_left > 0.0 and not attack_aim.is_zero_approx():
+		return attack_aim
+	return actor.aim
+
+func melee_motion() -> Vector2:
+	# Follow-through only: damage is immediate; neither movement nor next input waits.
+	# x = rotation from committed aim, y = hand extension in authored rig pixels.
+	var progress := clampf(1.0 - actor.slash_left / 0.18, 0.0, 1.0)
+	var recovery := pow(1.0 - progress, 2.0)
+	match definition.id:
+		"lance": return Vector2(0, 26.0 * recovery)
+		"whip": return Vector2(-0.2 * sin(progress * PI), 22.0 * recovery)
+		"maul": return Vector2(0.55 * (1.0 - recovery), 12.0 * recovery)
+		"fang": return Vector2(lerpf(-0.7, 0.7, progress) * (1.0 if combo % 2 else -1.0), 7.0)
+	return Vector2(lerpf(-0.9, 0.9, progress), 0)
 
 func shoot(amount: float, charge_fraction: float) -> void:
 	var pellets: int = definition.get("pellets", 1)
