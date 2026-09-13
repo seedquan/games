@@ -42,7 +42,7 @@ $checks = @()
 try {
     foreach ($stage in @('campaign', 'write', 'read')) {
         $engineLog = Join-Path $runDirectory ($stage + '.engine.log')
-        $arguments = @('--log-file', (Get-GuestPath $engineLog))
+        $arguments = @('--audio-driver', 'Dummy', '--log-file', (Get-GuestPath $engineLog))
         if (-not $Rendered) { $arguments += '--headless' }
         else { $arguments += @('--rendering-driver', $Renderer) }
         $arguments += @('--', '--verify-release')

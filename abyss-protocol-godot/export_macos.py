@@ -24,7 +24,9 @@ def run(command, timeout=180, cwd=ROOT):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-checks", action="store_true", help="Use only after a current successful verify.py run")
+    parser.add_argument("--rendered", action="store_true", help="Verify the packaged game in silent native windows")
     args = parser.parse_args()
+    runtime_options = ["--audio-driver", "Dummy"] + ([] if args.rendered else ["--headless"])
     template = ROOT / "builds/templates/macos.zip"
     if not template.is_file():
         raise RuntimeError("Extract templates/macos.zip and templates/version.txt from the official matching Godot export_templates.tpz into builds/templates/ first.")
@@ -66,7 +68,7 @@ def main():
         if len(executables) != 1:
             raise RuntimeError("Expected exactly one native executable")
         # Run outside the project so missing packed resources cannot fall back to source.
-        log = run([str(executables[0]), "--headless", "--", "--verify-release"], cwd=temp, timeout=60)
+        log = run([str(executables[0])] + runtime_options + ["--", "--verify-release"], cwd=temp, timeout=60)
         summary = re.search(r"ABYSS RELEASE: \d+ checks, 0 failures", log)
         if not summary:
             raise RuntimeError("Release runtime did not complete verification\n" + log)
@@ -76,7 +78,7 @@ def main():
         fixture.mkdir()
         (fixture / ".abyss-release-fixture").write_text("Disposable release verification data\n")
         for stage in ("write", "read"):
-            log = run([str(executables[0]), "--headless", "--", "--verify-release",
+            log = run([str(executables[0])] + runtime_options + ["--", "--verify-release",
                        f"--verify-storage={fixture}", f"--verify-stage={stage}"], cwd=temp, timeout=60)
             summary = re.search(rf"ABYSS STORAGE {stage.upper()}: \d+ checks, 0 failures", log)
             if not summary:
@@ -89,6 +91,8 @@ def main():
               "archive": output.name, "bytes": output.stat().st_size, "sha256": digest,
               "signing": "ad-hoc; not notarized", "verification_skipped": args.skip_checks}
     report["standalone_campaign"] = "passed"
+    report["rendered"] = args.rendered
+    report["audio_driver"] = "Dummy"
     report["storage_roundtrip"] = "passed; isolated fresh installation and second-process resume"
     output.with_suffix(".json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(f"Built {output}\nSHA-256 {digest}")

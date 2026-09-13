@@ -32,6 +32,9 @@ there is no HTML build artifact to regenerate.
 - Prefer `python3 verify.py` for all scene suites plus import; it also fails on
   script errors (Godot can otherwise return 0 despite errors) and missing summaries.
 - For visual/input changes, also launch and exercise the native game.
+- Develop and verify on macOS first, then build and validate Windows. Development
+  and test launches must use `--audio-driver Dummy` to stay silent without
+  changing system volume or the player's saved preferences.
 - `tests/production.gd` covers preferences/input; `tests/checkpoints.gd` recreates
   both complete campaigns from disk at every safe point. Keep their files isolated.
 - Save meta progress and safe-point run data in the same profile transaction; do
