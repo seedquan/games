@@ -3,6 +3,8 @@ extends Control
 signal playback_changed
 const ART = preload("res://assets/ui/defense_demo.svg")
 const DURATION := 5.0
+const DODGE = preload("res://scripts/dodge_diagram.gd")
+var mode := "parry"
 var elapsed := DURATION
 var has_played := false
 var paused := false
@@ -43,7 +45,23 @@ func toggle_playback() -> void:
 	queue_redraw()
 	playback_changed.emit()
 
+func select_mode(value: String) -> void:
+	if value not in ["parry", "dodge"] or value == mode: return
+	mode = value
+	elapsed = DURATION
+	has_played = false
+	paused = false
+	set_process(false)
+	queue_redraw()
+	playback_changed.emit()
+
 func instruction(binding: String) -> String:
+	if mode == "dodge":
+		if elapsed >= DURATION: return "先走出橙色范围；来不及时按 %s 冲刺 · 已在安全处无需冲刺" % binding
+		if elapsed < 1.5: return "守卫图标只在预告招式 · 先观察，不必立刻冲刺"
+		if elapsed < 3.02: return "落点已锁定，内环正向外扩张 · 尽早走出范围，留住冲刺"
+		if elapsed < 3.4: return "内环将碰到外沿 · 来不及走出时，按 %s 冲刺" % binding
+		return "爆发结束再回身进攻 · 短暂无敌不会覆盖整个预告"
 	if elapsed >= DURATION:
 		return "来弹接近时按 %s 弹反 · 金色返弹携带武器元素与符文" % binding
 	if elapsed < 2.3: return "看清来弹方向 · 接近时按 %s 弹反" % binding
@@ -58,6 +76,9 @@ func arrow(from: Vector2, to: Vector2, color: Color, width := 2.0) -> void:
 func _draw() -> void:
 	var scale_factor := minf(size.x / 1080.0, size.y / 166.0)
 	draw_set_transform(Vector2.ZERO, 0, Vector2.ONE * scale_factor)
+	if mode == "dodge":
+		DODGE.draw_on(self, elapsed, elapsed >= DURATION or not motion_enabled)
+		return
 	var red := Color("ee947e")
 	var gold := Color("e5ba7c")
 	var still := elapsed >= DURATION or not motion_enabled

@@ -37,3 +37,5 @@ Godot 生成的 `.import` 元数据与资源一起保留；`.godot/` 导入缓�
 仪表数字使用 `fonts/Oxanium.ttf`，来自 [Google Fonts 字体目录](https://github.com/google/fonts/tree/main/ofl/oxanium)，SIL OFL 1.1 授权，完整版权及许可在 `fonts/Oxanium-OFL.txt`。`Display.tres` 与 `Readout.tres` 均显式回退到已打包的 Noto Sans CJK，避免缺字依赖本机字体；数字资源采用 600 字重并开启等宽数字特性；实测 26px 下十个数字宽度均为 15px。三个字体均未修改，运行时无需联网。旧 Noto Serif 展示字体已从当前包移除，历史发行包保留原资源。
 
 九个短音 `gun/heavy/blade/bow/arc/impact/dash/ui/clear.wav` 是 `tools/make_audio.py` 生成的原创确定性 PCM 音频，没有第三方采样。可重新生成，运行时直接加载本地资源。
+
+`ui/dodge_timing.svg` 是本项目原创的守卫/机体矢量图。`scripts/dodge_diagram.gd` 将图示与对应地面预警轮廓组合，说明准备、落点锁定、走位与短冲刺窗口；没有外部图片或视频依赖。

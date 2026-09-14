@@ -56,7 +56,7 @@ def main():
                           ("element_reactions", "ABYSS ELEMENT REACTIONS"), ("guardian_attacks", "ABYSS GUARDIAN ATTACKS"),
                           ("combat_hud", "ABYSS COMBAT HUD"), ("story_animation", "ABYSS STORY ANIMATION"),
                           ("melee_motion", "ABYSS MELEE MOTION"), ("countershots", "ABYSS COUNTERSHOTS"),
-                          ("input_clock", "ABYSS INPUT CLOCK"), ("defense_guide", "ABYSS DEFENSE GUIDE"),
+                          ("input_clock", "ABYSS INPUT CLOCK"), ("defense_guide", "ABYSS DEFENSE GUIDE"), ("dodge_guide", "ABYSS DODGE GUIDE"),
                           ("poison_feedback", "ABYSS POISON FEEDBACK"), ("melee_contact", "ABYSS MELEE CONTACT"),
                           ("frost_conduction", "ABYSS FROST CONDUCTION"),
                           ("freeze_feedback", "ABYSS FREEZE FEEDBACK"),

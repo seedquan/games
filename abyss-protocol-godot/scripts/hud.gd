@@ -1029,12 +1029,23 @@ func build_help() -> void:
 		return_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		return_tip.focus_mode = Control.FOCUS_ALL
 		return_row.add_child(return_tip)
-		content.add_child(label("弹反 · 把来弹送回去", 23, MINT))
+		var defense_header := HBoxContainer.new()
+		defense_header.add_theme_constant_override("separation", 16)
+		content.add_child(defense_header)
+		var defense_title := label("防御 · 时机与回击", 23, MINT)
+		defense_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		defense_header.add_child(defense_title)
 		defense_demo = preload("res://scripts/defense_demo.gd").new()
 		defense_demo.name = "DefenseDemo"
 		defense_demo.motion_enabled = game.settings.values.story_motion
 		defense_demo.auto_pause_enabled = game.auto_pause_enabled
 		content.add_child(defense_demo)
+		for option in [["parry", "弹反返弹", "ParryMode"], ["dodge", "冲刺避爆", "DodgeMode"]]:
+			var mode_button := button(option[1], func(): defense_demo.select_mode(option[0]))
+			mode_button.name = option[2]
+			mode_button.toggle_mode = true
+			mode_button.button_pressed = option[0] == defense_demo.mode
+			defense_header.add_child(mode_button)
 		defense_instruction = label("", 20, Color("ede4cc"))
 		defense_instruction.name = "DefenseInstruction"
 		defense_instruction.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1046,7 +1057,7 @@ func build_help() -> void:
 		defense_playback.name = "DefensePlayback"
 		defense_playback.visible = defense_demo.motion_enabled
 		actions.add_child(defense_playback)
-		actions.add_child(label("慢动作图解 · 橙色爆区仍需移动或冲刺躲开", 16, MUTED))
+		actions.add_child(label("慢动作图解 · 演示不会推进战斗", 16, MUTED))
 		defense_demo.playback_changed.connect(refresh_defense_demo)
 		refresh_defense_demo()
 		content.add_child(label("冰霜 · 雪花才是冻结", 23, MINT))
@@ -1124,7 +1135,10 @@ func build_help() -> void:
 
 func refresh_defense_demo() -> void:
 	if not is_instance_valid(defense_demo): return
-	defense_instruction.text = defense_demo.instruction(game.action_label("parry"))
+	defense_instruction.text = defense_demo.instruction(game.action_label("dash" if defense_demo.mode == "dodge" else "parry"))
+	for pair in [["ParryMode", "parry"], ["DodgeMode", "dodge"]]:
+		var mode_button = menu_margin.find_child(pair[0], true, false)
+		if is_instance_valid(mode_button): mode_button.set_pressed_no_signal(defense_demo.mode == pair[1])
 	defense_playback.text = ("重播演示" if defense_demo.has_played else "播放演示") if defense_demo.elapsed >= defense_demo.DURATION else "继续演示" if defense_demo.paused else "暂停演示"
 
 func build_confirmation() -> void:
