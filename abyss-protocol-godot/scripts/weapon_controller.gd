@@ -2,6 +2,7 @@ extends Node2D
 ## Dispatches genuine attack families. Shared plasma stays a separate ability.
 
 const CATALOG = preload("res://scripts/weapons.gd")
+const MODS = preload("res://scripts/weapon_mods.gd")
 const ART = preload("res://scripts/weapon_art.gd")
 const STROKE = preload("res://scripts/melee_stroke.gd")
 var actor
@@ -19,7 +20,7 @@ func _ready() -> void:
 func equip(id: String) -> bool:
 	if not CATALOG.exists(id):
 		return false
-	definition = CATALOG.find(id)
+	definition = MODS.definition(id, actor.weapon_mod if is_instance_valid(actor) and actor.game.campaign_version >= 2 else "")
 	cancel_charge()
 	combo = 0
 	combo_left = 0.0
@@ -71,16 +72,17 @@ func fire(charge_fraction := -1.0) -> bool:
 	match definition.mode:
 		"melee": melee(amount)
 		"projectile": shoot(amount, maxf(0.0, charge_fraction))
-		"chain": lightning(amount, 4)
+		"chain": lightning(amount, int(definition.get("chain_count", 4)))
 		"gravity":
 			var center: Vector2 = actor.global_position + actor.aim * 120.0
 			center = actor.game.clip_to_wall(actor.global_position, center)
-			actor.game.spawn_field(center, actor, "gravity", amount, 170.0, 0.8)
+			actor.game.spawn_field(center, actor, "gravity", amount, float(definition.get("field_radius", 170.0)), float(definition.get("field_duration", 0.8)))
 		"glaive":
 			var shot = actor.game.spawn_bolt(actor.global_position + actor.aim * 28.0, actor.aim, false, amount,
 				{"visual": "glaive", "color": definition.color, "speed": definition.speed,
 				"visual_offset": to_global(Vector2(18, 0)) - (actor.global_position + actor.aim * 28.0),
-				"pierce": 99, "life": 2.5, "shooter": actor})
+				"pierce": 99, "life": 2.5, "shooter": actor,
+				"return_after": definition.get("return_after", 0.5), "return_multiplier": definition.get("return_multiplier", 1.0)})
 			active_glaive = weakref(shot)
 	var cue: String = {"MELEE": "blade", "ENERGY": "arc", "MAGIC": "arc", "FIREARMS": "gun", "ARCHERY": "bow"}.get(definition.family, "blade")
 	if definition.id in ["maul", "grav", "rail"]:
@@ -140,6 +142,8 @@ func melee_motion() -> Vector2:
 	# x = rotation from committed aim, y = hand extension in authored rig pixels.
 	var progress := clampf(1.0 - actor.slash_left / 0.18, 0.0, 1.0)
 	var recovery := pow(1.0 - progress, 2.0)
+	if definition.get("modification", "") == "mod_flow" and definition.id in ["lance", "whip"]:
+		return Vector2(lerpf(-1.4, 1.4, progress), 7.0)
 	match definition.id:
 		"lance": return Vector2(0, 26.0 * recovery)
 		"whip": return Vector2(-0.2 * sin(progress * PI), 22.0 * recovery)
@@ -160,7 +164,8 @@ func shoot(amount: float, charge_fraction: float) -> void:
 		var angle := randf_range(-spread, spread) if pellets == 1 else lerpf(-spread, spread, float(i) / float(pellets - 1))
 		var direction: Vector2 = actor.aim.rotated(angle)
 		var physical_origin: Vector2 = actor.global_position + direction * 28.0
-		actor.game.spawn_bolt(physical_origin, direction, false, amount,
+		var pellet_damage := amount * (float(definition.get("outer_multiplier", 1.0)) if pellets > 1 and i in [0, pellets - 1] else 1.0)
+		actor.game.spawn_bolt(physical_origin, direction, false, pellet_damage,
 			{"visual": definition.get("visual", "plasma"), "color": definition.color,
 			"speed": definition.get("speed", 720.0), "life": definition.get("life", 1.3),
 			"pierce": piercing, "element": definition.get("element", ""),
@@ -188,7 +193,7 @@ func chain_from(origin: Vector2, amount: float, count: int, visited: Array) -> v
 	var point := origin
 	for step in range(count):
 		var target = null
-		var best := 190.0 * 190.0
+		var best := pow(float(definition.get("chain_range", 190.0)), 2)
 		for enemy in get_tree().get_nodes_in_group("enemies"):
 			if enemy in visited:
 				continue

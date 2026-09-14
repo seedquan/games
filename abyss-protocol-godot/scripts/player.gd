@@ -11,6 +11,7 @@ var hp := 100.0
 var energy := 100.0
 var energy_regen := 19.0
 var enchantments: Dictionary = {}
+var weapon_mod := ""
 # A short recovery reserve prevents pellet count from multiplying sustain.
 var leech_available := 4.0
 var damage := 26.0

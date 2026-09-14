@@ -36,7 +36,7 @@ static func capture(game) -> Dictionary:
 		stock.append(item.id)
 	var saved := {
 		"campaign": game.campaign_version,
-		"version": 2 if game.coop.enabled else 1, "state": game.state, "room": room_recipe(game.room_data),
+		"version": 3 if game.campaign_version >= 2 else (2 if game.coop.enabled else 1), "state": game.state, "room": room_recipe(game.room_data),
 		"weapon": game.player.weapon.definition.id, "stats": stats, "enchantments": game.player.enchantments.duplicate(),
 		"run_seed": game.run_seed, "rng_state": game.rng.state, "kills": game.kills,
 		"elapsed": game.elapsed, "scrap": game.scrap, "earned_cores": game.earned_cores,
@@ -45,15 +45,26 @@ static func capture(game) -> Dictionary:
 		"story_id": game.story_id, "story_return": game.story_return, "story_seen": game.story_seen.duplicate(),
 	}
 
+	if saved.version == 3:
+		saved.cooperative = game.coop.enabled
+		saved.weapon_mod = game.player.weapon_mod
 	if game.coop.enabled:
 		var partner_stats: Dictionary = {}
 		for field in STATS:
 			partner_stats[field] = game.companion.get(field)
 		saved["partner"] = {"stats": partner_stats, "weapon": game.companion.weapon.definition.id, "enchantments": game.companion.enchantments.duplicate()}
+		if saved.version == 3: saved.partner.weapon_mod = game.companion.weapon_mod
 	return saved
 
-static func member_valid(value: Variant) -> bool:
+static func cooperative(value: Dictionary) -> bool:
+	return value.get("cooperative", false) if value.get("version") == 3 else value.get("version") == 2
+
+static func member_valid(value: Variant, version := 1) -> bool:
 	if value is not Dictionary or value.get("weapon") is not String or not WEAPONS.exists(value.weapon):
+		return false
+	if version == 3:
+		if value.get("weapon_mod") is not String or value.weapon_mod not in [""] + PROGRESSION.MODS.IDS: return false
+	elif value.has("weapon_mod"):
 		return false
 	if value.get("stats") is not Dictionary or value.get("enchantments") is not Dictionary:
 		return false
@@ -90,27 +101,23 @@ static func string_array(value: Variant, allowed: Array, maximum: int) -> bool:
 	return true
 
 static func valid(value: Variant) -> bool:
-	if value is not Dictionary or value.get("version") not in [1, 2] or value.get("state") not in STATES:
+	if value is not Dictionary or value.get("version") is not int or value.get("version") not in [1, 2, 3] or value.get("state") not in STATES:
 		return false
 	if value.get("campaign", 1) not in [1, 2] or value.get("campaign", 1) is not int:
 		return false
+	if value.version == 3:
+		if value.get("campaign", 1) != 2 or value.get("cooperative") is not bool: return false
+		if not value.cooperative and value.has("partner"): return false
+	elif value.has("cooperative"):
+		return false
 	var limit := ROOMS.LAST_ROOM if value.get("campaign", 1) == 2 else 12
-	if value.version == 2 and not member_valid(value.get("partner")):
+	if cooperative(value) and not member_valid(value.get("partner"), value.version):
 		return false
 	if not recipe_valid(value.get("room")) or value.get("weapon") is not String or not WEAPONS.exists(value.weapon):
 		return false
 	if value.room.depth > limit or value.room.get("generator", 1) != value.get("campaign", 1):
 		return false
-	if value.get("stats") is not Dictionary or value.get("enchantments") is not Dictionary:
-		return false
-	for field in STATS:
-		if not numeric(value.stats.get(field), STATS[field][0], STATS[field][1]):
-			return false
-	if value.stats.hp > value.stats.max_hp:
-		return false
-	for tag in value.enchantments:
-		if tag not in PROGRESSION.ELEMENTS or not value.enchantments[tag] is int or not numeric(value.enchantments[tag], 1, 3):
-			return false
+	if not member_valid(value, value.version): return false
 	for field in ["run_seed", "rng_state"]:
 		if not value.get(field) is int:
 			return false
@@ -126,7 +133,7 @@ static func valid(value: Variant) -> bool:
 	if value.state == "story" and (value.story_id not in STORY.BEATS or value.story_return not in ["playing", "reward", "shop", "rest"]):
 		return false
 	var boons: Array = []
-	for boon in PROGRESSION.BOONS:
+	for boon in PROGRESSION.BOONS + (PROGRESSION.MODS.CARDS if value.version == 3 else []):
 		boons.append(boon.stat)
 	if not string_array(value.get("boons"), boons, 3) or not string_array(value.get("stock"), ["repair", "tuning"] + PROGRESSION.ELEMENTS, 3):
 		return false

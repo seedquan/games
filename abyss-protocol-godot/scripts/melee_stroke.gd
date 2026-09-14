@@ -10,6 +10,7 @@ var arc := 1.4
 var elapsed := 0.0
 var duration := 0.22
 var combo := 1
+var broad_sweep := false
 var edge := PackedVector2Array()
 var spine := PackedVector2Array()
 var visual_offset := Vector2.ZERO
@@ -20,6 +21,7 @@ func configure(actor, definition: Dictionary, strike: int) -> void:
 	rotation = actor.aim.angle()
 	visual_offset = (actor.weapon.global_position - position).rotated(-rotation)
 	kind = definition.id
+	broad_sweep = definition.get("modification", "") == "mod_flow"
 	tint = Color(definition.color)
 	reach = definition.reach
 	arc = definition.arc
@@ -56,6 +58,8 @@ func _draw() -> void:
 	# Lift the material stroke to the captured hand, like projectile launch offsets.
 	# Ground footprint and collision stay in the common floor plane.
 	draw_set_transform(visual_offset)
+	if broad_sweep and kind in ["lance", "whip"]:
+		draw_sweep(edge, motion, color, 3.0, false)
 	match kind:
 		"lance":
 			var tip := edge[16]

@@ -10,8 +10,14 @@ static func attack_values(definition: Dictionary, damage: float) -> Dictionary:
 
 static func attack_text(definition: Dictionary, damage: float) -> String:
 	var values := attack_values(definition, damage)
+	if definition.has("outer_multiplier"):
+		var side: float = values.hit * definition.outer_multiplier
+		var count: int = values.pellets - 2
+		if definition.has("charge"):
+			return "满蓄力主弹 %.1f × %d / 侧弹 %.1f × 2\n蓄力 %.2f 秒 · 射击后冷却 %.2f 秒" % [values.charged, count, side * 3.1, definition.charge, definition.cooldown]
+		return "主弹 %.1f × %d / 侧弹 %.1f × 2\n全部命中 %.1f · 攻击间隔 %.2f 秒" % [values.hit, count, side, values.hit * count + side * 2, definition.cooldown]
 	if definition.has("charge"):
-		return "速放 %.1f / 满蓄力 %.1f\n蓄力 %.2f 秒 · 射击后冷却 %.2f 秒" % [values.quick, values.charged, definition.charge, definition.cooldown]
+		return "每枚速放 %.1f / 满蓄力 %.1f%s\n蓄力 %.2f 秒 · 射击后冷却 %.2f 秒" % [values.quick, values.charged, " · 每次 %d 枚" % values.pellets if values.pellets > 1 else "", definition.charge, definition.cooldown]
 	if values.pellets > 1:
 		return "每枚 %.1f × %d 枚\n全部命中 %.1f · 攻击间隔 %.2f 秒" % [values.hit, values.pellets, values.hit * values.pellets, definition.cooldown]
 	var unit := "引爆" if definition.mode == "gravity" else "单次命中"
@@ -20,14 +26,17 @@ static func attack_text(definition: Dictionary, damage: float) -> String:
 		"fang": extra = "\n连续第三击 %.1f" % (values.hit * 2)
 		"prism": extra = "\n另发贯穿光束 %.1f" % (values.hit * 0.75)
 		"arc": extra = "\n额外连锁两名敌人，各 %.1f" % (values.hit * 0.6)
-		"storm": extra = "\n额外连锁三名敌人，各 %.1f" % (values.hit * 0.75)
-		"glaive": extra = "\n去程、回程各一次；收回前不能再投掷"
+		"storm": extra = "\n额外连锁 %d 名敌人，各 %.1f" % [int(definition.get("chain_count", 4)) - 1, values.hit * 0.75]
+		"glaive": extra = "\n回程命中 %.1f；收回前不能再投掷" % (values.hit * float(definition.get("return_multiplier", 1.0)))
 	return "%s %.1f · 攻击间隔 %.2f 秒%s" % [unit, values.hit, definition.cooldown, extra]
 
 static func damage_comparison(member, gain: float) -> String:
 	var definition: Dictionary = member.weapon.definition
 	var before := attack_values(definition, member.damage)
 	var after := attack_values(definition, member.damage + gain)
+	if definition.has("outer_multiplier"):
+		var charge_scale := 3.1 if definition.has("charge") else 1.0
+		return "%s %.1f → %.1f\n侧弹 %.1f → %.1f（各两枚）" % ["满蓄力主弹" if definition.has("charge") else "每枚主弹", before.hit * charge_scale, after.hit * charge_scale, before.hit * definition.outer_multiplier * charge_scale, after.hit * definition.outer_multiplier * charge_scale]
 	if definition.has("charge"):
 		return "满蓄力 %.1f → %.1f" % [before.charged, after.charged]
 	if before.pellets > 1:

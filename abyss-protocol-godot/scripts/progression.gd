@@ -5,6 +5,7 @@ const UPGRADES := [
 	{"id": "power", "name": "武器校准", "description": "每级增加百分之五初始武器伤害。", "base_cost": 25},
 	{"id": "recovery", "name": "能量回收", "description": "每级增加两点每秒能量回复。", "base_cost": 20},
 ]
+const MODS = preload("res://scripts/weapon_mods.gd")
 const ELEMENTS := ["fire", "ice", "shock", "poison", "leech", "execute"]
 const BOONS := [
 	{"name": "锋刃增幅", "tag": "攻击强化", "description": "武器伤害提高百分之二十五。\n武器主攻击与等离子弹均生效。", "stat": "damage"},
@@ -31,6 +32,8 @@ const ELEMENT_LABELS := {"fire": "火焰", "ice": "冰霜", "shock": "电击", "
 
 static func effects(boon: Dictionary, member, version := 2) -> Dictionary:
 	var result: Dictionary = {}
+	if boon.stat in MODS.IDS:
+		return {"modification": version >= 2 and member.weapon_mod.is_empty()}
 	match boon.stat:
 		"damage", "tuning":
 			var fraction := 0.25 if boon.stat == "damage" else 0.15
@@ -64,11 +67,15 @@ static func apply(boon: Dictionary, member, version := 2) -> void:
 		if changes.has(stat): member.set(stat, member.get(stat) + changes[stat])
 	if changes.has("dash_reduction"):
 		member.dash_recharge -= changes.dash_reduction
+	if changes.get("modification", false):
+		member.weapon_mod = boon.stat
+		member.weapon.equip(member.weapon.definition.id)
 	if changes.get("rune", false):
 		member.enchantments[boon.stat] = mini(3, int(member.enchantments.get(boon.stat, 0)) + 1)
 
 static func describe(boon: Dictionary, member, version := 2) -> String:
 	if version < 2: return boon.get("description", "")
+	if boon.stat in MODS.IDS: return MODS.preview(member, boon.stat)
 	var changes := effects(boon, member, version)
 	match boon.stat:
 		"damage", "tuning":
@@ -112,14 +119,20 @@ static func leech_capacity(level: int) -> float:
 static func eligible(boon: Dictionary, enchants: Dictionary, members: Array, version: int) -> bool:
 	if not members.is_empty():
 		return members.any(func(member): return can_apply(boon, member, version))
-	return int(enchants.get(boon.stat, 0)) < 3
+	return boon.stat not in MODS.IDS and int(enchants.get(boon.stat, 0)) < 3
 
 static func offers(rng: RandomNumberGenerator, first_room: bool, enchants: Dictionary, members: Array = [], version := 1) -> Array:
-	var pool: Array = BOONS.filter(func(boon): return eligible(boon, enchants, members, version))
+	var available: Array = BOONS + (MODS.CARDS if version >= 2 else [])
+	var pool: Array = available.filter(func(boon): return eligible(boon, enchants, members, version))
 	var result: Array = []
+	if first_room and version >= 2:
+		for boon in MODS.CARDS:
+			if boon in pool:
+				result.append(boon)
+				pool.erase(boon)
 	if first_room:
 		for boon in BOONS.slice(0, 3):
-			if boon in pool:
+			if boon in pool and result.size() < 3:
 				result.append(boon)
 				pool.erase(boon)
 	while result.size() < 3 and not pool.is_empty():
@@ -129,7 +142,7 @@ static func offers(rng: RandomNumberGenerator, first_room: bool, enchants: Dicti
 	return result
 
 static func rune(id: String) -> Dictionary:
-	for boon in BOONS:
+	for boon in BOONS + MODS.CARDS:
 		if boon.stat == id:
 			return boon
 	return {}
@@ -141,5 +154,5 @@ static func promised_offers(rng: RandomNumberGenerator, first_room: bool, enchan
 		if (boon.stat == promise or (promise == "element" and boon.stat in ELEMENTS)) and eligible(boon, enchants, members, version):
 			matching.append(boon)
 	if not matching.is_empty() and not result.any(func(boon): return boon in matching):
-		result[0] = matching[rng.randi_range(0, matching.size() - 1)]
+		result[result.size() - 1 if first_room and version >= 2 else 0] = matching[rng.randi_range(0, matching.size() - 1)]
 	return result

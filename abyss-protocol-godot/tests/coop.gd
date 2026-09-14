@@ -182,7 +182,7 @@ func run() -> void:
 	if health_labels.size() == 1:
 		check(game.get_viewport_rect().encloses(health_labels[0].get_global_rect()), "Shared health readout fits the screen")
 	var saved: Dictionary = game.profile.checkpoint.duplicate(true)
-	check(game.RUN_SAVE.valid(saved) and saved.version == 2 and saved.partner.weapon == "rail", "Co-op checkpoint includes the second player's actual weapon")
+	check(game.RUN_SAVE.valid(saved) and saved.version == 3 and saved.cooperative and saved.partner.weapon == "rail", "Co-op checkpoint includes the second player's actual weapon")
 	var invalid: Dictionary = saved.duplicate(true)
 	invalid.partner.stats.hp = NAN
 	check(not game.RUN_SAVE.valid(invalid), "Corrupt second-player stats cannot enter the game")

@@ -356,7 +356,11 @@ func show_menu(kind: String) -> void:
 		for i in range(game.boon_choices.size()):
 			var boon: Dictionary = game.boon_choices[i]
 			var details: String = team_upgrade_details(boon)
-			var option := button("%d / %s\n\n%s\n\n%s" % [i + 1, boon.tag, boon.name, details], game.choose_boon.bind(i))
+			var card_name: String = boon.name
+			if boon.stat in game.PROGRESSION.MODS.IDS and not game.coop.enabled:
+				card_name = game.PROGRESSION.MODS.title(game.player.weapon.definition.id, boon.stat)
+				details = game.PROGRESSION.MODS.details(game.player.weapon.definition.id, boon.stat)
+			var option := button("%d / %s\n\n%s\n\n%s" % [i + 1, boon.tag, card_name, details], game.choose_boon.bind(i))
 			option.tooltip_text = option.text
 			if "accessibility_name" in option: option.set("accessibility_name", option.text)
 			option.text = ""
@@ -382,9 +386,16 @@ func show_menu(kind: String) -> void:
 			card_content.add_theme_constant_override("separation", 14)
 			inset.add_child(card_content)
 			card_content.add_child(label("%02d  /  %s" % [i + 1, boon.tag], 14, accent))
-			var card_title := label(boon.name, 28, Color("ece8d9"))
+			var card_title := label(card_name, 28, Color("ece8d9"))
 			card_title.add_theme_font_override("font", DISPLAY_FONT)
 			card_content.add_child(card_title)
+			if boon.stat in game.PROGRESSION.MODS.IDS:
+				var illustration := TextureRect.new()
+				illustration.texture = modification_art(game.player.weapon.definition, boon.stat)
+				illustration.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+				illustration.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+				illustration.custom_minimum_size.y = 64
+				card_content.add_child(illustration)
 			var effect_text := label(details, 16, MUTED)
 			effect_text.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 			card_content.add_child(effect_text)
@@ -708,6 +719,12 @@ func restore_menu_focus(index: int, expected_state := "") -> void:
 	if game.state == (game.build_return if expected_state.is_empty() else expected_state) and index >= 0 and index < buttons.size():
 		buttons[index].grab_focus()
 
+func modification_art(definition: Dictionary, id: String) -> Texture2D:
+	var atlas := AtlasTexture.new()
+	atlas.atlas = preload("res://assets/ui/weapon_mods.svg")
+	atlas.region = Rect2(["melee", "projectile", "glaive", "chain", "gravity"].find(definition.mode) * 144, 0 if id == "mod_focus" else 72, 144, 72)
+	return atlas
+
 func build_run_overview() -> void:
 	var member = game.team()[clampi(game.build_seat, 0, game.team().size() - 1)]
 	var column := utility_column("局内构筑 / 第 %02d 舱" % game.room)
@@ -731,7 +748,10 @@ func build_run_overview() -> void:
 	grid.add_theme_constant_override("v_separation", 14)
 	scroll.add_child(grid)
 	var definition: Dictionary = member.weapon.definition
-	build_info_card(grid, definition.name, game.BUILD_INFO.attack_text(definition, member.damage) + "\n" + definition.description.replace("\n", " ") + "\n以上为常态直接伤害；元素、终结与临时增伤另计。", MINT, 0)
+	build_info_card(grid, definition.name, game.BUILD_INFO.attack_text(definition, member.damage) + ("\n" + definition.description.replace("\n", " ") if member.weapon_mod.is_empty() else "") + "\n以上为常态直接伤害；元素、终结与临时增伤另计。", MINT, 0)
+	if game.campaign_version >= 2:
+		var modification: String = member.weapon_mod
+		build_info_card(grid, "武器改装 / " + (game.PROGRESSION.MODS.title(definition.id, modification) if not modification.is_empty() else "空槽"), game.PROGRESSION.MODS.details(definition.id, modification) + "\n本局只能装配一项，不能更换。", Color("e6b879"), 0, -1, modification_art(definition, modification) if not modification.is_empty() else null)
 	var status := "耐久 %.0f / %.0f　·　能量 %.0f / 100\n移动速度 %.0f　·　冲刺冷却 %.2f 秒\n能量每秒回复 %.0f　·　基础攻击 %.1f" % [member.hp, member.max_hp, member.energy, member.move_speed, member.dash_recharge, member.energy_regen, member.damage]
 	if member.empowered > 0: status += "\n临时增伤 50%% · 剩余 %.1f 秒" % member.empowered
 	if member.hp <= 0: status += "\n机体离线，等待队友修复。"

@@ -109,7 +109,7 @@ func run() -> void:
 	await frames(3)
 	check(game.state == "reward", "Room clear opens upgrade selection")
 	var old_damage: float = player.damage
-	game.choose_boon(0)
+	game.choose_boon(game.boon_choices.find(game.PROGRESSION.rune("damage")))
 	check(game.state == "route" and game.room == 1 and player.damage == old_damage * 1.25, "Upgrade applies before choosing the next route")
 	game.choose_boon(0)
 	check(game.room == 1, "Repeated reward input cannot skip a room")

@@ -8,6 +8,7 @@ var expanded := "--expanded" in OS.get_cmdline_user_args()
 var guardians := "--guardians" in OS.get_cmdline_user_args()
 var melee := "--melee" in OS.get_cmdline_user_args()
 var poison := "--poison" in OS.get_cmdline_user_args()
+var refits := "--refits" in OS.get_cmdline_user_args()
 var conduction := "--conduction" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
@@ -66,6 +67,7 @@ func run() -> void:
 	for member in game.team():
 		member.invulnerable = 1000
 		member.weapon.equip("scatter")
+		if refits: game.PROGRESSION.apply(game.PROGRESSION.rune("mod_flow"), member, 2)
 		Input.action_press(member.action("slash"))
 		member.input_armed = true
 	for i in range(120):
@@ -144,6 +146,7 @@ func run() -> void:
 		Input.action_release(member.action("slash"))
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
 	check(game.sound.voices.size() == 12, "Stress retains the bounded audio pool")
+	if refits: check(game.team().all(func(member): return member.weapon_mod == "mod_flow" and member.weapon.definition.get("modification") == "mod_flow"), "Both seats retain real refitted attacks throughout stress")
 	if melee: check(melee_frames > 450 and peak_melee_traces >= 2, "Native stress renders overlapping melee feedback for both seats")
 	if poison: check(poison_frames > 450 and peak_poison_markers >= 6, "Native stress includes repeated frames with visible enemy status markers")
 	if conduction: check(conduction_frames > 200 and peak_conduction >= 4, "Native stress includes visible overlapping frost conduction links")
@@ -178,11 +181,12 @@ func run() -> void:
 		"frame_ms_max": samples[-1], "peak_nodes": peak_nodes, "peak_projectiles": peak_projectiles,
 		"peak_melee_traces": peak_melee_traces, "frames_with_melee": melee_frames,
 		"poison_feedback": poison, "frames_with_poison": poison_frames, "peak_poison_markers": peak_poison_markers,
-		"frost_conduction": conduction, "frames_with_conduction": conduction_frames, "peak_conduction_links": peak_conduction,
+		"weapon_refits": refits, "frost_conduction": conduction, "frames_with_conduction": conduction_frames, "peak_conduction_links": peak_conduction,
 		"restart_cycles": 40, "orphan_baseline": orphan_baseline, "failures": failures}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://builds/qa"))
 	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "") + ("-poison" if poison else "")
 	if conduction: report_name += "-conduction"
+	if refits: report_name += "-refits"
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

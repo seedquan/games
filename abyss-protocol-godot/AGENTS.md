@@ -86,8 +86,9 @@ there is no HTML build artifact to regenerate.
 
 - Local co-op uses two explicitly paired device IDs and prefixed gameplay
   actions. Global wildcard bindings remain for single-player and shared menus.
-  Do not serialize device IDs. Preserve both actors in one version-2 checkpoint;
-  version-1 single-player checkpoints remain supported. All hostile geometry,
+  Do not serialize device IDs. New campaigns preserve both actors and their per-run weapon refits in one
+  version-3 checkpoint with an explicit cooperative flag. Version-1 solo and
+  version-2 co-op checkpoints remain supported; legacy campaigns keep those schemas. All hostile geometry,
   cover occlusion and camera framing must include both actors.
 - Run `tests/coop.gd` after co-op changes; its native mode verifies 2560x1440
   render output and OS fullscreen. Use `tests/performance.gd -- --coop` for

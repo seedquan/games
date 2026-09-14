@@ -46,6 +46,7 @@ func run() -> void:
 		game.player.dash_recharge = PROGRESSION.MIN_DASH_RECHARGE
 		for element in PROGRESSION.ELEMENTS: game.player.enchantments[element] = 3
 		for index in range(count): game.player.enchantments[PROGRESSION.ELEMENTS[index]] = 2
+		PROGRESSION.apply(PROGRESSION.rune("mod_focus"), game.player, 2)
 		game.player.set_physics_process(false)
 		await ENCOUNTER_FIXTURE.clear(game)
 		check(game.state == "reward" and game.boon_choices.size() == count, "Real capped progression produces exactly %d useful reward choices" % count)
@@ -85,6 +86,9 @@ func run() -> void:
 		story.story_return = "reward"
 		check(SAVE.valid(story), "Pending guardian story can return to a partial reward decision")
 		var legacy := before.duplicate(true)
+		legacy.version = 1
+		legacy.erase("cooperative")
+		legacy.erase("weapon_mod")
 		legacy.erase("campaign")
 		legacy.room.erase("generator")
 		check(not SAVE.valid(legacy), "Original campaigns still require the original three-choice reward shape")

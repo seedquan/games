@@ -110,6 +110,7 @@ func run() -> void:
 	check(game.profile.checkpoint.is_empty(), "completed run invalidates checkpoint")
 	await countershot_release()
 	await frost_conduction_release()
+	await weapon_mod_release()
 	game.start_run(5820)
 	game.continue_story()
 	game.player.invulnerable = 0
@@ -160,6 +161,33 @@ func countershot_release() -> void:
 	game.player.slash_cooldown = 0
 	game.player.weapon.fire()
 	check(target.hp == prior_hp, "packed thrust preserves a gap beyond its outer corner")
+
+func weapon_mod_release() -> void:
+	game.start_run(5823)
+	game.continue_story()
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	game.player.set_physics_process(false)
+	game.player.position = Vector2(800, 650)
+	game.player.aim = Vector2.RIGHT
+	game.player.weapon.equip("qbow")
+	game.apply_boon(game.PROGRESSION.rune("mod_flow"))
+	check(game.hud.modification_art(game.player.weapon.definition, "mod_flow").atlas.get_size() == Vector2(720, 144), "packed refit SVG atlas")
+	var targets := []
+	for angle in [-0.3, 0.0, 0.3]:
+		var enemy = game.spawn_enemy("stalker", game.player.position + Vector2(170, 0).rotated(angle))
+		enemy.set_physics_process(false)
+		enemy.hp = 10000
+		targets.append(enemy)
+	game.player.weapon.fire()
+	check(game.get_node("World/Projectiles").get_child_count() == 3, "packed refit emits a three-arrow volley")
+	for i in range(20): await frame()
+	check(targets.all(func(e): return e.hp < 10000), "all three packed refit trajectories cause damage")
+	game.apply_boon(game.PROGRESSION.rune("mod_focus"))
+	check(game.player.weapon_mod == "mod_flow" and game.player.weapon.definition.pellets == 3, "packed refits remain mutually exclusive")
 
 func frost_conduction_release() -> void:
 	game.start_run(5822)
@@ -251,7 +279,7 @@ func storage_roundtrip() -> void:
 		check(game.room == 3 and game.state == "shop", "reach a checkpoint with real rewards and shop state")
 		check(game.buy_item(1), "shop tuning transaction is committed")
 		await snapshot("shop-write")
-		for item in [["cores", game.profile.cores], ["runs", game.profile.runs], ["scrap", game.scrap], ["damage", game.player.damage], ["hp", game.player.hp], ["purchased", game.purchased], ["history", game.route_history]]:
+		for item in [["cores", game.profile.cores], ["runs", game.profile.runs], ["scrap", game.scrap], ["damage", game.player.damage], ["hp", game.player.hp], ["purchased", game.purchased], ["history", game.route_history], ["weapon_mod", game.player.weapon_mod]]:
 			expected.set_value("expected", item[0], item[1])
 		check(expected.save(expectation) == OK, "write an independent cross-process oracle")
 		check(FileAccess.file_exists(game.profile.save_path) and FileAccess.file_exists(game.settings.save_path), "both persisted files exist before process exit")
@@ -265,7 +293,7 @@ func storage_roundtrip() -> void:
 		check(game.continue_saved_run(), "second process continues the saved rescue")
 		check(game.room == 3 and game.state == "shop" and game.player.weapon.definition.id == "rail", "shop checkpoint reconstructs the correct state")
 		await snapshot("shop-read")
-		for item in [["cores", game.profile.cores], ["runs", game.profile.runs], ["scrap", game.scrap], ["damage", game.player.damage], ["hp", game.player.hp], ["purchased", game.purchased], ["history", game.route_history]]:
+		for item in [["cores", game.profile.cores], ["runs", game.profile.runs], ["scrap", game.scrap], ["damage", game.player.damage], ["hp", game.player.hp], ["purchased", game.purchased], ["history", game.route_history], ["weapon_mod", game.player.weapon_mod]]:
 			check(item[1] == expected.get_value("expected", item[0]), "restoration neither loses nor duplicates " + str(item[0]))
 		check(not game.buy_item(1), "already purchased stock cannot be bought twice")
 		await complete_campaign()
@@ -282,9 +310,10 @@ func storage_roundtrip() -> void:
 		game.coop.weapons.assign(["rail", "ember"])
 		game.configure_input()
 		game.create_companion()
+		game.apply_boon(game.PROGRESSION.rune("mod_flow"))
 		game.companion.hp = 53.0
 		game.save_checkpoint()
-		check(game.RUN_SAVE.valid(game.profile.checkpoint) and game.profile.checkpoint.version == 2, "write both actors in one co-op transaction")
+		check(game.RUN_SAVE.valid(game.profile.checkpoint) and game.profile.checkpoint.version == 3 and game.profile.checkpoint.cooperative, "write both actors in one co-op transaction")
 		check(FileAccess.file_exists(game.profile.save_path), "co-op profile exists before process exit")
 		await snapshot("coop-write")
 	else:
@@ -296,6 +325,7 @@ func storage_roundtrip() -> void:
 		await pair_controllers()
 		check(game.state == "shop" and game.team().size() == 2, "co-op pairing returns to the saved shop")
 		check(game.companion.weapon.definition.id == "ember" and game.companion.hp == 53.0 and game.player.weapon.definition.id == "rail", "co-op second-process load preserves both weapons and independent health")
+		check(game.player.weapon_mod == "mod_focus" and game.companion.weapon_mod == "mod_flow" and game.companion.weapon.definition.pellets == 3 and is_equal_approx(game.player.weapon.definition.charge, 0.8 * 0.65), "co-op cold load preserves independent mutually exclusive refits and actual attacks")
 		check(not game.buy_item(1), "shared co-op purchase cannot be duplicated on resume")
 		await snapshot("coop-read")
 		await complete_campaign()
