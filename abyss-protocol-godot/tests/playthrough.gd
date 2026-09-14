@@ -24,6 +24,7 @@ var modification := ""
 var nova_echo := "--nova-echo" in OS.get_cmdline_user_args()
 var echo_bursts: Dictionary = {}
 var dash_echo := "--dash-echo" in OS.get_cmdline_user_args()
+var offensive_dash_echo := "--offensive-dash-echo" in OS.get_cmdline_user_args()
 var dash_echo_bursts: Dictionary = {}
 var frost_build := "--frost-build" in OS.get_cmdline_user_args()
 var trace_freeze := "--trace-freeze" in OS.get_cmdline_user_args()
@@ -108,14 +109,14 @@ func combat_input(player) -> void:
 	for enemy in get_nodes_in_group("enemies"):
 		if player.position.distance_to(enemy.position) < 210:
 			threats += 1
-		if enemy.attacking and enemy.windup < 0.2 and player.position.distance_to(enemy.position) < 160:
+		if enemy.attacking and enemy.next_attack() == "melee" and enemy.windup < 0.2 and player.position.distance_to(enemy.position) < 160:
 			wants_dash = true
 			if close_weapon: wants_parry = true
 	if threats >= 3:
 		wants_freeze = true
 	if nova_echo and player.enchantments.get("nova_echo", 0) == 1:
 		wants_freeze = wants_freeze or threats >= 2 or (target.kind in ["boss", "warden"] and distance < 230)
-	if dash_echo and player.enchantments.get("dash_echo", 0) == 1 and target.ice_frozen_left > 0 and distance < 145:
+	if offensive_dash_echo and dash_echo and player.enchantments.get("dash_echo", 0) == 1 and target.ice_frozen_left > 0 and distance < 145:
 		# Place the pulse beside an actually frozen target through ordinary input.
 		wants_dash = true
 	for danger in game.get_node("World/Projectiles").get_children():
@@ -300,7 +301,9 @@ func run() -> void:
 	report.countershots = countershots
 	report.build_policy = "ice/shock cards first; skip fire/poison purchases" if frost_build else "damage/leech cards; buy available supplies"
 	if nova_echo: report.build_policy += "; prefer offered nova echo; cast on two close enemies or a guardian within nova range"
-	if dash_echo: report.build_policy += "; prefer offered dash echo; dash beside a frozen target within 145"
+	if dash_echo: report.build_policy += "; prefer offered dash echo"
+	report.dash_echo_input_policy = "dash beside a frozen target within 145" if offensive_dash_echo and dash_echo else "defensive dashes only"
+	report.windup_policy = "React early only to actual melee; placed zones and projectiles use their own imminent-hit timing"
 	if trace_freeze: report.freeze_observations = freeze_observer.summary
 	if trace_damage: report.damage_events = damage_events
 	report.modification_preference = modification
