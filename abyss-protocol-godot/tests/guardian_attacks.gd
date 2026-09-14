@@ -72,6 +72,62 @@ func geometry_cases() -> void:
 		attack.queue_free()
 	await frames()
 
+func heat_wave_cases() -> void:
+	await reset_case()
+	var origin := Vector2(800, 650)
+	var specs := ATTACK.placements("heat_ring", origin, Vector2.RIGHT, game.team())
+	check(specs.size() == 2, "Furnace releases two outward waves instead of leaving ranged orbit permanently safe")
+	if specs.size() != 2: return
+	var waves: Array = []
+	for spec in specs:
+		var wave = game.spawn_guardian_attack(spec, 22)
+		wave.set_physics_process(false)
+		waves.append(wave)
+	check(waves[0].delay >= 1.05 and waves[1].delay - waves[0].delay >= 0.65, "Both rings are warned together with time to cross after the first burst")
+	check(waves[0].wave_step == 1 and waves[1].wave_step == 2, "Drawn wave numbers communicate the actual detonation order")
+	for angle in range(16):
+		var direction := Vector2.from_angle(angle * TAU / 16 + 0.017)
+		check(not waves[0].contains_point(origin + direction * 300) and waves[1].contains_point(origin + direction * 300), "Standing on the old ranged orbit is caught by the outer wave")
+		check(waves[0].contains_point(origin + direction * 200) and not waves[1].contains_point(origin + direction * 200), "The cleared inner ring is a refuge from the second wave")
+		check(not waves[0].contains_point(origin + direction * 110) and not waves[1].contains_point(origin + direction * 110), "Close-range refuge remains safe through both waves")
+		check(not waves[0].contains_point(origin + direction * 470) and not waves[1].contains_point(origin + direction * 470), "Moving beyond the outer ring avoids both waves")
+	game.player.position = origin + Vector2(300, 0)
+	waves[0]._physics_process(waves[0].delay)
+	check(game.player.hp == 100, "Stationary ranged player is safe during the inner burst")
+	game.state = "paused"
+	waves[1]._physics_process(3)
+	check(waves[1].elapsed == 0 and not waves[1].fired, "Pause does not consume the second wave warning")
+	game.state = "playing"
+	waves[1]._physics_process(waves[1].delay - 0.01)
+	check(game.player.hp == 100, "Outer ring retains its own full warning")
+	waves[1]._physics_process(0.02)
+	check(game.player.hp == 78, "Ignoring the expanding ring deals real damage at ranged distance")
+	game.player.invulnerable = 0
+	waves[1]._physics_process(0.02)
+	check(game.player.hp == 78, "The second ring cannot repeatedly damage a stationary actor")
+	for wave in waves: wave.queue_free()
+	await frames()
+	# Actual movement input, default speed and no skills: outward escape and
+	# stepping into the first ring after it has fired are both viable responses.
+	for inward in [false, true]:
+		await reset_case(true)
+		game.player.position = origin + Vector2(360 if inward else 210, 0)
+		game.player.set_physics_process(true)
+		game.player.input_armed = true
+		game.companion.position = origin - Vector2(300, 0)
+		for spec in specs: game.spawn_guardian_attack(spec, 22)
+		var action: String = game.player.action("move_left" if inward else "move_right")
+		for tick in range(125):
+			var walking := (tick >= 68 and tick < 100) if inward else tick < 70
+			if walking: Input.action_press(action)
+			else: Input.action_release(action)
+			await physics_frame
+		Input.action_release(action)
+		check(game.player.hp == 100, "Default-speed walking avoids both waves; inward=%s" % inward)
+		check(game.player.dash_cooldown == 0 and game.player.parry_cooldown == 0, "Walking response does not depend on dash or parry")
+		check(game.companion.hp == 78, "One partner dodging does not protect the partner ignoring the outer wave")
+		check(game.get_node("World/Projectiles").get_child_count() == 0, "Both waves finish and leave no persistent attack nodes")
+
 func boundaries_and_coop() -> void:
 	await reset_case(true)
 	var spec := {"position": Vector2(800, 650), "shape": "beam", "radius": 440.0}
@@ -121,7 +177,7 @@ func guardian_cases() -> void:
 		check(boss.next_attack() == ATTACK.IDS[i], "Every region opens with its own signature attack")
 		boss.release_attack()
 		var hazards: Array = game.get_node("World/Projectiles").get_children()
-		check(hazards.size() == [1, 3, 2, 1, 4][i], "Guardian releases its actual unique attack geometry")
+		check(hazards.size() == [1, 3, 2, 2, 4][i], "Guardian releases its actual unique attack geometry")
 		for hazard in hazards:
 			check(hazard.get_script() == ATTACK and hazard.delay >= 0.95 and hazard.elapsed == 0, "Every placed signature gets a fresh complete warning")
 			hazard.set_physics_process(false)
@@ -145,6 +201,7 @@ func run() -> void:
 	root.add_child(game)
 	await frames()
 	await geometry_cases()
+	await heat_wave_cases()
 	await boundaries_and_coop()
 	await guardian_cases()
 	game.queue_free()

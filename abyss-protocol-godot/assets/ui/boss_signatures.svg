@@ -11,8 +11,8 @@
       <path d="M11 11L19 19M53 11L45 19M11 53L19 45M53 53L45 45" stroke="#c4bbdf"/>
     </g>
     <g transform="translate(192)">
-      <circle cx="32" cy="32" r="25"/><circle cx="32" cy="32" r="12" stroke="#b6d6bb"/>
-      <path d="M32 9V16M55 32H48M32 55V48M9 32H16M15 15L20 20M49 15L44 20M49 49L44 44M15 49L20 44"/>
+      <circle cx="32" cy="32" r="26"/><circle cx="32" cy="32" r="17"/><circle cx="32" cy="32" r="8" stroke="#b6d6bb"/>
+      <path d="M32 22V9M28 13L32 9L36 13M42 32H55M51 28L55 32L51 36M32 42V55M28 51L32 55L36 51M22 32H9M13 28L9 32L13 36"/>
       <circle cx="32" cy="32" r="3" fill="#b6d6bb" stroke="none"/>
     </g>
     <g transform="translate(256)">

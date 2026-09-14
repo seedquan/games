@@ -13,6 +13,7 @@ var delay := 0.95
 var elapsed := 0.0
 var damage := 22.0
 var fired := false
+var wave_step := 0
 var regions: Array[PackedVector2Array] = []
 
 static func placements(id: String, origin: Vector2, aim: Vector2, targets: Array) -> Array[Dictionary]:
@@ -27,7 +28,11 @@ static func placements(id: String, origin: Vector2, aim: Vector2, targets: Array
 		"lattice":
 			for i in range(2):
 				result.append({"position": origin, "shape": "beam", "radius": 440.0, "heading": aim.angle() + i * PI / 2})
-		"heat_ring": result.append({"position": origin, "shape": "ring", "radius": 290.0, "inner_radius": 125.0, "delay": 1.05})
+		"heat_ring":
+			# Both bands are fixed and fully visible from release. A small overlap
+			# prevents an unwarned safe seam between the polygonal ring edges.
+			result.append({"position": origin, "shape": "ring", "radius": 290.0, "inner_radius": 125.0, "delay": 1.05, "wave_step": 1})
+			result.append({"position": origin, "shape": "ring", "radius": 460.0, "inner_radius": 285.0, "delay": 1.75, "wave_step": 2})
 		"sequence":
 			for i in range(4):
 				result.append({"position": origin, "shape": "sector", "radius": 360.0, "inner_radius": 80.0,
@@ -93,5 +98,8 @@ func _draw() -> void:
 	var mark := Vector2.from_angle(heading) * ((inner_radius + radius) * 0.5 if shape in ["ring", "sector"] else 0.0)
 	# A closing timer and warning mark supplement colour; never change the hit area.
 	draw_arc(mark, 17, -PI / 2, -PI / 2 + TAU * progress, 32, Color("fff0ce"), 2.5, true)
-	draw_line(mark + Vector2(0, -8), mark + Vector2(0, 2), Color("fff0ce"), 3, true)
-	draw_circle(mark + Vector2(0, 8), 1.8, Color("fff0ce"))
+	if wave_step > 0:
+		draw_string(preload("res://assets/fonts/NotoSansCJKsc-Regular.otf"), mark + Vector2(-6, 7), str(wave_step), HORIZONTAL_ALIGNMENT_LEFT, -1, 20, Color("fff0ce"))
+	else:
+		draw_line(mark + Vector2(0, -8), mark + Vector2(0, 2), Color("fff0ce"), 3, true)
+		draw_circle(mark + Vector2(0, 8), 1.8, Color("fff0ce"))
