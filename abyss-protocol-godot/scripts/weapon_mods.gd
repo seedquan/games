@@ -12,7 +12,10 @@ static func definition(weapon: String, id: String, campaign_version := 2) -> Dic
 	# Campaign tuning changes the primary hit, never saved actor stats or skills.
 	if campaign_version < 2: return form
 	if form.mode == "gravity": form.damage = 2.8
-	if form.mode == "glaive": form.damage = 1.4
+	if form.mode == "glaive":
+		form.damage = 1.4
+		form.manual_recall = true
+		form.description = "投出旋转飞刃，去回程各命中一次。\n出手冷却后再按攻击，可提前回收。"
 	if id not in IDS: return form
 	var focus := id == "mod_focus"
 	match form.mode:
@@ -77,7 +80,7 @@ static func details(weapon: String, id: String) -> String:
 				return "蓄力时间 −35%，每枚伤害 −10%。\n更快松手，抓住短暂空隙。" if base.has("charge") else "额外贯穿两名敌人，散布收窄 60%。\n每枚伤害 −15%；掩体仍会挡住弹体。"
 			return "每次 %d → %d 枚，弹道向两侧展开。\n原弹伤害保留；两侧弹各为原弹的 35%%。\n攻击间隔 +20%%。" % [int(base.get("pellets", 1)), int(base.get("pellets", 1)) + 2]
 		"glaive":
-			return "飞行 0.75 秒再返，回程伤害为去程三倍。\n去程伤害 −25%；走位引导回程命中。" if focus else "飞行 0.25 秒就返回，缩短等待。\n去回程伤害各 −25%，投掷距离减半。"
+			return "飞行 0.75 秒自动返回，回程伤害为去程三倍。\n去程伤害 −25%；出手冷却后可再按攻击提前回收。" if focus else "飞行 0.25 秒就返回，缩短等待。\n去回程伤害各 −25%，投掷距离减半。"
 		"chain":
 			return "起手距离 600，连锁距离 280。\n每击伤害 +35%，最多只命中两敌。" if focus else "最多连锁六敌，连锁距离 240。\n起手距离缩至 350，每击伤害 −20%。"
 		"gravity":

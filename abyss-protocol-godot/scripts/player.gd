@@ -89,7 +89,7 @@ func _physics_process(delta: float) -> void:
 		input_armed = not (Input.is_action_pressed(action("slash")) or Input.is_action_pressed(action("bolt")) or Input.is_action_pressed(action("dash")) or Input.is_action_pressed(action("freeze")) or Input.is_action_pressed(action("parry")))
 	if input_armed and Input.is_action_just_pressed(action("dash")):
 		try_dash(movement)
-	weapon.tick(delta, input_armed and Input.is_action_pressed(action("slash")), input_armed and Input.is_action_just_released(action("slash")))
+	weapon.tick(delta, input_armed and Input.is_action_pressed(action("slash")), input_armed and Input.is_action_just_released(action("slash")), input_armed and Input.is_action_just_pressed(action("slash")))
 	if input_armed and Input.is_action_pressed(action("bolt")):
 		try_bolt()
 	if input_armed and Input.is_action_just_pressed(action("freeze")):

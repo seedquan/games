@@ -28,6 +28,8 @@ static func attack_text(definition: Dictionary, damage: float) -> String:
 		"arc": extra = "\n额外连锁两名敌人，各 %.1f" % (values.hit * 0.6)
 		"storm": extra = "\n额外连锁 %d 名敌人，各 %.1f" % [int(definition.get("chain_count", 4)) - 1, values.hit * 0.75]
 		"glaive": extra = "\n回程命中 %.1f；收回前不能再投掷" % (values.hit * float(definition.get("return_multiplier", 1.0)))
+	if definition.get("manual_recall", false) and float(definition.get("return_after", 0.5)) > float(definition.cooldown):
+		extra += "\n出手冷却后再次按攻击，可提前回收"
 	return "%s %.1f · 攻击间隔 %.2f 秒%s" % [unit, values.hit, definition.cooldown, extra]
 
 static func damage_comparison(member, gain: float) -> String:
