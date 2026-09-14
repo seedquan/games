@@ -7,6 +7,7 @@ var game
 var waves: Array = []
 var wave := 0
 var pending: Array = []
+var waiting_for_clear := false
 var spawn_cursor := 0
 var total := 0
 var scrap_budget := 0
@@ -15,6 +16,7 @@ func cancel() -> void:
 	for entry in pending:
 		if is_instance_valid(entry.marker): entry.marker.queue_free()
 	pending.clear()
+	waiting_for_clear = false
 	waves.clear()
 	wave = 0
 	spawn_cursor = 0
@@ -81,9 +83,7 @@ func safest_point(excluded: Array) -> Vector2:
 	return best
 
 func queue_wave() -> void:
-	if game.room_data.get("generator", 1) >= 2:
-		for member in game.team():
-			if member.hp > 0: member.hp = minf(member.max_hp, member.hp + 2.0)
+	waiting_for_clear = true
 	wave += 1
 	var occupied: Array = []
 	for i in range(waves[wave - 1]):
@@ -96,13 +96,22 @@ func queue_wave() -> void:
 
 func tick(delta: float) -> void:
 	if game.state != "playing": return
-	if pending.is_empty() and wave < waves.size() and game.get_tree().get_nodes_in_group("enemies").is_empty():
+	var alive: int = game.get_tree().get_nodes_in_group("enemies").size()
+	# Keep the first three-enemy lesson quiet. Later waves can finish their
+	# warning during cleanup, but never land or repair before the old wave clears.
+	var can_prime: bool = game.room_data.get("generator", 1) >= 2 and not (game.room == 1 and wave == 1) and alive <= 2
+	if pending.is_empty() and wave < waves.size() and (alive == 0 or can_prime):
 		queue_wave()
+	if waiting_for_clear and alive == 0:
+		waiting_for_clear = false
+		if game.room_data.get("generator", 1) >= 2:
+			for member in game.team():
+				if member.hp > 0: member.hp = minf(member.max_hp, member.hp + 2.0)
 	for entry in pending.duplicate():
 		entry.delay -= delta
 		entry.marker.progress = 1.0 - maxf(0, entry.delay) / WARNING_TIME
 		entry.marker.queue_redraw()
-		if entry.delay > 0: continue
+		if entry.delay > 0 or waiting_for_clear: continue
 		if clearance(entry.point) < SAFE_DISTANCE:
 			var occupied: Array = pending.map(func(other): return other.point)
 			entry.point = safest_point(occupied)
