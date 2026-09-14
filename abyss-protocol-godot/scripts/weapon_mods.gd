@@ -41,6 +41,7 @@ static func definition(weapon: String, id: String, campaign_version := 2) -> Dic
 		"glaive":
 			form.return_after = 0.75 if focus else 0.25
 			form.return_multiplier = 3.0 if focus else 1.0
+			form.charge_return = focus
 			form.damage *= 0.75
 		"chain":
 			form.chain_count = 2 if focus else 6
@@ -80,7 +81,7 @@ static func details(weapon: String, id: String) -> String:
 				return "蓄力时间 −35%，每枚伤害 −10%。\n更快松手，抓住短暂空隙。" if base.has("charge") else "额外贯穿两名敌人，散布收窄 60%。\n每枚伤害 −15%；掩体仍会挡住弹体。"
 			return "每次 %d → %d 枚，弹道向两侧展开。\n原弹伤害保留；两侧弹各为原弹的 35%%。\n攻击间隔 +20%%。" % [int(base.get("pellets", 1)), int(base.get("pellets", 1)) + 2]
 		"glaive":
-			return "飞行 0.75 秒自动返回，回程伤害为去程三倍。\n去程伤害 −25%；出手冷却后可再按攻击提前回收。" if focus else "飞行 0.25 秒就返回，缩短等待。\n去回程伤害各 −25%，投掷距离减半。"
+			return "去程蓄势，0.75 秒后自动返回，回程最高三倍伤害。\n提前回收更快、威力更低；去程伤害 −25%。" if focus else "飞行 0.25 秒就返回，缩短等待。\n去回程伤害各 −25%，投掷距离减半。"
 		"chain":
 			return "起手距离 600，连锁距离 280。\n每击伤害 +35%，最多只命中两敌。" if focus else "最多连锁六敌，连锁距离 240。\n起手距离缩至 350，每击伤害 −20%。"
 		"gravity":
