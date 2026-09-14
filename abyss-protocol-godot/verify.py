@@ -61,6 +61,7 @@ def main():
                           ("frost_conduction", "ABYSS FROST CONDUCTION"),
                           ("freeze_feedback", "ABYSS FREEZE FEEDBACK"),
                           ("weapon_mods", "ABYSS WEAPON MODS"),
+                          ("glaive_contact", "ABYSS GLAIVE CONTACT"),
                           ("nova_echo", "ABYSS NOVA ECHO")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1

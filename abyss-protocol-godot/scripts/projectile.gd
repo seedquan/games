@@ -1,6 +1,7 @@
 extends Area2D
 ## Swept collisions and per-leg hit tracking support fast bullets and returning blades.
 
+const GLAIVE_RADIUS := 21.0
 var game
 var shooter
 var direction := Vector2.RIGHT
@@ -22,6 +23,7 @@ var hit_ids: Array[int] = []
 var excluded: Array[RID] = []
 var visual_offset := Vector2.ZERO
 var reflected := false
+var blade_shape: CircleShape2D
 
 func configure(options: Dictionary) -> void:
 	return_after = options.get("return_after", 0.5)
@@ -38,6 +40,10 @@ func configure(options: Dictionary) -> void:
 
 func _ready() -> void:
 	collision_mask = 3 if hostile else 5
+	if visual == "glaive" and not hostile and game.campaign_version >= 2:
+		blade_shape = CircleShape2D.new()
+		blade_shape.radius = GLAIVE_RADIUS
+		$Collision.shape = blade_shape
 	if speed <= 0.0:
 		speed = 300.0 if hostile else 720.0
 	body_entered.connect(_on_body_entered)
@@ -74,13 +80,18 @@ func _physics_process(delta: float) -> void:
 	# A single physics tick may cross several bodies; every pierced body is excluded
 	# from subsequent sweeps, while the first wall always terminates a shot.
 	for step in range(16):
-		var query := PhysicsRayQueryParameters2D.create(global_position, destination, collision_mask, excluded)
-		query.hit_from_inside = true
-		var hit := get_world_2d().direct_space_state.intersect_ray(query)
+		var hit: Dictionary
+		if blade_shape != null:
+			hit = blade_contact(destination)
+		else:
+			var query := PhysicsRayQueryParameters2D.create(global_position, destination, collision_mask, excluded)
+			query.hit_from_inside = true
+			hit = get_world_2d().direct_space_state.intersect_ray(query)
 		if hit.is_empty():
 			global_position = destination
 			break
 		global_position = hit.position
+		if not hit.has("collider"): break
 		var was_returning := returning
 		var previous_direction := direction
 		_on_body_entered(hit.collider)
@@ -88,6 +99,35 @@ func _physics_process(delta: float) -> void:
 			break
 		global_position += direction * 0.1
 	queue_redraw()
+
+func blade_contact(destination: Vector2) -> Dictionary:
+	var space := get_world_2d().direct_space_state
+	var query := PhysicsShapeQueryParameters2D.new()
+	query.shape = blade_shape
+	query.transform = Transform2D(0, global_position)
+	query.collision_mask = collision_mask
+	query.exclude = excluded
+	query.margin = 0.01
+	# cast_motion ignores bodies already touching the initial shape.
+	var contacts := space.intersect_shape(query, 16)
+	var stop := global_position
+	if contacts.is_empty():
+		query.motion = destination - global_position
+		var fractions := space.cast_motion(query)
+		if fractions[0] >= 1.0: return {}
+		stop = global_position.lerp(destination, fractions[0])
+		query.transform.origin = global_position.lerp(destination, fractions[1])
+		query.motion = Vector2.ZERO
+		# Resolve the colliding body just past the safe fraction, without moving
+		# the blade into it. A tiny margin absorbs the physics solver's tolerance.
+		query.margin = 0.1
+		contacts = space.intersect_shape(query, 16)
+	if contacts.is_empty(): return {"position": stop}
+	# At a shared boundary, solid cover wins over an overlapping enemy.
+	for contact in contacts:
+		if contact.collider is StaticBody2D:
+			return {"position": stop, "collider": contact.collider}
+	return {"position": stop, "collider": contacts[0].collider}
 
 func _on_body_entered(body: Node2D) -> void:
 	if spent or game.state != "playing" or body.get_instance_id() in hit_ids:
@@ -187,7 +227,7 @@ func _draw() -> void:
 		"glaive":
 			for i in range(3):
 				var angle := flight_elapsed * 22.0 + float(i) * TAU / 3.0
-				draw_arc(Vector2.ZERO, 21, angle, angle + 1.4, 12, tint, 5, true)
+				draw_arc(Vector2.ZERO, GLAIVE_RADIUS, angle, angle + 1.4, 12, tint, 5, true)
 			draw_circle(Vector2.ZERO, 5, Color.WHITE)
 		"orb":
 			draw_circle(Vector2.ZERO, 15, Color(tint, 0.14))
