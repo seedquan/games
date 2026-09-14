@@ -8,7 +8,8 @@ const UPGRADES := [
 const MODS = preload("res://scripts/weapon_mods.gd")
 const NOVA = preload("res://scripts/nova_echo.gd")
 const DASH = preload("res://scripts/dash_echo.gd")
-const SKILL_BOONS := [NOVA.CARD, DASH.CARD]
+const FUSE = preload("res://scripts/plasma_fuse.gd")
+const SKILL_BOONS := [NOVA.CARD, DASH.CARD, FUSE.CARD]
 const ELEMENTS := ["fire", "ice", "shock", "poison", "leech", "execute"]
 const BOONS := [
 	{"name": "锋刃增幅", "tag": "攻击强化", "description": "武器伤害提高百分之二十五。\n武器主攻击与等离子弹均生效。", "stat": "damage"},
@@ -35,7 +36,7 @@ const ELEMENT_LABELS := {"fire": "火焰", "ice": "冰霜", "shock": "电击", "
 
 static func effects(boon: Dictionary, member, version := 2) -> Dictionary:
 	var result: Dictionary = {}
-	if boon.stat in [NOVA.ID, DASH.ID]:
+	if boon.stat in [NOVA.ID, DASH.ID, FUSE.ID]:
 		return {"skill": version >= 2 and int(member.enchantments.get(boon.stat, 0)) == 0}
 	if boon.stat in MODS.IDS:
 		return {"modification": version >= 2 and member.weapon_mod.is_empty()}
@@ -85,6 +86,8 @@ static func describe(boon: Dictionary, member, version := 2) -> String:
 		return "已获得 · 不会重复叠加。" if member.enchantments.has(NOVA.ID) else NOVA.description(member.damage)
 	if boon.stat == DASH.ID:
 		return "已获得 · 不会重复叠加。" if member.enchantments.has(DASH.ID) else DASH.description(member.damage)
+	if boon.stat == FUSE.ID:
+		return "已获得 · 不会重复叠加。" if member.enchantments.has(FUSE.ID) else FUSE.description(member.damage)
 	if boon.stat in MODS.IDS: return MODS.preview(member, boon.stat)
 	var changes := effects(boon, member, version)
 	match boon.stat:
@@ -129,7 +132,7 @@ static func leech_capacity(level: int) -> float:
 static func eligible(boon: Dictionary, enchants: Dictionary, members: Array, version: int) -> bool:
 	if not members.is_empty():
 		return members.any(func(member): return can_apply(boon, member, version))
-	if boon.stat in [NOVA.ID, DASH.ID]: return version >= 2 and int(enchants.get(boon.stat, 0)) == 0
+	if boon.stat in [NOVA.ID, DASH.ID, FUSE.ID]: return version >= 2 and int(enchants.get(boon.stat, 0)) == 0
 	return boon.stat not in MODS.IDS and int(enchants.get(boon.stat, 0)) < 3
 
 static func offers(rng: RandomNumberGenerator, first_room: bool, enchants: Dictionary, members: Array = [], version := 1) -> Array:

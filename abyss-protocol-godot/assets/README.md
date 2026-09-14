@@ -39,3 +39,5 @@ Godot 生成的 `.import` 元数据与资源一起保留；`.godot/` 导入缓�
 九个短音 `gun/heavy/blade/bow/arc/impact/dash/ui/clear.wav` 是 `tools/make_audio.py` 生成的原创确定性 PCM 音频，没有第三方采样。可重新生成，运行时直接加载本地资源。
 
 `ui/dodge_timing.svg` 是本项目原创的守卫/机体矢量图。`scripts/dodge_diagram.gd` 将图示与对应地面预警轮廓组合，说明准备、落点锁定、走位与短冲刺窗口；没有外部图片或视频依赖。
+
+`ui/plasma_fuse.svg` 是本项目原创的等离子→目标引信→主武器引爆图示；奖励卡、构筑页与敌人头顶标记使用同一矢量资源。标记剩余时间环与单/双席刻线由 Godot 实时绘制。

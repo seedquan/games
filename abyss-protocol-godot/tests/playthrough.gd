@@ -26,6 +26,8 @@ var echo_bursts: Dictionary = {}
 var dash_echo := "--dash-echo" in OS.get_cmdline_user_args()
 var offensive_dash_echo := "--offensive-dash-echo" in OS.get_cmdline_user_args()
 var dash_echo_bursts: Dictionary = {}
+var plasma_fuse := "--plasma-fuse" in OS.get_cmdline_user_args()
+var fuse_bursts: Dictionary = {}
 var frost_build := "--frost-build" in OS.get_cmdline_user_args()
 var trace_freeze := "--trace-freeze" in OS.get_cmdline_user_args()
 var freeze_observer = preload("res://tests/freeze_observer.gd").new()
@@ -48,6 +50,10 @@ func count_combat_frame() -> void:
 			for effect in game.get_node("World/Projectiles").get_children():
 				if effect.get_script() == game.PROGRESSION.DASH and effect.fired:
 					dash_echo_bursts[effect.get_instance_id()] = true
+		if plasma_fuse:
+			for effect in game.get_node("World/Effects").get_children():
+				if effect.get_script() == game.PROGRESSION.FUSE and effect.burst:
+					fuse_bursts[effect.get_instance_id()] = true
 
 func axis(negative: String, positive: String, value: float, player) -> void:
 	negative = player.action(negative)
@@ -248,7 +254,7 @@ func run() -> void:
 						choice = i
 				if frost_build:
 					# Choose from actual offered cards. Never insert or reroll a boon.
-					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire", "mod_focus", "mod_flow", "nova_echo", "dash_echo"]
+					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire", "mod_focus", "mod_flow", "nova_echo", "dash_echo", "plasma_fuse"]
 					for i in range(game.boon_choices.size()):
 						if priorities.find(game.boon_choices[i].stat) < priorities.find(game.boon_choices[choice].stat): choice = i
 				if not modification.is_empty():
@@ -260,6 +266,9 @@ func run() -> void:
 				if dash_echo:
 					for i in range(game.boon_choices.size()):
 						if game.boon_choices[i].stat == "dash_echo": choice = i
+				if plasma_fuse:
+					for i in range(game.boon_choices.size()):
+						if game.boon_choices[i].stat == "plasma_fuse": choice = i
 				game.choose_boon(choice)
 			"route":
 				release_controls()
@@ -302,6 +311,7 @@ func run() -> void:
 	report.build_policy = "ice/shock cards first; skip fire/poison purchases" if frost_build else "damage/leech cards; buy available supplies"
 	if nova_echo: report.build_policy += "; prefer offered nova echo; cast on two close enemies or a guardian within nova range"
 	if dash_echo: report.build_policy += "; prefer offered dash echo"
+	if plasma_fuse: report.build_policy += "; prefer offered plasma fuse; retain normal bolt and weapon inputs"
 	report.dash_echo_input_policy = "dash beside a frozen target within 145" if offensive_dash_echo and dash_echo else "defensive dashes only"
 	report.windup_policy = "React early only to actual melee; placed zones and projectiles use their own imminent-hit timing"
 	if trace_freeze: report.freeze_observations = freeze_observer.summary
@@ -311,6 +321,8 @@ func run() -> void:
 	report.nova_echo_bursts = echo_bursts.size()
 	report.dash_echo_preference = dash_echo
 	report.dash_echo_bursts = dash_echo_bursts.size()
+	report.plasma_fuse_preference = plasma_fuse
+	report.plasma_fuse_bursts = fuse_bursts.size()
 	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate(), "weapon_mod": member.weapon_mod})
 	report.physics_seconds = combat_physics_frames / 60.0
 	report.clock_difference = absf(game.elapsed - combat_physics_frames / 60.0)
@@ -326,6 +338,8 @@ func run() -> void:
 	if trace_freeze: output = output.trim_suffix(".json") + "-freeze-trace.json"
 	if nova_echo: output = output.trim_suffix(".json") + "-nova-echo.json"
 	if dash_echo: output = output.trim_suffix(".json") + "-dash-echo.json"
+	if offensive_dash_echo: output = output.trim_suffix(".json") + "-offensive-dash.json"
+	if plasma_fuse: output = output.trim_suffix(".json") + "-plasma-fuse.json"
 	var file := FileAccess.open(output, FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

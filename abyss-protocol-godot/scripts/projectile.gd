@@ -27,6 +27,8 @@ var visual_offset := Vector2.ZERO
 var reflected := false
 var blade_shape: CircleShape2D
 var return_guide: Node2D
+var fuse_damage := 0.0
+var fuse_seat := 0
 
 func configure(options: Dictionary) -> void:
 	return_after = options.get("return_after", 0.5)
@@ -40,6 +42,8 @@ func configure(options: Dictionary) -> void:
 	element = options.get("element", "")
 	explosion = options.get("explosion", 0.0)
 	shooter = options.get("shooter", null)
+	fuse_damage = options.get("fuse_damage", 0.0) if not hostile and shooter == null and game.campaign_version >= 2 else 0.0
+	fuse_seat = options.get("fuse_seat", 0)
 	visual_offset = options.get("visual_offset", Vector2(0, -28 if hostile else -34))
 
 func _ready() -> void:
@@ -179,6 +183,8 @@ func _on_body_entered(body: Node2D) -> void:
 		shooter.weapon_hit(body, damage, direction * 100.0, element)
 	else:
 		body.take_damage(damage, direction * 100.0)
+		if fuse_damage > 0 and body.is_in_group("enemies"):
+			game.PROGRESSION.FUSE.prime(body, fuse_damage, fuse_seat)
 	game.effect(global_position + visual_offset, tint, 22.0, 0.18)
 	if pierce_remaining > 0:
 		pierce_remaining -= 1

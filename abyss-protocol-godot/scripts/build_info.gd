@@ -119,6 +119,8 @@ static func synergies(member) -> Array[String]:
 		result.append("霜链：先冻结，再电击。保留冻结，向距离 %d 内最近 %d 名可见敌人各传导 %d%% 电击命中伤害；每目标间隔 0.8 秒。可用冰冻新星或队友冰霜准备，不伤友方、不追加符文。" % [PROGRESSION.CONDUCTION_RANGE, PROGRESSION.CONDUCTION_TARGETS, PROGRESSION.CONDUCTION_FRACTION * 100])
 	if modern and active.get(PROGRESSION.DASH.ID, 0) == 1:
 		result.append("雷霆残影：先用新星或队友冰霜冻结，再从敌人身旁冲刺。起点的延迟电击可接霜链；保留冻结，向附近两敌传导 45% 电击伤害。")
+	if modern and active.get(PROGRESSION.FUSE.ID, 0) == 1:
+		result.append("共振引信：等离子先标记，再用自己或队友主武器、返弹引爆。标记跟随敌人，三秒内有效；引力井可先把敌人聚拢。爆发不追加元素或引爆其他引信。")
 	if result.is_empty(): result.append("完美闪避与成功弹反可短暂提高主武器伤害 50%。抓住敌人攻击前摇反击。")
 	if modern: result.append("弹反返弹：沿来路反射，伤害不低于 %.1f；可触发主武器元素与符文。" % member.damage)
 	return result
