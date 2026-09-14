@@ -110,7 +110,7 @@ func combat_input(player) -> void:
 	if nova_echo and player.enchantments.get("nova_echo", 0) == 1:
 		wants_freeze = wants_freeze or threats >= 2 or (target.kind in ["boss", "warden"] and distance < 230)
 	for danger in game.get_node("World/Projectiles").get_children():
-		if danger.get_script() == game.HAZARD and player.position.distance_to(danger.position) < danger.radius + 35:
+		if danger.get_script() == game.HAZARD and controls.blast_imminent(danger, player.position):
 			wants_dash = true
 		elif danger.get_script() == game.GUARDIAN_ATTACK and not danger.fired and danger.delay - danger.elapsed < 0.23 and danger.contains_point(player.position):
 			wants_dash = true
