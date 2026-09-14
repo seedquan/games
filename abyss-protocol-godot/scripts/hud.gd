@@ -1015,7 +1015,7 @@ func build_help() -> void:
 		return_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		return_icon.custom_minimum_size = Vector2(176, 64)
 		return_row.add_child(return_icon)
-		var return_tip := label("按住自动往返；出手冷却结束后，松开并再次按 %s 可提前回收。\n让敌人处在飞刃与机体之间；移动会改变回程，短横线表示掩体。" % game.action_label("slash"), 20, Color("bfd1d4"))
+		var return_tip := label("按住自动往返；出手冷却结束后，松开并再次按 %s 可提前回收。\n重返飞刃的细弧表示去程蓄势：早收更快、等满更重。\n让敌人处在飞刃与机体之间；移动会改变回程，短横线表示掩体。" % game.action_label("slash"), 20, Color("bfd1d4"))
 		return_tip.name = "GlaiveReturnInstruction"
 		return_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		return_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL

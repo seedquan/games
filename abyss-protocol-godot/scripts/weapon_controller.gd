@@ -90,7 +90,8 @@ func fire(charge_fraction := -1.0) -> bool:
 				{"visual": "glaive", "color": definition.color, "speed": definition.speed,
 				"visual_offset": to_global(Vector2(18, 0)) - (actor.global_position + actor.aim * 28.0),
 				"pierce": 99, "life": 2.5, "shooter": actor,
-				"return_after": definition.get("return_after", 0.5), "return_multiplier": definition.get("return_multiplier", 1.0)})
+				"return_after": definition.get("return_after", 0.5), "return_multiplier": definition.get("return_multiplier", 1.0),
+				"charge_return": definition.get("charge_return", false)})
 			active_glaive = weakref(shot)
 	var cue: String = {"MELEE": "blade", "ENERGY": "arc", "MAGIC": "arc", "FIREARMS": "gun", "ARCHERY": "bow"}.get(definition.family, "blade")
 	if definition.id in ["maul", "grav", "rail"]:

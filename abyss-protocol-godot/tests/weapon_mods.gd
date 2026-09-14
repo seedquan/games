@@ -154,7 +154,7 @@ func glaive_pacing() -> void:
 		check(not game.player.weapon.fire(), "Stronger glaive cannot be thrown again before it is caught")
 		game.player.slash_cooldown = cooldown
 		var description: String = game.BUILD_INFO.attack_text(game.player.weapon.definition, game.player.damage)
-		check("回程命中 %.1f" % (expected * return_scale) in description, "Build page shows the actual tuned return hit")
+		check("回程命中 %.1f" % (expected * return_scale) in description, "Build page shows the actual tuned maximum or fixed return hit")
 		await frames(100)
 		check(is_equal_approx(10000 - t[0].hp, expected * (1 + return_scale)), "Actual projectile deals one outbound and one return hit with no duplicate damage")
 		var definition: Dictionary = game.player.weapon.definition.duplicate(true)

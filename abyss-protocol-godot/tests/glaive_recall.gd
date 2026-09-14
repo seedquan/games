@@ -34,9 +34,11 @@ func input_recall() -> void:
 	await frames()
 	check(shot.returning and shot.flight_elapsed < shot.return_after, "A fresh attack after recovery recalls the existing blade early")
 	check(game.get_node("World/Projectiles").get_child_count() == 1, "Recall never throws a second blade")
+	var return_damage: float = shot.damage
+	check(return_damage > outbound * 2 and return_damage < outbound * 2.5, "Early recall trades part of the heavy return bonus for a shorter flight")
 	attack(false)
 	await frames(60)
-	check(is_equal_approx(10000 - targets[0].hp, outbound * 4), "Recalled heavy blade deals one unchanged triple return hit")
+	check(is_equal_approx(10000 - targets[0].hp, outbound + return_damage), "Actual recalled hit uses exactly the strength committed at the turn")
 	check(not is_instance_valid(shot), "Recalled blade reaches its owner and is cleaned up")
 
 func recall_boundaries() -> void:
@@ -84,7 +86,7 @@ func recall_boundaries() -> void:
 	await frames()
 	attack(true)
 	await frames()
-	check(is_equal_approx(shot.damage, outbound * 3) and shot.damage == return_damage, "Repeated recall presses never multiply damage again")
+	check(shot.damage < outbound * 3 and shot.damage == return_damage, "Repeated recall presses never grow or multiply the committed return damage")
 	check(not game.player.weapon.can_recall(), "Returning blade is not another recall opportunity")
 	game.hud.update_status()
 	check("回收中" in game.hud.skills[0].text, "Returning blade retains its in-flight status")
@@ -221,6 +223,86 @@ func mouse_recall() -> void:
 	event.button_mask = 0
 	Input.parse_input_event(event)
 
+func return_momentum() -> void:
+	attack(false)
+	Input.action_release("aim_right")
+	var targets := await reset_case("glaive", "mod_focus", [Vector2(130, 0)])
+	fire()
+	var shot = game.player.weapon.active_glaive.get_ref()
+	shot.set_physics_process(false)
+	var outbound: float = shot.damage
+	shot.position = game.player.position + Vector2(300, 0)
+	shot.flight_elapsed = 0.375
+	check(is_equal_approx(shot.return_charge_fraction(), 0.5), "Charge cue reflects elapsed outbound time")
+	game.show_menu("paused")
+	await frames(4)
+	check(is_equal_approx(shot.return_charge_fraction(), 0.5), "Paused time cannot fill the outbound charge cue")
+	game.resume_run()
+	shot.begin_return()
+	check(is_equal_approx(shot.damage, outbound * 2), "Half of the heavy outbound time earns a double return instead of a free triple hit")
+	var committed: float = shot.damage
+	shot.flight_elapsed = 2.0
+	shot.begin_return()
+	check(shot.damage == committed, "Time spent returning cannot increase the already committed hit")
+	check(is_equal_approx(shot.return_charge_fraction(), 0.5), "Return cue holds the actual committed charge")
+	shot.speed = 18000
+	shot._physics_process(1.0 / 60)
+	check(is_equal_approx(10000 - targets[0].hp, committed), "Swept return collision delivers the committed partial charge exactly once")
+	var description: String = game.BUILD_INFO.attack_text(game.player.weapon.definition, game.player.damage)
+	check("最大回程命中" in description and "蓄势" in description, "Build explains that the displayed heavy return is a charged maximum")
+	check("蓄势" in game.PROGRESSION.MODS.details("glaive", "mod_focus"), "Refit choice explains the flight-time tradeoff before selection")
+	# Real cover ends the outbound leg immediately; it cannot grant free full charge.
+	await reset_case("glaive", "mod_focus", [Vector2(200, 0)])
+	game.arena.add_wall(Rect2(915, 668, 6, 60))
+	await frames()
+	fire()
+	shot = game.player.weapon.active_glaive.get_ref()
+	shot.set_physics_process(false)
+	outbound = shot.damage
+	shot.speed = 18000
+	shot._physics_process(1.0 / 60)
+	check(shot.returning and shot.damage > outbound and shot.damage < outbound * 1.1, "Immediate cover turn earns only the outbound time actually travelled")
+	# Normal and quick-return blades retain their fixed equal-strength legs.
+	for modification in ["", "mod_flow"]:
+		await reset_case("glaive", modification, [])
+		fire()
+		shot = game.player.weapon.active_glaive.get_ref()
+		shot.set_physics_process(false)
+		outbound = shot.damage
+		shot.flight_elapsed = 0.1
+		shot.begin_return()
+		check(shot.damage == outbound, "Non-heavy blade keeps equal outbound and return damage: " + modification)
+	await reset_case("glaive", "mod_focus", [Vector2(130, 0)])
+	fire()
+	shot = game.player.weapon.active_glaive.get_ref()
+	shot.set_physics_process(false)
+	outbound = shot.damage
+	shot.flight_elapsed = 0.75
+	shot.begin_return()
+	check(is_equal_approx(shot.damage, outbound * 3), "Waiting for the full outbound time retains the triple return payoff")
+
+func native_momentum_preview() -> void:
+	if DisplayServer.get_name() == "headless": return
+	await reset_case("glaive", "mod_focus", [Vector2(200, 0)])
+	root.size = Vector2i(1280, 800)
+	fire()
+	var shot = game.player.weapon.active_glaive.get_ref()
+	shot.set_physics_process(false)
+	shot.position = game.player.position + Vector2(160, 0)
+	shot.flight_elapsed = 0.375
+	shot.queue_redraw()
+	await frames(8)
+	check(root.size == Vector2i(1280, 800), "Heavy charge cue renders at the standard desktop size")
+	await snapshot("momentum-half")
+	game.settings.values.high_contrast = true
+	game.settings.values.flash = false
+	shot.flight_elapsed = 0.75
+	shot.begin_return()
+	shot.queue_redraw()
+	await snapshot("momentum-full")
+	game.open_build()
+	await snapshot("momentum-build")
+
 func run() -> void:
 	await spawn_game()
 	await input_recall()
@@ -228,6 +310,8 @@ func run() -> void:
 	await cooperative_recall()
 	await keyboard_recall()
 	await mouse_recall()
+	await return_momentum()
+	await native_momentum_preview()
 	attack(false)
 	Input.action_release("aim_right")
 	game.queue_free()

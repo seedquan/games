@@ -19,6 +19,8 @@ var flight_elapsed := 0.0
 var returning := false
 var return_after := 0.5
 var return_multiplier := 1.0
+var charge_return := false
+var charge_at_turn := 0.0
 var hit_ids: Array[int] = []
 var excluded: Array[RID] = []
 var visual_offset := Vector2.ZERO
@@ -30,6 +32,7 @@ func configure(options: Dictionary) -> void:
 	return_after = options.get("return_after", 0.5)
 	return_multiplier = options.get("return_multiplier", 1.0)
 	visual = options.get("visual", "plasma")
+	charge_return = options.get("charge_return", false) and visual == "glaive" and not hostile and game.campaign_version >= 2
 	tint = Color(options.get("color", "ff7088" if hostile else "67efe0"))
 	speed = options.get("speed", 300.0 if hostile else 720.0)
 	life = options.get("life", 3.0)
@@ -54,9 +57,16 @@ func _ready() -> void:
 	body_entered.connect(_on_body_entered)
 	rotation = direction.angle()
 
+func return_charge_fraction() -> float:
+	if not charge_return: return 0.0
+	return charge_at_turn if returning else clampf(flight_elapsed / maxf(return_after, 0.001), 0.0, 1.0)
+
 func begin_return() -> void:
 	if returning: return
-	damage *= return_multiplier
+	# All early turns, including cover, earn only the time spent outbound.
+	# Commit once: a long return or repeated recall cannot build more strength.
+	charge_at_turn = return_charge_fraction()
+	damage *= lerpf(1.0, return_multiplier, charge_at_turn) if charge_return else return_multiplier
 	returning = true
 	hit_ids.clear()
 	excluded.clear()
@@ -233,6 +243,13 @@ func _draw() -> void:
 			draw_line(Vector2(-25, -5), Vector2(-19, 0), tint, 2.0, true)
 			draw_line(Vector2(-25, 5), Vector2(-19, 0), tint, 2.0, true)
 		"glaive":
+			if charge_return:
+				var begin := -PI / 2 - rotation
+				var end := begin + TAU * return_charge_fraction()
+				draw_arc(Vector2.ZERO, 29, begin, begin + TAU, 48, Color("10191c"), 5, true)
+				draw_arc(Vector2.ZERO, 29, begin, begin + TAU, 48, Color("698579"), 1, true)
+				if end > begin:
+					draw_arc(Vector2.ZERO, 29, begin, end, 48, Color("fff0bd"), 2.5, true)
 			for i in range(3):
 				var angle := flight_elapsed * 22.0 + float(i) * TAU / 3.0
 				draw_arc(Vector2.ZERO, GLAIVE_RADIUS, angle, angle + 1.4, 12, tint, 5, true)
