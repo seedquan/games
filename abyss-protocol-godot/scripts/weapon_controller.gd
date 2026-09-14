@@ -34,11 +34,19 @@ func cancel_charge() -> void:
 	charge = 0.0
 	drawing = false
 
-func tick(delta: float, held: bool, released: bool) -> void:
+func can_recall() -> bool:
+	if actor.game.campaign_version < 2 or actor.game.state != "playing" or actor.hp <= 0.0 or actor.slash_cooldown > 0.0 or definition.mode != "glaive":
+		return false
+	var shot = active_glaive.get_ref() if active_glaive != null else null
+	return is_instance_valid(shot) and not shot.is_queued_for_deletion() and not shot.spent and not shot.returning and shot.shooter == actor
+
+func tick(delta: float, held: bool, released: bool, pressed := false) -> void:
 	combo_left = maxf(0.0, combo_left - delta)
 	if combo_left == 0.0:
 		combo = 0
-	if definition.has("charge"):
+	if pressed and can_recall():
+		active_glaive.get_ref().begin_return()
+	elif definition.has("charge"):
 		if held and actor.slash_cooldown <= 0.0:
 			drawing = true
 			charge = minf(float(definition.charge), charge + delta)

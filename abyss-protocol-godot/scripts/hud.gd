@@ -3,6 +3,7 @@ extends Control
 const MINT := Color("e6b879")
 const DISPLAY_FONT = preload("res://assets/fonts/NotoSerifCJKsc-SemiBold.otf")
 const COMBAT_ACTIONS = preload("res://assets/ui/combat_actions.svg")
+const RECALL_ACTION = preload("res://assets/ui/recall_action.svg")
 const ACTIONS := ["slash", "bolt", "dash", "freeze", "parry"]
 const ACTION_NAMES := ["主武器", "等离子", "冲刺", "冰冻", "弹反"]
 const CROSSHAIR = preload("res://assets/crosshair.svg")
@@ -172,6 +173,7 @@ func build_action_strip(parent: HBoxContainer, captions: Array[Label], icons: Ar
 		atlas.atlas = COMBAT_ACTIONS
 		atlas.region = Rect2(i * 48, 0, 48, 48)
 		icon.texture = atlas
+		icon.set_meta("rest_texture", atlas)
 		item.add_child(icon)
 		icons.append(icon)
 		var caption := label("", 15, Color("ece8d9"))
@@ -186,6 +188,7 @@ func update_action_strip(member, captions: Array[Label], icons: Array[TextureRec
 	var cooldowns := [member.slash_cooldown, member.bolt_cooldown, member.dash_cooldown, member.freeze_cooldown, member.parry_cooldown]
 	for i in range(ACTIONS.size()):
 		var ready: bool = cooldowns[i] <= 0.0 and member.hp > 0
+		var recall_ready: bool = i == 0 and member.weapon.can_recall()
 		var value: String = game.CONTROLS.PAD_LABELS[ACTIONS[i]] if game.coop.enabled else game.action_label(ACTIONS[i])
 		if member.hp <= 0:
 			value = "—"
@@ -199,10 +202,11 @@ func update_action_strip(member, captions: Array[Label], icons: Array[TextureRec
 		if i == 0 and member.hp > 0 and member.weapon.definition.mode == "glaive":
 			var shot = member.weapon.active_glaive.get_ref() if member.weapon.active_glaive != null else null
 			if is_instance_valid(shot):
-				value = "回收中" if shot.returning else "飞行中"
-				ready = false
-		var title: String = "霜火" if i == 3 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1 else ACTION_NAMES[i]
+				if not recall_ready: value = "回收中" if shot.returning else "飞行中"
+				ready = recall_ready
+		var title: String = "回收" if recall_ready else "霜火" if i == 3 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1 else ACTION_NAMES[i]
 		captions[i].text = title + "\n" + value
+		icons[i].texture = RECALL_ACTION if recall_ready else icons[i].get_meta("rest_texture")
 		icons[i].modulate = MINT if ready else MUTED
 
 func set_mouse_passthrough(node: Node) -> void:
@@ -1000,7 +1004,7 @@ func build_help() -> void:
 	content.add_theme_constant_override("separation", 22)
 	scroll.add_child(content)
 	if game.campaign_version >= 2:
-		content.add_child(label("回旋刃 · 移动引导回程", 23, MINT))
+		content.add_child(label("回旋刃 · 主动回收与走位", 23, MINT))
 		var return_row := HBoxContainer.new()
 		return_row.add_theme_constant_override("separation", 24)
 		content.add_child(return_row)
@@ -1011,7 +1015,8 @@ func build_help() -> void:
 		return_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		return_icon.custom_minimum_size = Vector2(176, 64)
 		return_row.add_child(return_icon)
-		var return_tip := label("回收时，地面箭头指向投掷机体；移动会改变回程路线。\n让敌人处在飞刃与机体之间；短横线表示前方掩体会挡住飞刃。", 20, Color("bfd1d4"))
+		var return_tip := label("按住自动往返；出手冷却结束后，松开并再次按 %s 可提前回收。\n让敌人处在飞刃与机体之间；移动会改变回程，短横线表示掩体。" % game.action_label("slash"), 20, Color("bfd1d4"))
+		return_tip.name = "GlaiveReturnInstruction"
 		return_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		return_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		return_tip.focus_mode = Control.FOCUS_ALL
