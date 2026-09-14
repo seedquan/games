@@ -37,3 +37,24 @@ a new gameplay behavior. Delivery validation includes native regression,
 complete minimized storage runs, full source suites and Mac/Windows packed
 release evidence. The new capture test requires native rendering and runs separately
 from the 37 headless-compatible source suites.
+
+## Teardown timing
+
+The now-completing minimized storage write also exposed two leaked audio
+objects. Matching instance IDs identified the duplicated ambient WAV and its
+playback. Isolated audio playback, paused playback, a complete ambient loop,
+and explicit drawing all cleaned up correctly. Lifecycle timestamps in the
+complete write showed only 30 ms from scene exit to process finalization,
+despite the nominal 0.2-second cleanup timer.
+
+The old timer started before deferred scene deletion and used simulation time.
+Extracting that existing teardown into `dispose_game()` lets a native test
+exercise it directly. At time scale 32, the old implementation returns after
+12 ms with ambient playback still retained: 6 checks, 2 failures.
+
+Both release completion paths now share teardown that first awaits actual
+scene exit, then yields through unscaled timers until 200 ms of monotonic wall
+time have elapsed. This restores the intended mixer grace period without
+changing the 55-second overall deadline or normal audio/playback behavior.
+`tests/release_shutdown.gd` checks the elapsed time and weak-reference retirement
+at normal and accelerated clocks, with no normal player data involved.

@@ -122,9 +122,7 @@ func run() -> void:
 	check(game.state == "dead", "failure screen")
 	await cooperative_release()
 	print("ABYSS RELEASE: %d checks, %d failures" % [checks, failures])
-	game.queue_free()
-	# Audio playback references are retired by the mixer after nodes are freed.
-	await get_tree().create_timer(0.2).timeout
+	await dispose_game()
 	get_tree().quit(0 if failures == 0 else 1)
 
 func countershot_release() -> void:
@@ -364,8 +362,7 @@ func storage_roundtrip() -> void:
 		await complete_campaign()
 		check(game.state == "victory" and game.team().size() == 2, "resumed co-op reaches the ending in the real release executable")
 	print("ABYSS STORAGE %s: %d checks, %d failures" % [game.verification_stage.to_upper(), checks, failures])
-	game.queue_free()
-	await get_tree().create_timer(0.2).timeout
+	await dispose_game()
 	get_tree().quit(0 if failures == 0 else 1)
 
 func pad_tap(device: int, button: JoyButton) -> void:
@@ -402,3 +399,12 @@ func cooperative_release() -> void:
 	check(game.player.weapon != game.companion.weapon, "packed actors own separate weapon controllers")
 	await complete_campaign()
 	check(game.state == "victory" and game.story_seen.size() == 6, "packed co-op campaign reaches all six story beats and rescue")
+
+func dispose_game() -> void:
+	game.queue_free()
+	await game.tree_exited
+	# The mixer retires playback on wall time, after the scene has stopped it.
+	# A scaled timer created before deferred deletion can expire in that same frame.
+	var deadline := Time.get_ticks_msec() + 200
+	while Time.get_ticks_msec() < deadline:
+		await get_tree().create_timer(0.02, true, false, true).timeout
