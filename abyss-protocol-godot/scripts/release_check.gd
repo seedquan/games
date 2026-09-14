@@ -115,6 +115,7 @@ func run() -> void:
 	await weapon_mod_release()
 	await nova_echo_release()
 	await dash_echo_release()
+	await plasma_fuse_release()
 	game.start_run(5820)
 	game.continue_story()
 	game.player.invulnerable = 0
@@ -240,6 +241,31 @@ func dash_echo_release() -> void:
 	for i in range(45): await frame()
 	check(target.ice_frozen_left > 0 and target.shock_guard > 0 and is_equal_approx(target.hp, 10000 - game.player.damage * 0.35), "packed dash shock remains at its origin and preserves freeze")
 	check(game.player.enchantments.get("dash_echo") == 1 and not game.PROGRESSION.can_apply({"stat": "dash_echo"}, game.player), "packed dash blessing is not stackable")
+
+func plasma_fuse_release() -> void:
+	game.start_run(5832)
+	game.continue_story()
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	game.player.set_physics_process(false)
+	game.player.position = Vector2(800, 650)
+	game.player.aim = Vector2.RIGHT
+	game.apply_boon(game.PROGRESSION.rune("plasma_fuse"))
+	var target = game.spawn_enemy("stalker", Vector2(890, 650))
+	target.set_physics_process(false)
+	target.hp = 10000
+	target.max_hp = 10000
+	check(game.PROGRESSION.FUSE.DIAGRAM.get_size() == Vector2(384, 144), "packed plasma fuse illustration")
+	check(game.player.try_bolt(), "packed blessed plasma accepts normal skill input")
+	for i in range(10): await frame()
+	check(target.has_node("PlasmaFuse"), "packed plasma impact leaves a primed target")
+	var before: float = target.hp
+	game.player.weapon_hit(target, 10, Vector2.ZERO)
+	check(not target.has_node("PlasmaFuse") and is_equal_approx(target.hp, before - 10 - game.player.damage * 0.6), "packed weapon consumes the mark for one committed blast")
+	check(not game.PROGRESSION.can_apply({"stat": "plasma_fuse"}, game.player), "packed fuse blessing cannot stack")
 
 func frost_conduction_release() -> void:
 	game.start_run(5822)
@@ -368,6 +394,8 @@ func storage_roundtrip() -> void:
 		game.PROGRESSION.apply(game.PROGRESSION.rune("nova_echo"), game.companion, 2)
 		game.companion.enchantments.erase("dash_echo")
 		game.PROGRESSION.apply(game.PROGRESSION.rune("dash_echo"), game.player, 2)
+		game.player.enchantments.erase("plasma_fuse")
+		game.PROGRESSION.apply(game.PROGRESSION.rune("plasma_fuse"), game.companion, 2)
 		game.companion.hp = 53.0
 		game.save_checkpoint()
 		check(game.RUN_SAVE.valid(game.profile.checkpoint) and game.profile.checkpoint.version == 3 and game.profile.checkpoint.cooperative, "write both actors in one co-op transaction")
@@ -384,6 +412,7 @@ func storage_roundtrip() -> void:
 		check(game.companion.weapon.definition.id == "ember" and game.companion.hp == 53.0 and game.player.weapon.definition.id == "rail", "co-op second-process load preserves both weapons and independent health")
 		check(not game.player.enchantments.has("nova_echo") and game.companion.enchantments.get("nova_echo") == 1, "co-op cold load preserves the independently equipped skill blessing")
 		check(game.player.enchantments.get("dash_echo") == 1 and not game.companion.enchantments.has("dash_echo"), "co-op cold load preserves the other seat's dash blessing")
+		check(not game.player.enchantments.has("plasma_fuse") and game.companion.enchantments.get("plasma_fuse") == 1, "co-op cold load preserves the second seat's plasma fuse")
 		check(game.player.weapon_mod == "mod_focus" and game.companion.weapon_mod == "mod_flow" and game.companion.weapon.definition.pellets == 3 and is_equal_approx(game.player.weapon.definition.charge, 0.8 * 0.65), "co-op cold load preserves independent mutually exclusive refits and actual attacks")
 		check(not game.buy_item(1), "shared co-op purchase cannot be duplicated on resume")
 		await snapshot("coop-read")

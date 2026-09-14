@@ -138,7 +138,11 @@ func shop_heavy_cases() -> void:
 	var shops := 0
 	var smallest_pool := 3
 	var purchases := 0
-	var order := ["mod_focus", "nova_echo", "speed", "fire", "ice", "shock", "poison", "leech", "execute", "damage", "health"]
+	# Take each available one-time skill before capped repeatable upgrades.
+	# New skill cards must be earned too, or they keep the late pool full.
+	var order: Array = ["mod_focus"] + PROGRESSION.SKILL_BOONS.map(func(boon): return boon.stat)
+	order.append_array(["speed", "fire", "ice", "shock", "poison", "leech", "execute", "damage", "health"])
+	var earned: Array[String] = []
 	for depth in range(1, 30):
 		var local_room: int = posmod(depth - 1, 6) + 1
 		if local_room in [3, 5]:
@@ -166,12 +170,13 @@ func shop_heavy_cases() -> void:
 					break
 			check(not selected.is_empty(), "Shop-heavy legal reward order always retains a useful upgrade")
 			game.apply_boon(selected)
+			earned.append(selected.stat)
 		var offers := PROGRESSION.offers(game.rng, false, game.player.enchantments, game.team(), 2)
 		check(offers.size() >= 1 and offers.size() <= 3, "Shop-heavy late-game offers stay nonempty")
 		check(offers.all(func(boon): return PROGRESSION.can_apply(boon, game.player)), "Shop-heavy pool excludes saturated effects")
 		smallest_pool = mini(smallest_pool, offers.size())
 	check(shops == 10 and purchases >= 10 and smallest_pool <= 2, "Legal 10-shop economics can reach fewer than three valid blessings")
-	measurements.append({"fixture": "Constructed legal reward order and unchanged shop/room economy", "shops": shops, "purchases": purchases, "smallest_offer_pool": smallest_pool, "remaining_scrap": game.scrap})
+	measurements.append({"fixture": "Constructed legal reward order and unchanged shop/room economy", "shops": shops, "purchases": purchases, "smallest_offer_pool": smallest_pool, "remaining_scrap": game.scrap, "earned_blessings": earned})
 	game.profile.upgrades = {"vitality": 0, "power": 0, "recovery": 0}
 
 func element_cases() -> void:

@@ -65,7 +65,7 @@ def main():
                           ("glaive_guide", "ABYSS GLAIVE GUIDE"),
                           ("glaive_recall", "ABYSS GLAIVE RECALL"),
                           ("nova_echo", "ABYSS NOVA ECHO"),
-                          ("dash_echo", "ABYSS DASH ECHO")]:
+                          ("dash_echo", "ABYSS DASH ECHO"), ("plasma_fuse", "ABYSS PLASMA FUSE")]:
         if not run_check(suite, ["--headless", "--script", f"res://tests/{suite}.gd"], marker):
             return 1
     return 0

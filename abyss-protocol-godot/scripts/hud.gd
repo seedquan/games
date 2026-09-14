@@ -210,6 +210,7 @@ func update_action_strip(member, captions: Array[Label], icons: Array[TextureRec
 				ready = recall_ready
 		var title: String = "回收" if recall_ready else "霜火" if i == 3 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1 else ACTION_NAMES[i]
 		if i == 2 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.DASH.ID, 0) == 1: title = "雷步"
+		if i == 1 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.FUSE.ID, 0) == 1: title = "引信"
 		captions[i].text = title + "\n" + value
 		icons[i].texture = RECALL_ACTION if recall_ready else icons[i].get_meta("rest_texture")
 		icons[i].modulate = MINT if ready else MUTED
@@ -404,10 +405,11 @@ func show_menu(kind: String) -> void:
 			var card_title := label(card_name, 28, Color("ece8d9"))
 			card_title.add_theme_font_override("font", DISPLAY_FONT)
 			card_content.add_child(card_title)
-			if boon.stat in game.PROGRESSION.MODS.IDS or boon.stat in [game.PROGRESSION.NOVA.ID, game.PROGRESSION.DASH.ID]:
+			if boon.stat in game.PROGRESSION.MODS.IDS or boon.stat in [game.PROGRESSION.NOVA.ID, game.PROGRESSION.DASH.ID, game.PROGRESSION.FUSE.ID]:
 				var illustration := TextureRect.new()
 				illustration.texture = game.PROGRESSION.NOVA.DIAGRAM if boon.stat == game.PROGRESSION.NOVA.ID else modification_art(game.player.weapon.definition, boon.stat)
 				if boon.stat == game.PROGRESSION.DASH.ID: illustration.texture = game.PROGRESSION.DASH.DIAGRAM
+				if boon.stat == game.PROGRESSION.FUSE.ID: illustration.texture = game.PROGRESSION.FUSE.DIAGRAM
 				illustration.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 				illustration.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 				illustration.custom_minimum_size.y = 64
@@ -776,6 +778,8 @@ func build_run_overview() -> void:
 		build_info_card(grid, "技能祝福 / 霜火回响", game.PROGRESSION.NOVA.description(member.damage), Color("e6b879"), 8, -1, game.PROGRESSION.NOVA.DIAGRAM)
 	if game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.DASH.ID, 0) == 1:
 		build_info_card(grid, "技能祝福 / 雷霆残影", game.PROGRESSION.DASH.description(member.damage), Color("91dbe8"), 8, -1, game.PROGRESSION.DASH.DIAGRAM)
+	if game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.FUSE.ID, 0) == 1:
+		build_info_card(grid, "技能祝福 / 共振引信", game.PROGRESSION.FUSE.description(member.damage), Color("a3e3df"), 8, -1, game.PROGRESSION.FUSE.DIAGRAM)
 	for id in game.PROGRESSION.ELEMENTS:
 		var rank := int(member.enchantments.get(id, 0))
 		var innate: bool = definition.get("element", "") == id

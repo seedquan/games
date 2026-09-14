@@ -160,13 +160,17 @@ func weapon_hit(enemy: Node2D, amount: float, force: Vector2, element := "") -> 
 		var level: int = game.PROGRESSION.effective_element_level(int(enchantments.get(tag, 0)), element == tag, game.campaign_version)
 		if level > 0:
 			enemy.apply_element(tag, amount * game.PROGRESSION.element_power(level), level if game.campaign_version >= 2 else 1)
+	game.PROGRESSION.FUSE.trigger(enemy)
 
 func try_bolt() -> bool:
 	if bolt_cooldown > 0.0 or energy < 24.0:
 		return false
 	energy -= 24.0
 	bolt_cooldown = 0.23
-	game.spawn_bolt(global_position + aim * 28.0, aim, false, damage * 0.85)
+	var options := {}
+	if game.campaign_version >= 2 and enchantments.get(game.PROGRESSION.FUSE.ID, 0) == 1:
+		options = {"fuse_damage": damage * game.PROGRESSION.FUSE.DAMAGE_FRACTION, "fuse_seat": seat}
+	game.spawn_bolt(global_position + aim * 28.0, aim, false, damage * 0.85, options)
 	game.play_tone(650.0, 0.07, 0.05)
 	return true
 

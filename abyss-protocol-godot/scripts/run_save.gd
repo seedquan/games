@@ -74,7 +74,7 @@ static func member_valid(value: Variant, version := 1) -> bool:
 	if value.stats.hp > value.stats.max_hp:
 		return false
 	for tag in value.enchantments:
-		if tag in [PROGRESSION.NOVA.ID, PROGRESSION.DASH.ID]:
+		if tag in [PROGRESSION.NOVA.ID, PROGRESSION.DASH.ID, PROGRESSION.FUSE.ID]:
 			if version != 3 or value.enchantments[tag] is not int or value.enchantments[tag] != 1: return false
 			continue
 		if tag not in PROGRESSION.ELEMENTS or not value.enchantments[tag] is int or not numeric(value.enchantments[tag], 1, 3):
