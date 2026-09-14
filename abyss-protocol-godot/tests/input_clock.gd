@@ -19,6 +19,42 @@ func check(condition: bool, message: String) -> void:
 func frames(count: int) -> void:
 	for i in range(count): await physics_frame
 
+func timed_hazard(speed: int) -> void:
+	controls.release()
+	game.start_run(961)
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	var room: Dictionary = game.room_data.duplicate(true)
+	for key in ["cover", "obstacles", "furnishings", "shell"]: room[key] = []
+	room.erase("art")
+	game.arena.apply_room(room)
+	game.player.position = Vector2(800, 650)
+	game.player.aim = Vector2.RIGHT
+	game.using_gamepad = true
+	game.player.input_armed = true
+	# A wall prevents an early dash from simply leaving the blast. Only the
+	# actual player's timed invulnerability can protect this constrained position.
+	game.arena.add_wall(Rect2(835, 540, 40, 220))
+	await frames(3)
+	var hazard = game.HAZARD.new()
+	hazard.game = game
+	hazard.position = game.player.position
+	game.get_node("World/Projectiles").add_child(hazard)
+	var dashed := false
+	for i in range(65):
+		controls.button("dash", is_instance_valid(hazard) and controls.blast_imminent(hazard, game.player.position))
+		await physics_frame
+		if game.player.dash_cooldown > 0: dashed = true
+		if i == 30:
+			check(not dashed, "%dx warning does not spend the dash before the blast approaches" % speed)
+	controls.release()
+	check(dashed and not is_instance_valid(hazard), "%dx a timed input reaches the player before the real hazard resolves" % speed)
+	check(game.player.position.distance_to(Vector2(800, 650)) < 105, "%dx cover keeps the actor inside the blast for the timing check" % speed)
+	check(game.player.hp == game.player.max_hp, "%dx timed invulnerability blocks the real explosion even when cover stops movement" % speed)
+
 func run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
 	game.persistence_enabled = false
@@ -61,6 +97,7 @@ func run() -> void:
 			await physics_frame
 		check(rail_shots == before + 1, "Releasing emits exactly one charged shot")
 		controls.release()
+		await timed_hazard(speed)
 	game.coop.enabled = true
 	game.coop.devices.assign([1, 3])
 	game.configure_input()
