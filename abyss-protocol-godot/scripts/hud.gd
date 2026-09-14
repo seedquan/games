@@ -1,7 +1,8 @@
 extends Control
 
 const MINT := Color("e6b879")
-const DISPLAY_FONT = preload("res://assets/fonts/NotoSerifCJKsc-SemiBold.otf")
+const DISPLAY_FONT = preload("res://assets/fonts/Display.tres")
+const READOUT_FONT = preload("res://assets/fonts/Readout.tres")
 const COMBAT_ACTIONS = preload("res://assets/ui/combat_actions.svg")
 const RECALL_ACTION = preload("res://assets/ui/recall_action.svg")
 const ACTIONS := ["slash", "bolt", "dash", "freeze", "parry"]
@@ -97,6 +98,8 @@ func build() -> void:
 	partner_energy = bar(Color("8bb5bf"), 6)
 	partner_panel.add_child(partner_energy)
 	partner_panel.hide()
+	for readout in [vitals, partner_vitals, sector, counters]:
+		readout.add_theme_font_override("font", READOUT_FONT)
 	announcement = label("", 21, MINT)
 	announcement.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	stack.add_child(announcement)
@@ -177,6 +180,7 @@ func build_action_strip(parent: HBoxContainer, captions: Array[Label], icons: Ar
 		item.add_child(icon)
 		icons.append(icon)
 		var caption := label("", 15, Color("ece8d9"))
+		caption.add_theme_font_override("font", READOUT_FONT)
 		caption.custom_minimum_size.x = 76
 		caption.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		caption.clip_text = true
