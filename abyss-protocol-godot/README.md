@@ -157,7 +157,7 @@ cd games/abyss-protocol-godot
 python3 verify.py
 ```
 
-该命令依次完成 Godot 资源导入与三十二套真实场景检查：
+该命令依次完成 Godot 资源导入与三十三套真实场景检查：
 
 - `tests/smoke.gd`：移动、碰撞、技能、三十舱室流程、胜负与重开。
 - `tests/weapons.gd`：十八种武器的伤害、穿透、回程、蓄力、元素与掩体。
@@ -194,6 +194,14 @@ python3 verify.py
 - `tests/map_art.gd`：十张插画的实物碰撞、可行走地标、两种体型连通性及守卫回避空间。
 
 验证入口会把脚本错误、超时或缺失测试总结视为失败，即使 Godot 返回了零退出码。Python 仅用于统一验证；游戏运行不依赖 Python。存档测试使用独立临时文件，不读取或覆盖玩家的正常存档。
+
+原生密集双人压力测试单独运行，测试时保持窗口尺寸与显示环境稳定：
+
+```sh
+./godot.sh --audio-driver Dummy --script res://tests/performance.gd -- --coop --expanded --guardians --refits --trace-frames
+```
+
+原来的 `frame_ms_*` 继续记录每次“等待物理帧，再等待处理帧”的墙钟间隔，保留 P95 ≤25 ms、P99 ≤50 ms 门槛。`rendered_frame_ms` 另外记录 `frame_post_draw` 回调间隔并应用相同门槛；它表示引擎完成绘制的节奏，不是操作系统实际呈现时间。报告同时记录刷新率、垂直同步、帧率限制和物理/处理帧数；`--trace-frames` 额外保留有序采样与绘制 CPU 耗时。压力夹具含超量敌人和无敌角色，不用于正常难度结论。每次报告加时间戳和进程编号，实际路径打印在 `PERFORMANCE REPORT` 行，保留早先的失败和发行证据。
 
 ## 项目结构
 

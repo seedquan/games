@@ -1,6 +1,7 @@
 extends SceneTree
 ## Native rendering stress and repeated-session cleanup. No player save access.
-## Frame measurements are wall-clock samples, not a claim about other hardware.
+## Physics-observer intervals and render-completion intervals are separate.
+## Neither is an OS presentation timestamp or a claim about other hardware.
 
 var game
 var cooperative := "--coop" in OS.get_cmdline_user_args()
@@ -13,6 +14,26 @@ var conduction := "--conduction" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
 var samples: Array[float] = []
+var rendered_samples: Array[float] = []
+var render_cpu_samples: Array[float] = []
+var recording := false
+var last_render_tick := 0
+var trace_frames := "--trace-frames" in OS.get_cmdline_user_args()
+
+func render_completed() -> void:
+	if not recording: return
+	var now := Time.get_ticks_usec()
+	if last_render_tick > 0: rendered_samples.append((now - last_render_tick) / 1000.0)
+	last_render_tick = now
+	if trace_frames:
+		render_cpu_samples.append(RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid()))
+
+func distribution(values: Array[float]) -> Dictionary:
+	if values.is_empty(): return {"samples": 0}
+	var ordered := values.duplicate()
+	ordered.sort()
+	return {"samples": ordered.size(), "p50": ordered[int(ordered.size() * 0.5)],
+		"p95": ordered[int(ordered.size() * 0.95)], "p99": ordered[int(ordered.size() * 0.99)], "max": ordered[-1]}
 
 func _initialize() -> void:
 	run.call_deferred()
@@ -72,6 +93,15 @@ func run() -> void:
 		member.input_armed = true
 	for i in range(120):
 		await frame()
+	var display_context := {"refresh_hz": DisplayServer.screen_get_refresh_rate(root.current_screen),
+		"vsync_mode": DisplayServer.window_get_vsync_mode(), "max_fps": Engine.max_fps,
+		"physics_ticks_per_second": Engine.physics_ticks_per_second,
+		"renderer": RenderingServer.get_current_rendering_method()}
+	if trace_frames: RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
+	RenderingServer.frame_post_draw.connect(render_completed)
+	recording = true
+	var first_physics_frame := Engine.get_physics_frames()
+	var first_process_frame := Engine.get_process_frames()
 	var previous := Time.get_ticks_usec()
 	var peak_nodes := 0
 	var peak_projectiles := 0
@@ -142,6 +172,12 @@ func run() -> void:
 					if Rect2(transform.origin, transform * point - transform.origin).abs().grow(5).intersects(game.get_viewport_rect()): visible_links += 1
 			peak_conduction = maxi(peak_conduction, visible_links)
 			if visible_links > 0: conduction_frames += 1
+	recording = false
+	RenderingServer.frame_post_draw.disconnect(render_completed)
+	if trace_frames: RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), false)
+	var physics_frames := Engine.get_physics_frames() - first_physics_frame
+	var process_frames := Engine.get_process_frames() - first_process_frame
+	var observer_trace := samples.duplicate() if trace_frames else []
 	for member in game.team():
 		Input.action_release(member.action("slash"))
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
@@ -176,6 +212,10 @@ func run() -> void:
 	var p95 := samples[int(samples.size() * 0.95)]
 	var p99 := samples[int(samples.size() * 0.99)]
 	check(p95 <= 25.0 and p99 <= 50.0, "Native stress frame pacing meets the local 60 Hz acceptance envelope")
+	var render_timing := distribution(rendered_samples)
+	check(samples.size() == 900, "Stress completes the full 900-observation window")
+	check(rendered_samples.size() >= samples.size() - 1, "Render completions cover the full stress observation window")
+	check(render_timing.get("p95", INF) <= 25.0 and render_timing.get("p99", INF) <= 50.0, "Rendered frame intervals meet the local 60 Hz acceptance envelope")
 	var report := {"rendering_device": RenderingServer.get_video_adapter_name(), "os": OS.get_name(), "engine": Engine.get_version_info().string,
 		"cooperative": cooperative, "expanded_map": expanded, "guardian_signatures": guardians, "melee_weapons": melee, "resolution": "%dx%d" % [root.size.x, root.size.y], "screen_scale": DisplayServer.screen_get_scale(), "samples": samples.size(), "frame_ms_p50": p50, "frame_ms_p95": p95, "frame_ms_p99": p99,
 		"frame_ms_max": samples[-1], "peak_nodes": peak_nodes, "peak_projectiles": peak_projectiles,
@@ -183,13 +223,30 @@ func run() -> void:
 		"poison_feedback": poison, "frames_with_poison": poison_frames, "peak_poison_markers": peak_poison_markers,
 		"weapon_refits": refits, "frost_conduction": conduction, "frames_with_conduction": conduction_frames, "peak_conduction_links": peak_conduction,
 		"restart_cycles": 40, "orphan_baseline": orphan_baseline, "failures": failures}
+	report["timing_basis"] = "frame_ms_* retains physics-then-process wall intervals; rendered_frame_ms uses frame_post_draw callbacks, not OS presentation timestamps"
+	report["rendered_frame_ms"] = render_timing
+	report["display_context"] = display_context
+	report["physics_frames"] = physics_frames
+	report["process_frames"] = process_frames
+	if trace_frames:
+		report["render_cpu_ms"] = distribution(render_cpu_samples)
+		report["frame_trace"] = {"physics_then_process_ms": observer_trace,
+			"rendered_ms": rendered_samples, "render_cpu_ms": render_cpu_samples}
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://builds/qa"))
 	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "") + ("-poison" if poison else "")
 	if conduction: report_name += "-conduction"
 	if refits: report_name += "-refits"
+	# Repeated investigations must not overwrite earlier failures or release evidence.
+	report_name += "-%d-%d" % [int(Time.get_unix_time_from_system()), OS.get_process_id()]
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)
+	if file == null:
+		push_error("Could not write performance report: %s" % FileAccess.get_open_error())
+		quit(1)
+		return
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()
+	print("PERFORMANCE REPORT: res://builds/qa/" + report_name + ".json")
+	report.erase("frame_trace")
 	print(JSON.stringify(report))
 	game.queue_free()
 	for i in range(6):
