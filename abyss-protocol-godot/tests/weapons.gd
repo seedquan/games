@@ -125,7 +125,7 @@ func run() -> void:
 	game.player.slash_cooldown = 0.0
 	check(not game.player.try_slash(), "Glaive cannot be rethrown while airborne")
 	await frames(78)
-	check(is_equal_approx(10000.0 - targets[0].hp, 26.0 * 0.85 * 2.0), "Glaive hits exactly once outbound and once returning")
+	check(is_equal_approx(10000.0 - targets[0].hp, game.player.damage * game.player.weapon.definition.damage * 2.0), "Glaive hits exactly once outbound and once returning")
 	check(game.player.try_slash(), "Glaive becomes available after being caught")
 	targets = await reset_case("grav", [Vector2(1000, 650)])
 	targets[0].frozen = 10.0

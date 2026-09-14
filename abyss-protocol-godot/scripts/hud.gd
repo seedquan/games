@@ -196,6 +196,11 @@ func update_action_strip(member, captions: Array[Label], icons: Array[TextureRec
 			ready = false
 		if i == 0 and member.weapon.drawing and member.hp > 0:
 			value = "%d%%" % int(member.weapon.charge / float(member.weapon.definition.charge) * 100)
+		if i == 0 and member.hp > 0 and member.weapon.definition.mode == "glaive":
+			var shot = member.weapon.active_glaive.get_ref() if member.weapon.active_glaive != null else null
+			if is_instance_valid(shot):
+				value = "回收中" if shot.returning else "飞行中"
+				ready = false
 		var title: String = "霜火" if i == 3 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1 else ACTION_NAMES[i]
 		captions[i].text = title + "\n" + value
 		icons[i].modulate = MINT if ready else MUTED

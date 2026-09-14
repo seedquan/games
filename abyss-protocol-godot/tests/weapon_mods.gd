@@ -106,10 +106,10 @@ func gravity_pacing() -> void:
 			var plasma = game.get_node("World/Projectiles").get_children().filter(func(n): return n.get_script() == preload("res://scripts/projectile.gd"))
 			check(plasma.size() == 1 and is_equal_approx(plasma[0].damage, base_damage * 0.85), "Gravity tuning leaves shared plasma damage unchanged")
 
-func gravity_continuation() -> void:
+func special_weapon_continuation(weapon: String) -> void:
 	game.coop.enabled = true
 	game.coop.devices.assign([3, 7])
-	game.coop.weapons.assign(["grav", "grav"])
+	game.coop.weapons.assign([weapon, weapon])
 	game.start_run(72531)
 	for actor in game.team(): actor.set_physics_process(false)
 	game.apply_boon(game.PROGRESSION.rune("mod_focus"))
@@ -119,16 +119,50 @@ func gravity_continuation() -> void:
 	game.persistence_enabled = true
 	game.save_checkpoint()
 	var saved: Dictionary = game.profile.checkpoint.duplicate(true)
-	check(SAVE.valid(saved) and saved.version == 3, "Gravity refits save through the existing cooperative checkpoint schema")
+	check(SAVE.valid(saved) and saved.version == 3, "Special refits save through the existing cooperative checkpoint schema")
 	game.queue_free()
 	await frames()
 	var loaded = PROFILE.new()
 	loaded.load_progress(path)
 	await spawn_game(loaded)
-	check(game.continue_saved_run(), "Cold load restores a two-gravity team")
-	check(game.player.weapon_mod == "mod_focus" and game.companion.weapon_mod == "mod_flow", "Different gravity refits retain their original seat")
+	check(game.continue_saved_run(), "Cold load restores the two-weapon team")
+	check(game.player.weapon_mod == "mod_focus" and game.companion.weapon_mod == "mod_flow", "Different special-weapon refits retain their original seat")
 	check(game.player.damage == saved.stats.damage and game.companion.damage == saved.partner.stats.damage, "Cold load preserves both saved growth values")
-	check(is_equal_approx(game.player.weapon.definition.damage, 2.8) and is_equal_approx(game.companion.weapon.definition.damage, 2.8 * 0.9), "Cold load rebuilds both tuned attacks exactly once")
+	var focus_damage := 2.8 if weapon == "grav" else 1.4 * 0.75
+	var flow_damage := 2.8 * 0.9 if weapon == "grav" else 1.4 * 0.75
+	check(is_equal_approx(game.player.weapon.definition.damage, focus_damage) and is_equal_approx(game.companion.weapon.definition.damage, flow_damage), "Cold load rebuilds both tuned attacks exactly once")
+	if weapon == "glaive":
+		check(game.player.weapon.definition.return_multiplier == 3 and game.companion.weapon.definition.return_multiplier == 1, "Cold glaive load retains the heavy return reward only on its selected seat")
+
+func glaive_pacing() -> void:
+	for setup in [[2, ""], [2, "mod_focus"], [2, "mod_flow"], [1, "mod_focus"]]:
+		var t := await reset_case("glaive", "", [Vector2(100, 0)])
+		game.campaign_version = setup[0]
+		game.player.weapon_mod = setup[1]
+		game.player.weapon.equip("glaive")
+		var expected: float = game.player.damage * (1.4 if setup[0] == 2 else 0.85)
+		if setup[0] == 2 and not setup[1].is_empty(): expected *= 0.75
+		var return_scale := 3.0 if setup == [2, "mod_focus"] else 1.0
+		fire()
+		var shot = game.get_node("World/Projectiles").get_child(0)
+		check(is_equal_approx(shot.damage, expected), "Glaive outbound collision carries the campaign damage budget")
+		check(is_equal_approx(shot.return_multiplier, return_scale), "Heavy return carries its explicit damage reward")
+		if setup[0] == 1:
+			check(game.player.weapon.definition == CATALOG.find("glaive"), "Legacy glaive retains the original flight and damage even with refit state")
+		var cooldown: float = game.player.slash_cooldown
+		game.player.slash_cooldown = 0
+		check(not game.player.weapon.fire(), "Stronger glaive cannot be thrown again before it is caught")
+		game.player.slash_cooldown = cooldown
+		var description: String = game.BUILD_INFO.attack_text(game.player.weapon.definition, game.player.damage)
+		check("回程命中 %.1f" % (expected * return_scale) in description, "Build page shows the actual tuned return hit")
+		await frames(100)
+		check(is_equal_approx(10000 - t[0].hp, expected * (1 + return_scale)), "Actual projectile deals one outbound and one return hit with no duplicate damage")
+		var definition: Dictionary = game.player.weapon.definition.duplicate(true)
+		game.player.weapon.equip("glaive")
+		check(game.player.weapon.definition == definition and game.player.damage == 26, "Re-equipping does not stack glaive tuning or alter actor growth")
+		var hp: float = t[0].hp
+		game.player.try_freeze()
+		check(is_equal_approx(hp - t[0].hp, game.player.damage * 0.6), "Glaive tuning does not increase the shared nova")
 
 func geometry_cases() -> void:
 	var t := await reset_case("lance", "mod_focus", [Vector2(240, 0), Vector2(100, 65)])
@@ -170,7 +204,7 @@ func geometry_cases() -> void:
 	check(shot.flight_elapsed == timer and not shot.returning, "Pause holds the refitted return clock")
 	game.resume_run()
 	await frames(75)
-	check(is_equal_approx(10000 - t[0].hp, outgoing * 3), "Guided return applies exactly twice outbound damage, once per leg")
+	check(is_equal_approx(10000 - t[0].hp, outgoing * 4), "Guided return applies exactly three times outbound damage, once per leg")
 	await reset_case("glaive", "mod_flow", [])
 	fire()
 	shot = game.get_node("World/Projectiles").get_child(0)
@@ -316,6 +350,13 @@ func choice_and_save() -> void:
 
 func run() -> void:
 	await spawn_game()
+	if "--gravity-only" not in OS.get_cmdline_user_args(): await glaive_pacing()
+	if "--glaive-only" in OS.get_cmdline_user_args():
+		game.queue_free()
+		await frames()
+		print("ABYSS GLAIVE PACING: %d checks, %d failures" % [checks, failures])
+		quit(0 if failures == 0 else 1)
+		return
 	await gravity_pacing()
 	if "--gravity-only" in OS.get_cmdline_user_args():
 		game.queue_free()
@@ -323,7 +364,7 @@ func run() -> void:
 		print("ABYSS GRAVITY PACING: %d checks, %d failures" % [checks, failures])
 		quit(0 if failures == 0 else 1)
 		return
-	await gravity_continuation()
+	for weapon in ["grav", "glaive"]: await special_weapon_continuation(weapon)
 	await all_forms()
 	await geometry_cases()
 	await choice_and_save()
