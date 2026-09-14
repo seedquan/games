@@ -138,7 +138,7 @@ func shop_heavy_cases() -> void:
 	var shops := 0
 	var smallest_pool := 3
 	var purchases := 0
-	var order := ["mod_focus", "speed", "fire", "ice", "shock", "poison", "leech", "execute", "damage", "health"]
+	var order := ["mod_focus", "nova_echo", "speed", "fire", "ice", "shock", "poison", "leech", "execute", "damage", "health"]
 	for depth in range(1, 30):
 		var local_room: int = posmod(depth - 1, 6) + 1
 		if local_room in [3, 5]:

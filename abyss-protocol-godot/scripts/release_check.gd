@@ -111,6 +111,7 @@ func run() -> void:
 	await countershot_release()
 	await frost_conduction_release()
 	await weapon_mod_release()
+	await nova_echo_release()
 	game.start_run(5820)
 	game.continue_story()
 	game.player.invulnerable = 0
@@ -188,6 +189,32 @@ func weapon_mod_release() -> void:
 	check(targets.all(func(e): return e.hp < 10000), "all three packed refit trajectories cause damage")
 	game.apply_boon(game.PROGRESSION.rune("mod_focus"))
 	check(game.player.weapon_mod == "mod_flow" and game.player.weapon.definition.pellets == 3, "packed refits remain mutually exclusive")
+
+func nova_echo_release() -> void:
+	game.start_run(5827)
+	game.continue_story()
+	game.encounter.cancel()
+	game.room_awarded = true
+	for enemy in get_tree().get_nodes_in_group("enemies"):
+		enemy.get_parent().remove_child(enemy)
+		enemy.queue_free()
+	game.player.set_physics_process(false)
+	game.player.position = Vector2(800, 650)
+	game.apply_boon(game.PROGRESSION.rune("nova_echo"))
+	var target = game.spawn_enemy("stalker", Vector2(900, 650))
+	target.set_physics_process(false)
+	target.hp = 10000
+	target.max_hp = 10000
+	check(game.PROGRESSION.NOVA.DIAGRAM.get_size() == Vector2(384, 144), "packed nova echo illustration")
+	check(game.player.try_freeze(), "packed shared nova casts")
+	var first: float = target.hp
+	for i in range(20): await frame()
+	check(is_equal_approx(target.hp, first) and target.ice_frozen_left > 0, "packed echo waits while the first nova freezes")
+	game.player.position += Vector2(450, 0)
+	for i in range(35): await frame()
+	check(target.burn_left > 0 and target.ice_frozen_left == 0 and is_equal_approx(target.hp, first - game.player.damage * 0.45 * 1.7), "packed echo remains at the cast position and triggers one thermal reaction")
+	game.apply_boon(game.PROGRESSION.rune("nova_echo"))
+	check(game.player.enchantments.get("nova_echo") == 1 and not game.PROGRESSION.can_apply({"stat": "nova_echo"}, game.player), "packed skill blessing is not stackable")
 
 func frost_conduction_release() -> void:
 	game.start_run(5822)
@@ -311,6 +338,9 @@ func storage_roundtrip() -> void:
 		game.configure_input()
 		game.create_companion()
 		game.apply_boon(game.PROGRESSION.rune("mod_flow"))
+		# Isolated storage fixture deliberately equips only the second seat.
+		game.player.enchantments.erase("nova_echo")
+		game.PROGRESSION.apply(game.PROGRESSION.rune("nova_echo"), game.companion, 2)
 		game.companion.hp = 53.0
 		game.save_checkpoint()
 		check(game.RUN_SAVE.valid(game.profile.checkpoint) and game.profile.checkpoint.version == 3 and game.profile.checkpoint.cooperative, "write both actors in one co-op transaction")
@@ -325,6 +355,7 @@ func storage_roundtrip() -> void:
 		await pair_controllers()
 		check(game.state == "shop" and game.team().size() == 2, "co-op pairing returns to the saved shop")
 		check(game.companion.weapon.definition.id == "ember" and game.companion.hp == 53.0 and game.player.weapon.definition.id == "rail", "co-op second-process load preserves both weapons and independent health")
+		check(not game.player.enchantments.has("nova_echo") and game.companion.enchantments.get("nova_echo") == 1, "co-op cold load preserves the independently equipped skill blessing")
 		check(game.player.weapon_mod == "mod_focus" and game.companion.weapon_mod == "mod_flow" and game.companion.weapon.definition.pellets == 3 and is_equal_approx(game.player.weapon.definition.charge, 0.8 * 0.65), "co-op cold load preserves independent mutually exclusive refits and actual attacks")
 		check(not game.buy_item(1), "shared co-op purchase cannot be duplicated on resume")
 		await snapshot("coop-read")

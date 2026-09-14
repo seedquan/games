@@ -85,7 +85,7 @@ def main():
     for name, expected in provenance["files"].items():
         if digest(provenance_path.parent / name) != expected:
             raise RuntimeError("Windows template was modified: " + name)
-    engine = run(COMMAND + ["--version"]).strip()
+    engine = run(COMMAND + ["--audio-driver", "Dummy", "--version"]).strip()
     if not engine.startswith(provenance["version"] + "."):
         raise RuntimeError("Godot engine and Windows export template versions do not match")
     version = re.search(r'config/version="([0-9.]+)"', (ROOT / "project.godot").read_text(encoding="utf-8"))[1]

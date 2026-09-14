@@ -21,6 +21,8 @@ var damage_events: Array = []
 var projectile_defense := "--projectile-defense" in OS.get_cmdline_user_args()
 var countershots := 0
 var modification := ""
+var nova_echo := "--nova-echo" in OS.get_cmdline_user_args()
+var echo_bursts: Dictionary = {}
 var frost_build := "--frost-build" in OS.get_cmdline_user_args()
 var trace_freeze := "--trace-freeze" in OS.get_cmdline_user_args()
 var freeze_observer = preload("res://tests/freeze_observer.gd").new()
@@ -35,6 +37,10 @@ func count_combat_frame() -> void:
 	if is_instance_valid(game) and game.state == "playing":
 		combat_physics_frames += 1
 		if trace_freeze: freeze_observer.observe(game)
+		if nova_echo:
+			for effect in game.get_node("World/Projectiles").get_children():
+				if effect.get_script() == game.PROGRESSION.NOVA and effect.fired:
+					echo_bursts[effect.get_instance_id()] = true
 
 func axis(negative: String, positive: String, value: float, player) -> void:
 	negative = player.action(negative)
@@ -101,6 +107,8 @@ func combat_input(player) -> void:
 			if close_weapon: wants_parry = true
 	if threats >= 3:
 		wants_freeze = true
+	if nova_echo and player.enchantments.get("nova_echo", 0) == 1:
+		wants_freeze = wants_freeze or threats >= 2 or (target.kind in ["boss", "warden"] and distance < 230)
 	for danger in game.get_node("World/Projectiles").get_children():
 		if danger.get_script() == game.HAZARD and player.position.distance_to(danger.position) < danger.radius + 35:
 			wants_dash = true
@@ -230,12 +238,15 @@ func run() -> void:
 						choice = i
 				if frost_build:
 					# Choose from actual offered cards. Never insert or reroll a boon.
-					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire", "mod_focus", "mod_flow"]
+					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire", "mod_focus", "mod_flow", "nova_echo"]
 					for i in range(game.boon_choices.size()):
 						if priorities.find(game.boon_choices[i].stat) < priorities.find(game.boon_choices[choice].stat): choice = i
 				if not modification.is_empty():
 					for i in range(game.boon_choices.size()):
 						if game.boon_choices[i].stat == modification: choice = i
+				if nova_echo:
+					for i in range(game.boon_choices.size()):
+						if game.boon_choices[i].stat == "nova_echo": choice = i
 				game.choose_boon(choice)
 			"route":
 				release_controls()
@@ -276,9 +287,12 @@ func run() -> void:
 	report.skill_activations = skill_activations
 	report.countershots = countershots
 	report.build_policy = "ice/shock cards first; skip fire/poison purchases" if frost_build else "damage/leech cards; buy available supplies"
+	if nova_echo: report.build_policy += "; prefer offered nova echo; cast on two close enemies or a guardian within nova range"
 	if trace_freeze: report.freeze_observations = freeze_observer.summary
 	if trace_damage: report.damage_events = damage_events
 	report.modification_preference = modification
+	report.nova_echo_preference = nova_echo
+	report.nova_echo_bursts = echo_bursts.size()
 	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate(), "weapon_mod": member.weapon_mod})
 	report.physics_seconds = combat_physics_frames / 60.0
 	report.clock_difference = absf(game.elapsed - combat_physics_frames / 60.0)
@@ -292,6 +306,7 @@ func run() -> void:
 	if not modification.is_empty(): output = output.trim_suffix(".json") + "-" + modification + ".json"
 	if frost_build: output = output.trim_suffix(".json") + "-frost-build.json"
 	if trace_freeze: output = output.trim_suffix(".json") + "-freeze-trace.json"
+	if nova_echo: output = output.trim_suffix(".json") + "-nova-echo.json"
 	var file := FileAccess.open(output, FileAccess.WRITE)
 	file.store_string(JSON.stringify(report, "\t"))
 	file.close()

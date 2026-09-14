@@ -30,7 +30,7 @@ def main():
     template = ROOT / "builds/templates/macos.zip"
     if not template.is_file():
         raise RuntimeError("Extract templates/macos.zip and templates/version.txt from the official matching Godot export_templates.tpz into builds/templates/ first.")
-    version = run([str(ROOT / "godot.sh"), "--version"]).strip()
+    version = run([str(ROOT / "godot.sh"), "--audio-driver", "Dummy", "--version"]).strip()
     template_version = (template.parent / "version.txt").read_text().strip()
     if not version.startswith(template_version):
         raise RuntimeError(f"Engine {version} does not match template {template_version}")

@@ -10,6 +10,7 @@ var guardians := "--guardians" in OS.get_cmdline_user_args()
 var melee := "--melee" in OS.get_cmdline_user_args()
 var poison := "--poison" in OS.get_cmdline_user_args()
 var refits := "--refits" in OS.get_cmdline_user_args()
+var nova_echo := "--nova-echo" in OS.get_cmdline_user_args()
 var conduction := "--conduction" in OS.get_cmdline_user_args()
 var failures: Array[String] = []
 var checks := 0
@@ -89,6 +90,7 @@ func run() -> void:
 		member.invulnerable = 1000
 		member.weapon.equip("scatter")
 		if refits: game.PROGRESSION.apply(game.PROGRESSION.rune("mod_flow"), member, 2)
+		if nova_echo: game.PROGRESSION.apply(game.PROGRESSION.rune("nova_echo"), member, 2)
 		Input.action_press(member.action("slash"))
 		member.input_armed = true
 	for i in range(120):
@@ -111,8 +113,12 @@ func run() -> void:
 	var peak_poison_markers := 0
 	var conduction_frames := 0
 	var peak_conduction := 0
+	var peak_echoes := 0
+	var echo_frames := 0
 	for i in range(900):
 		game.player.aim = Vector2.from_angle(i * 0.04)
+		if nova_echo and i % 60 == 0:
+			for member in game.team(): member.try_freeze()
 		if i % 45 == 0:
 			if melee:
 				for member in game.team():
@@ -152,6 +158,14 @@ func run() -> void:
 		previous = now
 		peak_nodes = maxi(peak_nodes, get_node_count())
 		peak_projectiles = maxi(peak_projectiles, game.get_node("World/Projectiles").get_child_count())
+		if nova_echo:
+			var visible_echoes := 0
+			for effect in game.get_node("World/Projectiles").get_children():
+				if effect.get_script() != game.PROGRESSION.NOVA: continue
+				var screen: Vector2 = effect.get_global_transform_with_canvas().origin
+				if game.get_viewport_rect().has_point(screen): visible_echoes += 1
+			peak_echoes = maxi(peak_echoes, visible_echoes)
+			if visible_echoes > 0: echo_frames += 1
 		if poison:
 			var visible_markers := 0
 			for enemy in get_nodes_in_group("enemies"):
@@ -183,6 +197,7 @@ func run() -> void:
 	check(game.state == "playing", "Dense battle remains responsive for the whole sample")
 	check(game.sound.voices.size() == 12, "Stress retains the bounded audio pool")
 	if refits: check(game.team().all(func(member): return member.weapon_mod == "mod_flow" and member.weapon.definition.get("modification") == "mod_flow"), "Both seats retain real refitted attacks throughout stress")
+	if nova_echo: check(peak_echoes >= (2 if cooperative else 1) and echo_frames > 80, "Native stress renders overlapping nova echoes using actual shared cooldowns")
 	if melee: check(melee_frames > 450 and peak_melee_traces >= 2, "Native stress renders overlapping melee feedback for both seats")
 	if poison: check(poison_frames > 450 and peak_poison_markers >= 6, "Native stress includes repeated frames with visible enemy status markers")
 	if conduction: check(conduction_frames > 200 and peak_conduction >= 4, "Native stress includes visible overlapping frost conduction links")
@@ -228,6 +243,9 @@ func run() -> void:
 	report["display_context"] = display_context
 	report["physics_frames"] = physics_frames
 	report["process_frames"] = process_frames
+	report["nova_echo"] = nova_echo
+	report["peak_echoes"] = peak_echoes
+	report["frames_with_echo"] = echo_frames
 	if trace_frames:
 		report["render_cpu_ms"] = distribution(render_cpu_samples)
 		report["frame_trace"] = {"physics_then_process_ms": observer_trace,
@@ -236,6 +254,7 @@ func run() -> void:
 	var report_name := "performance" + ("-coop" if cooperative else "") + ("-expanded" if expanded else "") + ("-guardians" if guardians else "") + ("-melee" if melee else "") + ("-poison" if poison else "")
 	if conduction: report_name += "-conduction"
 	if refits: report_name += "-refits"
+	if nova_echo: report_name += "-nova-echo"
 	# Repeated investigations must not overwrite earlier failures or release evidence.
 	report_name += "-%d-%d" % [int(Time.get_unix_time_from_system()), OS.get_process_id()]
 	var file := FileAccess.open("res://builds/qa/" + report_name + ".json", FileAccess.WRITE)

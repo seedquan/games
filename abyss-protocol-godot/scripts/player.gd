@@ -173,6 +173,12 @@ func try_freeze() -> bool:
 			enemy.freeze_for(1.2 if enemy.kind in ["boss", "warden"] else 2.5)
 			enemy.take_damage(damage * 0.6, Vector2.ZERO)
 	game.play_tone(1000.0, 0.25, 0.07)
+	if game.campaign_version >= 2 and enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1:
+		var echo = game.PROGRESSION.NOVA.new()
+		echo.game = game
+		echo.position = global_position
+		echo.damage = damage * game.PROGRESSION.NOVA.DAMAGE_FRACTION
+		game.get_node("World/Projectiles").add_child(echo)
 	return true
 
 func try_parry() -> bool:
