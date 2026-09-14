@@ -20,6 +20,7 @@ var trace_damage := "--trace-damage" in OS.get_cmdline_user_args()
 var damage_events: Array = []
 var projectile_defense := "--projectile-defense" in OS.get_cmdline_user_args()
 var countershots := 0
+var modification := ""
 var frost_build := "--frost-build" in OS.get_cmdline_user_args()
 var trace_freeze := "--trace-freeze" in OS.get_cmdline_user_args()
 var freeze_observer = preload("res://tests/freeze_observer.gd").new()
@@ -173,6 +174,7 @@ func run() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--rooms="): room_limit = clampi(argument.get_slice("=", 1).to_int(), 1, 30)
 		if argument.begins_with("--speed="): simulation_speed = clampi(argument.get_slice("=", 1).to_int(), 1, 16)
+		if argument.begins_with("--mod="): modification = argument.get_slice("=", 1)
 		if argument.begins_with("--weapon="): weapon_id = argument.get_slice("=", 1)
 	game = load("res://scenes/main.tscn").instantiate()
 	game.persistence_enabled = false
@@ -189,6 +191,10 @@ func run() -> void:
 				if node.reflected: countershots += 1))
 	if not game.WEAPONS.exists(weapon_id):
 		push_error("Unknown playthrough weapon")
+		quit(1)
+		return
+	if not modification.is_empty() and modification not in game.PROGRESSION.MODS.IDS:
+		push_error("Unknown playthrough modification")
 		quit(1)
 		return
 	game.selected_weapon = weapon_id
@@ -224,9 +230,12 @@ func run() -> void:
 						choice = i
 				if frost_build:
 					# Choose from actual offered cards. Never insert or reroll a boon.
-					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire"]
+					var priorities := ["ice", "shock", "damage", "leech", "health", "speed", "execute", "poison", "fire", "mod_focus", "mod_flow"]
 					for i in range(game.boon_choices.size()):
 						if priorities.find(game.boon_choices[i].stat) < priorities.find(game.boon_choices[choice].stat): choice = i
+				if not modification.is_empty():
+					for i in range(game.boon_choices.size()):
+						if game.boon_choices[i].stat == modification: choice = i
 				game.choose_boon(choice)
 			"route":
 				release_controls()
@@ -269,7 +278,8 @@ func run() -> void:
 	report.build_policy = "ice/shock cards first; skip fire/poison purchases" if frost_build else "damage/leech cards; buy available supplies"
 	if trace_freeze: report.freeze_observations = freeze_observer.summary
 	if trace_damage: report.damage_events = damage_events
-	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate()})
+	report.modification_preference = modification
+	report.builds = game.team().map(func(member): return {"weapon": member.weapon.definition.id, "damage": member.damage, "runes": member.enchantments.duplicate(), "weapon_mod": member.weapon_mod})
 	report.physics_seconds = combat_physics_frames / 60.0
 	report.clock_difference = absf(game.elapsed - combat_physics_frames / 60.0)
 	var clocks_match: bool = report.clock_difference <= maxf(2.0, game.elapsed * 0.01)
@@ -279,6 +289,7 @@ func run() -> void:
 	if weapon_id != "rifle" or room_limit < 30: output = "res://builds/qa/playthrough-%s-%s-%d.json" % [weapon_id, "coop" if cooperative else "solo", room_limit]
 	if projectile_defense: output = output.trim_suffix(".json") + "-defense.json"
 	if trace_damage: output = output.trim_suffix(".json") + "-damage-trace.json"
+	if not modification.is_empty(): output = output.trim_suffix(".json") + "-" + modification + ".json"
 	if frost_build: output = output.trim_suffix(".json") + "-frost-build.json"
 	if trace_freeze: output = output.trim_suffix(".json") + "-freeze-trace.json"
 	var file := FileAccess.open(output, FileAccess.WRITE)

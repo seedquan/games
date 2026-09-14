@@ -791,10 +791,11 @@ func continue_saved_run() -> bool:
 	for field in RUN_SAVE.STATS:
 		player.set(field, saved.stats[field])
 	player.enchantments = saved.enchantments.duplicate()
+	player.weapon_mod = saved.get("weapon_mod", "")
 	player.invulnerable = 1.2
 	actors.add_child(player)
 	player.weapon.equip(saved.weapon)
-	coop.enabled = saved.get("version", 1) == 2
+	coop.enabled = RUN_SAVE.cooperative(saved)
 	if coop.enabled:
 		coop.weapons.assign([saved.weapon, saved.partner.weapon])
 		create_companion(saved.partner)
@@ -894,6 +895,7 @@ func create_companion(saved: Dictionary = {}) -> void:
 	for field in RUN_SAVE.STATS:
 		companion.set(field, saved.stats[field] if not saved.is_empty() else player.get(field))
 	companion.enchantments = saved.enchantments.duplicate() if not saved.is_empty() else {}
+	companion.weapon_mod = saved.get("weapon_mod", "")
 	actors.add_child(companion)
 	companion.weapon.equip(coop.weapons[1])
 

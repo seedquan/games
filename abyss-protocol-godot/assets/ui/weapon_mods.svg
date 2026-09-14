@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="144" viewBox="0 0 720 144"><g fill="none" stroke="#e6b879" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+<g transform="translate(0 0)">
+<circle cx="22" cy="36" r="5" fill="#ece8d9" stroke="none"/>
+<path d="M22 36 126 14 Q136 36 126 58 Z" fill="#e6b879" fill-opacity=".1"/><path d="M35 36H116m-7-6 7 6-7 6"/>
+</g>
+<g transform="translate(144 0)">
+<path d="M12 36h18" stroke="#ece8d9"/>
+<path d="M35 36h94m-8-6 8 6-8 6"/><circle cx="61" cy="36" r="8"/><circle cx="91" cy="36" r="8"/>
+</g>
+<g transform="translate(288 0)">
+<circle cx="18" cy="36" r="5" fill="#ece8d9" stroke="none"/>
+<path d="M30 25H124q16 22-8 25H30m8-6-8 6 8 6"/><path d="M112 19l10 6-10 6"/>
+<path d="M106 56H42" stroke-width="4"/>
+</g>
+<g transform="translate(432 0)">
+<path d="M12 36L42 36L123 36"/>
+<circle cx="42" cy="36" r="5" fill="#17262c"/>
+<circle cx="123" cy="36" r="5" fill="#17262c"/>
+</g>
+<g transform="translate(576 0)">
+<circle cx="72" cy="36" r="18" fill="#e6b879" fill-opacity=".1"/><circle cx="72" cy="36" r="5" fill="#ece8d9" stroke="none"/>
+<path d="m32 23 8 13-8 13m80-26-8 13 8 13"/>
+</g>
+<g transform="translate(0 72)">
+<circle cx="22" cy="36" r="5" fill="#ece8d9" stroke="none"/>
+<path d="M32 7A33 33 0 1 1 32 65L22 36Z" fill="#e6b879" fill-opacity=".1"/><path d="M75 17q30 19 0 38m0-8v8h8"/>
+</g>
+<g transform="translate(144 72)">
+<path d="M12 36h18" stroke="#ece8d9"/>
+<path d="M35 36 122 12m-10-2 10 2-6 8M35 36H129m-8-6 8 6-8 6M35 36 122 60m-10 2 10-2-6-8"/>
+</g>
+<g transform="translate(288 72)">
+<circle cx="18" cy="36" r="5" fill="#ece8d9" stroke="none"/>
+<path d="M30 25H82q16 22-8 25H30m8-6-8 6 8 6"/><path d="M70 19l10 6-10 6"/>
+<path d="M102 19v13h13m-4-19a20 20 0 1 1-10 40" stroke="#7a9297"/>
+</g>
+<g transform="translate(432 72)">
+<path d="M12 36L35 36L57 14L80 36L104 14L126 36L102 58"/>
+<circle cx="35" cy="36" r="5" fill="#17262c"/>
+<circle cx="57" cy="14" r="5" fill="#17262c"/>
+<circle cx="80" cy="36" r="5" fill="#17262c"/>
+<circle cx="104" cy="14" r="5" fill="#17262c"/>
+<circle cx="126" cy="36" r="5" fill="#17262c"/>
+<circle cx="102" cy="58" r="5" fill="#17262c"/>
+</g>
+<g transform="translate(576 72)">
+<circle cx="72" cy="36" r="30" fill="#e6b879" fill-opacity=".1"/><circle cx="72" cy="36" r="5" fill="#ece8d9" stroke="none"/>
+<path d="M29 36h18m-6-5 6 5-6 5m74-5H97m6-5-6 5 6 5"/>
+</g>
+</g></svg>

@@ -16,12 +16,16 @@ var explosion := 0.0
 var pierce_remaining := 0
 var flight_elapsed := 0.0
 var returning := false
+var return_after := 0.5
+var return_multiplier := 1.0
 var hit_ids: Array[int] = []
 var excluded: Array[RID] = []
 var visual_offset := Vector2.ZERO
 var reflected := false
 
 func configure(options: Dictionary) -> void:
+	return_after = options.get("return_after", 0.5)
+	return_multiplier = options.get("return_multiplier", 1.0)
 	visual = options.get("visual", "plasma")
 	tint = Color(options.get("color", "ff7088" if hostile else "67efe0"))
 	speed = options.get("speed", 300.0 if hostile else 720.0)
@@ -40,6 +44,8 @@ func _ready() -> void:
 	rotation = direction.angle()
 
 func begin_return() -> void:
+	if returning: return
+	damage *= return_multiplier
 	returning = true
 	hit_ids.clear()
 	excluded.clear()
@@ -56,7 +62,7 @@ func _physics_process(delta: float) -> void:
 		if not is_instance_valid(shooter):
 			queue_free()
 			return
-		if not returning and flight_elapsed >= 0.5:
+		if not returning and flight_elapsed >= return_after:
 			begin_return()
 		if returning:
 			if global_position.distance_to(shooter.global_position) < 26.0:
@@ -133,6 +139,9 @@ func reflect_from(defender: Node2D) -> void:
 	speed = maxf(620.0, speed * 1.8)
 	life = 1.25
 	flight_elapsed = 0.0
+	returning = false
+	return_after = 0.5
+	return_multiplier = 1.0
 	visual = "countershot"
 	tint = Color("e8c17a")
 	element = defender.weapon.definition.get("element", "")
