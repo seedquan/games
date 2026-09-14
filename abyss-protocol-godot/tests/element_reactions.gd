@@ -111,6 +111,67 @@ func combustion_cases() -> void:
 	game.player.weapon_hit(targets[0], 20, Vector2.ZERO)
 	check(targets[0].dead and is_equal_approx(targets[1].hp, 9989.2), "Lethal fire can ignite previously primed poison")
 
+func status_expiry_cases() -> void:
+	# A long-lived target isolates independent applications from combat difficulty.
+	for version in [2, 1]:
+		for tag in ["fire", "poison"]:
+			var targets := await reset_case("blade", version, true)
+			var enemy = targets[0]
+			enemy.speed = 0
+			enemy.cooldown = 1000
+			game.player.enchantments = {tag: 1}
+			game.companion.enchantments = {tag: 1}
+			var prefix: String = "Modern " if version >= 2 else "Legacy "
+			var potency: String = "burn_damage" if tag == "fire" else "poison_damage"
+			var timer: String = "burn_left" if tag == "fire" else "poison_left"
+			var tick: String = "burn_tick" if tag == "fire" else "poison_tick"
+			var high := 12.0 if tag == "fire" else 4.0
+			var low := high / 10.0
+			game.player.weapon_hit(enemy, 100, Vector2.ZERO)
+			var before: float = enemy.hp
+			enemy._physics_process(0.01)
+			check(is_equal_approx(before - enemy.hp, high), prefix + tag + " starts with the applying hit's real periodic damage")
+			game.companion.weapon_hit(enemy, 10, Vector2.ZERO)
+			check(is_equal_approx(enemy.get(potency), high), prefix + tag + " preserves the stronger active effect when a partner refreshes it")
+			before = enemy.hp
+			enemy._physics_process(0.01)
+			check(enemy.hp == before, prefix + tag + " refresh cannot manufacture an extra periodic tick")
+			game.state = "paused"
+			var paused := var_to_bytes([enemy.hp, enemy.get(timer), enemy.get(tick), enemy.get(potency), enemy.poison_stacks])
+			enemy._physics_process(5.0)
+			check(paused == var_to_bytes([enemy.hp, enemy.get(timer), enemy.get(tick), enemy.get(potency), enemy.poison_stacks]), prefix + tag + " pauses duration, cadence and damage together")
+			game.state = "playing"
+			for i in range(301): enemy._physics_process(1.0 / 60.0)
+			check(enemy.get(timer) == 0, prefix + tag + " naturally expires without further hits")
+			if version >= 2:
+				check(enemy.get(potency) == 0 and enemy.get(tick) == 0, tag + " expiry clears both old potency and cadence")
+			else:
+				check(is_equal_approx(enemy.get(potency), high), tag + " preserves legacy expired potency")
+			game.companion.weapon_hit(enemy, 10, Vector2.ZERO)
+			check(is_equal_approx(enemy.get(potency), low if version >= 2 else high), prefix + tag + " reapplication has the intended independent potency")
+			if version >= 2:
+				check(enemy.get(tick) == 0, tag + " restarts with a fresh first-tick schedule")
+				before = enemy.hp
+				enemy._physics_process(0.01)
+				check(is_equal_approx(before - enemy.hp, low), tag + " lower reapplication deals only its own periodic damage")
+	var targets := await reset_case()
+	var enemy = targets[0]
+	enemy.speed = 0
+	enemy.cooldown = 1000
+	for i in range(3): enemy.apply_element("poison", 100)
+	enemy._physics_process(0.01)
+	enemy.apply_element("fire", 20)
+	check(enemy.poison_stacks == 0 and enemy.poison_damage == 0 and enemy.poison_tick == 0, "Combustion completely ends the consumed poison application")
+	enemy.apply_element("poison", 10)
+	check(enemy.poison_stacks == 1 and is_equal_approx(enemy.poison_damage, 0.4) and enemy.poison_tick == 0, "Poison after combustion starts one fresh weak layer with no inherited delay")
+	for i in range(2): enemy.apply_element("poison", 10)
+	enemy.poison_left = 0.01
+	enemy._physics_process(0.02)
+	check(enemy.poison_marker_level() == 0 and enemy.poison_stacks == 0, "The exact expiry frame removes the displayed and combustible poison stacks")
+	var neighbour_hp: float = targets[1].hp
+	enemy.apply_element("fire", 20)
+	check(targets[1].hp == neighbour_hp, "Fire cannot detonate poison that expired earlier in the same frame")
+
 func coop_and_legacy_cases() -> void:
 	var targets := await reset_case("frost", 2, true)
 	for i in range(3): game.player.weapon_hit(targets[0], 1, Vector2.ZERO, "ice")
@@ -179,6 +240,7 @@ func run() -> void:
 		if node.get_script() == game.EFFECT and not node.reaction.is_empty(): reaction_count += 1)
 	await thermal_cases()
 	await combustion_cases()
+	await status_expiry_cases()
 	await coop_and_legacy_cases()
 	await weapon_cases()
 	await native_capture()

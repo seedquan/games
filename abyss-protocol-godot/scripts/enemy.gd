@@ -104,6 +104,9 @@ func _physics_process(delta: float) -> void:
 			take_damage(burn_damage, Vector2.ZERO)
 			if dead:
 				return
+	if game.campaign_version >= 2 and burn_left == 0.0:
+		burn_damage = 0.0
+		burn_tick = 0.0
 	if poison_left > 0.0:
 		poison_left = maxf(0.0, poison_left - delta)
 		poison_tick -= delta
@@ -114,6 +117,11 @@ func _physics_process(delta: float) -> void:
 				return
 	else:
 		poison_stacks = 0
+	if game.campaign_version >= 2 and poison_left == 0.0:
+		# End the application on its expiry frame, before another hit can ignite it.
+		poison_stacks = 0
+		poison_damage = 0.0
+		poison_tick = 0.0
 	flash = maxf(0.0, flash - delta)
 	frozen = maxf(0.0, frozen - delta)
 	knockback = knockback.move_toward(Vector2.ZERO, 750.0 * delta)
@@ -287,6 +295,9 @@ func apply_element(element: String, power: float, level := 1) -> void:
 		return
 	match element:
 		"fire":
+			if game.campaign_version >= 2 and burn_left <= 0.0:
+				burn_damage = 0.0
+				burn_tick = 0.0
 			burn_left = 2.5
 			burn_damage = maxf(burn_damage, power * 0.12)
 			fire_reactions(power)
@@ -302,6 +313,10 @@ func apply_element(element: String, power: float, level := 1) -> void:
 					freeze_for(game.PROGRESSION.ice_duration(level, guardian))
 					if guardian: ice_guard_left = 2.2
 		"poison":
+			if game.campaign_version >= 2 and poison_left <= 0.0:
+				poison_stacks = 0
+				poison_damage = 0.0
+				poison_tick = 0.0
 			poison_stacks = mini(6, poison_stacks + 1)
 			poison_left = 4.0
 			poison_damage = maxf(poison_damage, power * 0.04)
@@ -349,7 +364,9 @@ func fire_reactions(power: float) -> void:
 		var burst := poison_stacks * power * 0.18
 		poison_stacks = 0
 		poison_left = 0.0
-		if modern: poison_damage = 0.0
+		if modern:
+			poison_damage = 0.0
+			poison_tick = 0.0
 		reaction_burst(burst, 185.0 if modern else 0.0, "combustion")
 
 func reaction_burst(amount: float, reach: float, reaction: String) -> void:
