@@ -1,7 +1,7 @@
 extends Node2D
 ## A placed, fully warned boss attack. Drawing and hits share cached polygons.
 
-const IDS := ["sweep", "coolant", "lattice", "heat_ring", "sequence"]
+const IDS := ["sweep", "coolant", "lattice", "heat_ring", "sequence", "cross_sequence"]
 var game
 var shape := "sector"
 var radius := 260.0
@@ -37,6 +37,12 @@ static func placements(id: String, origin: Vector2, aim: Vector2, targets: Array
 			for i in range(4):
 				result.append({"position": origin, "shape": "sector", "radius": 360.0, "inner_radius": 80.0,
 					"heading": aim.angle() + i * PI / 2, "half_angle": 0.6, "delay": 0.95 + i * 0.35})
+		"cross_sequence":
+			for pair in range(2):
+				for side in range(2):
+					result.append({"position": origin, "shape": "sector", "radius": 440.0, "inner_radius": 80.0,
+						"heading": aim.angle() + pair * PI / 2 + side * PI, "half_angle": PI / 3,
+						"delay": 1.05 + pair * 0.75, "wave_step": pair + 1})
 	return result
 
 func configure(spec: Dictionary) -> void:

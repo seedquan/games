@@ -1158,7 +1158,8 @@ func update_status() -> void:
 	if boss_panel.visible:
 		var boss = game.active_boss
 		boss_mark.visible = game.campaign_version >= 2
-		(boss_mark.texture as AtlasTexture).region = Rect2(clampi((game.room - 1) / 6, 0, 4) * 64, 0, 64, 64)
+		var crest_index: int = 5 if boss.core_overloaded() else clampi((game.room - 1) / 6, 0, 4)
+		(boss_mark.texture as AtlasTexture).region = Rect2(crest_index * 64, 0, 64, 64)
 		var phase := "过载阶段" if boss.kind == "boss" and boss.hp < boss.max_hp * 0.5 else "防御阶段"
 		boss_name.text = game.room_data.get("name", "深渊主控体" if boss.kind == "boss" else "封锁卫士") + "　/　" + phase
 		if boss.attacking:

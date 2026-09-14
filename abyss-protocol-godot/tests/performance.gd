@@ -140,7 +140,7 @@ func run() -> void:
 					for layer in range(index % 6 + 1): enemy.apply_element("poison", 0)
 					index += 1
 		if guardians and i % 120 == 0:
-			var id: String = game.GUARDIAN_ATTACK.IDS[(i / 120) % 5]
+			var id: String = game.GUARDIAN_ATTACK.IDS[(i / 120) % game.GUARDIAN_ATTACK.IDS.size()]
 			for spec in game.GUARDIAN_ATTACK.placements(id, game.player.position - Vector2(180, 0), Vector2.RIGHT, game.team()):
 				game.spawn_guardian_attack(spec, 22)
 		if conduction and i % 60 == 0:
