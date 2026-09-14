@@ -47,6 +47,7 @@ func run() -> void:
 		for element in PROGRESSION.ELEMENTS: game.player.enchantments[element] = 3
 		for index in range(count): game.player.enchantments[PROGRESSION.ELEMENTS[index]] = 2
 		PROGRESSION.apply(PROGRESSION.rune("mod_focus"), game.player, 2)
+		PROGRESSION.apply(PROGRESSION.rune("nova_echo"), game.player, 2)
 		game.player.set_physics_process(false)
 		await ENCOUNTER_FIXTURE.clear(game)
 		check(game.state == "reward" and game.boon_choices.size() == count, "Real capped progression produces exactly %d useful reward choices" % count)
@@ -89,6 +90,8 @@ func run() -> void:
 		legacy.version = 1
 		legacy.erase("cooperative")
 		legacy.erase("weapon_mod")
+		# This fixture represents an original save, before skill blessings existed.
+		legacy.enchantments.erase("nova_echo")
 		legacy.erase("campaign")
 		legacy.room.erase("generator")
 		check(not SAVE.valid(legacy), "Original campaigns still require the original three-choice reward shape")

@@ -74,6 +74,9 @@ static func member_valid(value: Variant, version := 1) -> bool:
 	if value.stats.hp > value.stats.max_hp:
 		return false
 	for tag in value.enchantments:
+		if tag == PROGRESSION.NOVA.ID:
+			if version != 3 or value.enchantments[tag] is not int or value.enchantments[tag] != 1: return false
+			continue
 		if tag not in PROGRESSION.ELEMENTS or not value.enchantments[tag] is int or not numeric(value.enchantments[tag], 1, 3):
 			return false
 	return true
@@ -133,7 +136,7 @@ static func valid(value: Variant) -> bool:
 	if value.state == "story" and (value.story_id not in STORY.BEATS or value.story_return not in ["playing", "reward", "shop", "rest"]):
 		return false
 	var boons: Array = []
-	for boon in PROGRESSION.BOONS + (PROGRESSION.MODS.CARDS if value.version == 3 else []):
+	for boon in PROGRESSION.BOONS + (PROGRESSION.MODS.CARDS + PROGRESSION.SKILL_BOONS if value.version == 3 else []):
 		boons.append(boon.stat)
 	if not string_array(value.get("boons"), boons, 3) or not string_array(value.get("stock"), ["repair", "tuning"] + PROGRESSION.ELEMENTS, 3):
 		return false

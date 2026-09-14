@@ -196,7 +196,8 @@ func update_action_strip(member, captions: Array[Label], icons: Array[TextureRec
 			ready = false
 		if i == 0 and member.weapon.drawing and member.hp > 0:
 			value = "%d%%" % int(member.weapon.charge / float(member.weapon.definition.charge) * 100)
-		captions[i].text = ACTION_NAMES[i] + "\n" + value
+		var title: String = "霜火" if i == 3 and game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1 else ACTION_NAMES[i]
+		captions[i].text = title + "\n" + value
 		icons[i].modulate = MINT if ready else MUTED
 
 func set_mouse_passthrough(node: Node) -> void:
@@ -389,9 +390,9 @@ func show_menu(kind: String) -> void:
 			var card_title := label(card_name, 28, Color("ece8d9"))
 			card_title.add_theme_font_override("font", DISPLAY_FONT)
 			card_content.add_child(card_title)
-			if boon.stat in game.PROGRESSION.MODS.IDS:
+			if boon.stat in game.PROGRESSION.MODS.IDS or boon.stat == game.PROGRESSION.NOVA.ID:
 				var illustration := TextureRect.new()
-				illustration.texture = modification_art(game.player.weapon.definition, boon.stat)
+				illustration.texture = game.PROGRESSION.NOVA.DIAGRAM if boon.stat == game.PROGRESSION.NOVA.ID else modification_art(game.player.weapon.definition, boon.stat)
 				illustration.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 				illustration.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 				illustration.custom_minimum_size.y = 64
@@ -756,6 +757,8 @@ func build_run_overview() -> void:
 	if member.empowered > 0: status += "\n临时增伤 50%% · 剩余 %.1f 秒" % member.empowered
 	if member.hp <= 0: status += "\n机体离线，等待队友修复。"
 	build_info_card(grid, "机体状态", status, MINT, 1)
+	if game.campaign_version >= 2 and member.enchantments.get(game.PROGRESSION.NOVA.ID, 0) == 1:
+		build_info_card(grid, "技能祝福 / 霜火回响", game.PROGRESSION.NOVA.description(member.damage), Color("e6b879"), 8, -1, game.PROGRESSION.NOVA.DIAGRAM)
 	for id in game.PROGRESSION.ELEMENTS:
 		var rank := int(member.enchantments.get(id, 0))
 		var innate: bool = definition.get("element", "") == id

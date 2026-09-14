@@ -6,6 +6,8 @@ const UPGRADES := [
 	{"id": "recovery", "name": "能量回收", "description": "每级增加两点每秒能量回复。", "base_cost": 20},
 ]
 const MODS = preload("res://scripts/weapon_mods.gd")
+const NOVA = preload("res://scripts/nova_echo.gd")
+const SKILL_BOONS := [NOVA.CARD]
 const ELEMENTS := ["fire", "ice", "shock", "poison", "leech", "execute"]
 const BOONS := [
 	{"name": "锋刃增幅", "tag": "攻击强化", "description": "武器伤害提高百分之二十五。\n武器主攻击与等离子弹均生效。", "stat": "damage"},
@@ -32,6 +34,8 @@ const ELEMENT_LABELS := {"fire": "火焰", "ice": "冰霜", "shock": "电击", "
 
 static func effects(boon: Dictionary, member, version := 2) -> Dictionary:
 	var result: Dictionary = {}
+	if boon.stat == NOVA.ID:
+		return {"skill": version >= 2 and int(member.enchantments.get(NOVA.ID, 0)) == 0}
 	if boon.stat in MODS.IDS:
 		return {"modification": version >= 2 and member.weapon_mod.is_empty()}
 	match boon.stat:
@@ -72,9 +76,12 @@ static func apply(boon: Dictionary, member, version := 2) -> void:
 		member.weapon.equip(member.weapon.definition.id)
 	if changes.get("rune", false):
 		member.enchantments[boon.stat] = mini(3, int(member.enchantments.get(boon.stat, 0)) + 1)
+	if changes.get("skill", false): member.enchantments[boon.stat] = 1
 
 static func describe(boon: Dictionary, member, version := 2) -> String:
 	if version < 2: return boon.get("description", "")
+	if boon.stat == NOVA.ID:
+		return "已获得 · 不会重复叠加。" if member.enchantments.has(NOVA.ID) else NOVA.description(member.damage)
 	if boon.stat in MODS.IDS: return MODS.preview(member, boon.stat)
 	var changes := effects(boon, member, version)
 	match boon.stat:
@@ -119,10 +126,11 @@ static func leech_capacity(level: int) -> float:
 static func eligible(boon: Dictionary, enchants: Dictionary, members: Array, version: int) -> bool:
 	if not members.is_empty():
 		return members.any(func(member): return can_apply(boon, member, version))
+	if boon.stat == NOVA.ID: return version >= 2 and int(enchants.get(NOVA.ID, 0)) == 0
 	return boon.stat not in MODS.IDS and int(enchants.get(boon.stat, 0)) < 3
 
 static func offers(rng: RandomNumberGenerator, first_room: bool, enchants: Dictionary, members: Array = [], version := 1) -> Array:
-	var available: Array = BOONS + (MODS.CARDS if version >= 2 else [])
+	var available: Array = BOONS + (MODS.CARDS + SKILL_BOONS if version >= 2 else [])
 	var pool: Array = available.filter(func(boon): return eligible(boon, enchants, members, version))
 	var result: Array = []
 	if first_room and version >= 2:
@@ -142,7 +150,7 @@ static func offers(rng: RandomNumberGenerator, first_room: bool, enchants: Dicti
 	return result
 
 static func rune(id: String) -> Dictionary:
-	for boon in BOONS + MODS.CARDS:
+	for boon in BOONS + MODS.CARDS + SKILL_BOONS:
 		if boon.stat == id:
 			return boon
 	return {}
