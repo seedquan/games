@@ -49,6 +49,33 @@ func bounds() -> void:
 		check(viewport.encloses(game.hud.partner_panel.get_global_rect()), "Partner vitals fit " + str(root.size))
 	check(game.hud.skill_row.get_global_rect().position.y >= viewport.end.y - 104, "Action strip stays inside its compact backing")
 
+func glaive_flight_status() -> void:
+	await reset_case(true)
+	game.player.weapon_mod = "mod_focus"
+	game.player.weapon.equip("glaive")
+	game.player.aim = Vector2.RIGHT
+	game.player.set_physics_process(true)
+	check(game.player.weapon.fire(), "Throw the actual heavy-return glaive")
+	await frames(30)
+	var shot = game.player.weapon.active_glaive.get_ref()
+	check(game.player.slash_cooldown == 0 and is_instance_valid(shot) and not shot.returning, "Normal attack cooldown expires before the heavy glaive returns")
+	game.hud.update_status()
+	check("飞行中" in game.hud.skills[0].text, "Outbound glaive remains visibly unavailable after its cooldown expires")
+	check(game.hud.skill_icons[0].modulate != game.hud.partner_skill_icons[0].modulate, "Only the throwing seat has an unavailable primary icon")
+	await snapshot("glaive-outbound")
+	await frames(20)
+	game.hud.update_status()
+	check(is_instance_valid(shot) and shot.returning and "回收中" in game.hud.skills[0].text, "HUD follows the actual projectile entering its return leg")
+	await snapshot("glaive-return")
+	game.player.hp = 0
+	game.hud.update_status()
+	check("—" in game.hud.skills[0].text, "Downed state overrides an in-flight weapon")
+	game.player.hp = 100
+	await frames(60)
+	game.hud.update_status()
+	check(not is_instance_valid(shot) and "右肩" in game.hud.skills[0].text, "Catching the glaive restores the actual controller attack prompt")
+	check(game.hud.skill_icons[0].modulate == game.hud.partner_skill_icons[0].modulate, "Caught glaive returns to the ready icon")
+
 func run() -> void:
 	game = load("res://scenes/main.tscn").instantiate()
 	game.persistence_enabled = false
@@ -73,6 +100,7 @@ func run() -> void:
 		await frames()
 		bounds()
 	await snapshot("solo")
+	await glaive_flight_status()
 	await reset_case(true)
 	game.player.dash_cooldown = 2
 	game.companion.freeze_cooldown = 6
