@@ -1000,6 +1000,22 @@ func build_help() -> void:
 	content.add_theme_constant_override("separation", 22)
 	scroll.add_child(content)
 	if game.campaign_version >= 2:
+		content.add_child(label("回旋刃 · 移动引导回程", 23, MINT))
+		var return_row := HBoxContainer.new()
+		return_row.add_theme_constant_override("separation", 24)
+		content.add_child(return_row)
+		var return_icon := TextureRect.new()
+		return_icon.name = "GlaiveReturnGuide"
+		return_icon.texture = preload("res://assets/ui/glaive_return.svg")
+		return_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		return_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		return_icon.custom_minimum_size = Vector2(176, 64)
+		return_row.add_child(return_icon)
+		var return_tip := label("回收时，地面箭头指向投掷机体；移动会改变回程路线。\n让敌人处在飞刃与机体之间；短横线表示前方掩体会挡住飞刃。", 20, Color("bfd1d4"))
+		return_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		return_tip.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		return_tip.focus_mode = Control.FOCUS_ALL
+		return_row.add_child(return_tip)
 		content.add_child(label("弹反 · 把来弹送回去", 23, MINT))
 		defense_demo = preload("res://scripts/defense_demo.gd").new()
 		defense_demo.name = "DefenseDemo"

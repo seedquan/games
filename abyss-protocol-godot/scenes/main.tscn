@@ -12,6 +12,8 @@ script = ExtResource("1")
 [node name="Arena" type="Node2D" parent="World"]
 script = ExtResource("2")
 
+[node name="WeaponGuides" type="Node2D" parent="World"]
+
 [node name="Actors" type="Node2D" parent="World"]
 y_sort_enabled = true
 

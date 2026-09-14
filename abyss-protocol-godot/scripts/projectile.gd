@@ -24,6 +24,7 @@ var excluded: Array[RID] = []
 var visual_offset := Vector2.ZERO
 var reflected := false
 var blade_shape: CircleShape2D
+var return_guide: Node2D
 
 func configure(options: Dictionary) -> void:
 	return_after = options.get("return_after", 0.5)
@@ -44,6 +45,10 @@ func _ready() -> void:
 		blade_shape = CircleShape2D.new()
 		blade_shape.radius = GLAIVE_RADIUS
 		$Collision.shape = blade_shape
+		return_guide = preload("res://scripts/glaive_return_guide.gd").new()
+		return_guide.projectile = weakref(self)
+		game.get_node("World/WeaponGuides").add_child(return_guide)
+		tree_exiting.connect(return_guide.queue_free)
 	if speed <= 0.0:
 		speed = 300.0 if hostile else 720.0
 	body_entered.connect(_on_body_entered)
@@ -100,12 +105,15 @@ func _physics_process(delta: float) -> void:
 		global_position += direction * 0.1
 	queue_redraw()
 
-func blade_contact(destination: Vector2) -> Dictionary:
+func get_return_guide():
+	return return_guide if is_instance_valid(return_guide) else null
+
+func blade_contact(destination: Vector2, solid_only := false) -> Dictionary:
 	var space := get_world_2d().direct_space_state
 	var query := PhysicsShapeQueryParameters2D.new()
 	query.shape = blade_shape
 	query.transform = Transform2D(0, global_position)
-	query.collision_mask = collision_mask
+	query.collision_mask = 1 if solid_only else collision_mask
 	query.exclude = excluded
 	query.margin = 0.01
 	# cast_motion ignores bodies already touching the initial shape.
