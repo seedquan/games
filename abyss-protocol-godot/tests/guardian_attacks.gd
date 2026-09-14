@@ -58,7 +58,7 @@ func geometry_cases() -> void:
 		var spec: Dictionary = ATTACK.placements(id, Vector2(800, 650), Vector2.RIGHT, [game.player])[0]
 		var attack = game.spawn_guardian_attack(spec, 22)
 		attack.set_physics_process(false)
-		game.player.position = attack.position + (Vector2(180, 0) if id in ["sweep", "heat_ring", "sequence"] else Vector2.ZERO)
+		game.player.position = attack.position + (Vector2(180, 0) if id in ["sweep", "heat_ring", "sequence", "cross_sequence"] else Vector2.ZERO)
 		game.player.hp = 100
 		game.player.invulnerable = 0
 		game.player.parry_left = 1
@@ -127,6 +127,81 @@ func heat_wave_cases() -> void:
 		check(game.player.dash_cooldown == 0 and game.player.parry_cooldown == 0, "Walking response does not depend on dash or parry")
 		check(game.companion.hp == 78, "One partner dodging does not protect the partner ignoring the outer wave")
 		check(game.get_node("World/Projectiles").get_child_count() == 0, "Both waves finish and leave no persistent attack nodes")
+
+func core_overload_cases() -> void:
+	await reset_case()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 904
+	game.next_room(game.ROOMS.generate(30, "boss", rng))
+	var boss = game.active_boss
+	boss.set_physics_process(false)
+	game.player.set_physics_process(false)
+	boss.hp = boss.max_hp * 0.49
+	check(boss.next_attack() == "cross_sequence", "Core overload changes its signature after half health")
+	var specs := ATTACK.placements("cross_sequence", Vector2(800, 450), Vector2.RIGHT, game.team())
+	check(specs.size() == 4, "Overload places two opposed pairs with independent warnings")
+	if specs.size() != 4: return
+	boss.hp = boss.max_hp * 0.5
+	check(boss.next_attack() == "sequence", "Exact half health retains the first-phase signature")
+	boss.cooldown = 0
+	game.player.position = boss.position + Vector2(250, 0)
+	boss._physics_process(0.01)
+	check(boss.attacking and boss.next_attack() == "sequence", "Actual enemy processing commits the prepared attack")
+	boss.hp = boss.max_hp * 0.49
+	check(boss.next_attack() == "sequence", "Crossing half health cannot replace an attack already being prepared")
+	boss.release_attack()
+	boss.attacking = false
+	boss.pattern = 5
+	check(boss.next_attack() == "cross_sequence", "The next signature uses overload after the committed attack releases")
+	await frames()
+	check((game.hud.boss_mark.texture as AtlasTexture).region.position.x == 320, "Core HUD shows the distinct overload crest")
+	await reset_case()
+	for heading in range(8):
+		var aim := Vector2.from_angle(heading * TAU / 8.0)
+		var placements := ATTACK.placements("cross_sequence", Vector2(800, 450), aim, game.team())
+		var waves: Array = []
+		for spec in placements:
+			var wave = game.spawn_guardian_attack(spec, 22)
+			wave.set_physics_process(false)
+			waves.append(wave)
+		for pair in range(2):
+			var first = waves[pair * 2]
+			var second = waves[pair * 2 + 1]
+			check(first.delay == second.delay and first.wave_step == pair + 1 and second.wave_step == pair + 1, "Opposed sectors share their actual countdown and pair number")
+			var axis := aim.rotated(pair * PI / 2)
+			for side in [-1, 1]:
+				var point: Vector2 = first.position + axis * 300 * side
+				check(first.contains_point(point) or second.contains_point(point), "Each overload pair threatens both opposite sides")
+			var safe: Vector2 = first.position + axis.orthogonal() * 300
+			check(not first.contains_point(safe) and not second.contains_point(safe), "Each pair leaves a visible perpendicular escape gap")
+			check(not first.contains_point(first.position + axis * 70) and not first.contains_point(first.position + axis * 450), "Overload preserves the center refuge and outer boundary")
+		check(waves[0].delay >= 1.05 and waves[2].delay - waves[0].delay >= 0.75, "Both pairs receive enough warned time for a walking response")
+		for wave in waves: wave.queue_free()
+	await frames()
+	await reset_case(true)
+	# Isolate the walking route from room-specific obstacles. Full campaigns
+	# separately exercise the signature in the authored core arena.
+	var room: Dictionary = game.room_data.duplicate(true)
+	for key in ["cover", "obstacles", "furnishings", "shell"]: room[key] = []
+	room.erase("art")
+	game.arena.apply_room(room)
+	var origin := Vector2(800, 450)
+	game.player.position = origin + Vector2.from_angle(deg_to_rad(112)) * 240
+	game.companion.position = origin + Vector2.from_angle(PI / 4) * 240
+	for member in game.team():
+		member.set_physics_process(true)
+		member.input_armed = true
+	for spec in specs: game.spawn_guardian_attack(spec, 22)
+	for tick in range(130):
+		for action in ["move_left", "move_up"]:
+			if tick >= 66 and tick < 109: Input.action_press(game.player.action(action))
+			else: Input.action_release(game.player.action(action))
+		await physics_frame
+	for action in ["move_left", "move_up"]: Input.action_release(game.player.action(action))
+	check(game.player.hp == 100 and game.player.position.x < origin.x - 210, "Default-speed input walks from the first gap into the second without taking damage")
+	check(game.player.dash_cooldown == 0 and game.player.parry_cooldown == 0, "Overload walking response needs no defensive skill")
+	check(game.companion.hp == 56, "Ignoring both pairs deals one independent hit per warned beat")
+	check(game.get_node("World/Projectiles").get_child_count() == 0, "Overload does not leave lingering hazards")
 
 func boundaries_and_coop() -> void:
 	await reset_case(true)
@@ -202,6 +277,7 @@ func run() -> void:
 	await frames()
 	await geometry_cases()
 	await heat_wave_cases()
+	await core_overload_cases()
 	await boundaries_and_coop()
 	await guardian_cases()
 	game.queue_free()

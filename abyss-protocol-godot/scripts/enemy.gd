@@ -11,7 +11,7 @@ const ICE_FRAME := Vector2(64, 24)
 const MELEE_REACH := 105.0
 const MELEE_HALF_ANGLE := acos(0.1)
 const ATTACK_LABELS := {"ground": "地面锁定", "spread": "扇形齐射", "radial": "环形弹幕", "shot": "瞄准射击", "melee": "近身挥击", "cross": "十字交火",
-	"sweep": "盾阵横扫", "coolant": "冷凝封路", "lattice": "档案光栅", "heat_ring": "双重热浪", "sequence": "协议重排"}
+	"sweep": "盾阵横扫", "coolant": "冷凝封路", "lattice": "档案光栅", "heat_ring": "双重热浪", "sequence": "协议重排", "cross_sequence": "交错重排"}
 
 var game
 var kind := "stalker"
@@ -27,6 +27,7 @@ var cooldown := 1.0
 var windup := 0.0
 var attacking := false
 var committed_direction := Vector2.RIGHT
+var committed_attack := ""
 var flash := 0.0
 var dead := false
 var clock := 0.0
@@ -157,6 +158,7 @@ func _physics_process(delta: float) -> void:
 			velocity = walking * speed if distance > (85.0 if kind in ["boss", "warden"] else 49.0) else Vector2.ZERO
 		var reach := 520.0 if kind in ["drone", "boss", "warden"] else 82.0
 		if cooldown <= 0.0 and distance < reach and visible:
+			committed_attack = next_attack()
 			attacking = true
 			windup = 0.75 if kind in ["boss", "warden"] else 0.5
 			committed_direction = direction
@@ -190,6 +192,7 @@ func release_attack() -> void:
 	recoil = 1.0
 	var upcoming := next_attack()
 	var directions := warning_shot_directions()
+	committed_attack = ""
 	pattern += 1
 	if upcoming in game.GUARDIAN_ATTACK.IDS:
 		var targets: Array = game.team().filter(func(member): return member.hp > 0)
@@ -212,9 +215,15 @@ func release_attack() -> void:
 			if offset.length() < MELEE_REACH and committed_direction.dot(offset.normalized()) > cos(MELEE_HALF_ANGLE) and game.has_sight(global_position, member.position):
 				member.take_damage(damage, global_position)
 
+func core_overloaded() -> bool:
+	return kind == "boss" and "sequence" in guardian_patterns and hp < max_hp * 0.5
+
 func next_attack() -> String:
+	# A phase transition changes the next windup, never the one already shown.
+	if not committed_attack.is_empty(): return committed_attack
 	if not guardian_patterns.is_empty():
-		return guardian_patterns[pattern % guardian_patterns.size()]
+		var upcoming: String = guardian_patterns[pattern % guardian_patterns.size()]
+		return "cross_sequence" if upcoming == "sequence" and core_overloaded() else upcoming
 	if kind == "warden":
 		return "ground" if (pattern + 1) % 2 == 0 else "spread"
 	return "radial" if kind == "boss" else "shot" if kind == "drone" else "melee"
