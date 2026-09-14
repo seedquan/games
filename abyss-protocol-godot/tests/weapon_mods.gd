@@ -75,6 +75,61 @@ func all_forms() -> void:
 			check(game.player.weapon.definition == effective, "Re-equipping rebuilds once instead of multiplying again")
 	check(before == var_to_bytes(CATALOG.FORMS), "Every base catalog entry remains byte-identical")
 
+func gravity_pacing() -> void:
+	for version in [1, 2]:
+		for id in ["", "mod_focus", "mod_flow"]:
+			var targets := await reset_case("grav", "", [Vector2(120, 0)])
+			game.campaign_version = version
+			game.player.weapon_mod = id
+			game.player.weapon.equip("grav")
+			var base_damage: float = game.player.damage
+			var expected := base_damage * (2.8 if version >= 2 else 1.65)
+			if version >= 2 and id == "mod_flow": expected *= 0.9
+			fire()
+			var field = game.get_node("World/Projectiles").get_child(0)
+			check(is_equal_approx(field.damage, expected), "Gravity explosion uses the campaign damage budget without changing actor growth")
+			var attack_text: String = game.BUILD_INFO.attack_text(game.player.weapon.definition, base_damage)
+			check("引爆 %.1f" % expected in attack_text, "Build page reports the actual gravity explosion")
+			if version == 1:
+				check(game.player.weapon.definition == CATALOG.find("grav"), "Legacy gravity ignores modern tuning and refit state")
+			await frames(10)
+			check(targets[0].hp == 10000, "Stronger gravity still waits for its visible pull before damage")
+			if version == 2 and id == "mod_flow": await snapshot("gravity-pull")
+			await frames(82)
+			check(is_equal_approx(10000 - targets[0].hp, expected), "The real delayed well hits exactly once with the advertised damage")
+			game.player.weapon.equip("grav")
+			check(game.player.damage == base_damage and is_equal_approx(game.player.weapon.definition.damage * base_damage, expected), "Re-equipping neither changes growth nor stacks gravity tuning")
+			var before: float = targets[0].hp
+			game.player.try_freeze()
+			check(is_equal_approx(before - targets[0].hp, base_damage * 0.6), "Gravity tuning leaves shared nova damage unchanged")
+			game.player.try_bolt()
+			var plasma = game.get_node("World/Projectiles").get_children().filter(func(n): return n.get_script() == preload("res://scripts/projectile.gd"))
+			check(plasma.size() == 1 and is_equal_approx(plasma[0].damage, base_damage * 0.85), "Gravity tuning leaves shared plasma damage unchanged")
+
+func gravity_continuation() -> void:
+	game.coop.enabled = true
+	game.coop.devices.assign([3, 7])
+	game.coop.weapons.assign(["grav", "grav"])
+	game.start_run(72531)
+	for actor in game.team(): actor.set_physics_process(false)
+	game.apply_boon(game.PROGRESSION.rune("mod_focus"))
+	game.companion.weapon_mod = ""
+	game.apply_boon(game.PROGRESSION.rune("mod_flow"))
+	game.apply_boon(game.PROGRESSION.rune("damage"))
+	game.persistence_enabled = true
+	game.save_checkpoint()
+	var saved: Dictionary = game.profile.checkpoint.duplicate(true)
+	check(SAVE.valid(saved) and saved.version == 3, "Gravity refits save through the existing cooperative checkpoint schema")
+	game.queue_free()
+	await frames()
+	var loaded = PROFILE.new()
+	loaded.load_progress(path)
+	await spawn_game(loaded)
+	check(game.continue_saved_run(), "Cold load restores a two-gravity team")
+	check(game.player.weapon_mod == "mod_focus" and game.companion.weapon_mod == "mod_flow", "Different gravity refits retain their original seat")
+	check(game.player.damage == saved.stats.damage and game.companion.damage == saved.partner.stats.damage, "Cold load preserves both saved growth values")
+	check(is_equal_approx(game.player.weapon.definition.damage, 2.8) and is_equal_approx(game.companion.weapon.definition.damage, 2.8 * 0.9), "Cold load rebuilds both tuned attacks exactly once")
+
 func geometry_cases() -> void:
 	var t := await reset_case("lance", "mod_focus", [Vector2(240, 0), Vector2(100, 65)])
 	fire()
@@ -261,6 +316,14 @@ func choice_and_save() -> void:
 
 func run() -> void:
 	await spawn_game()
+	await gravity_pacing()
+	if "--gravity-only" in OS.get_cmdline_user_args():
+		game.queue_free()
+		await frames()
+		print("ABYSS GRAVITY PACING: %d checks, %d failures" % [checks, failures])
+		quit(0 if failures == 0 else 1)
+		return
+	await gravity_continuation()
 	await all_forms()
 	await geometry_cases()
 	await choice_and_save()

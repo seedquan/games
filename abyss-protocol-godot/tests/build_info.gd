@@ -38,7 +38,8 @@ func damage_cases() -> void:
 		enemy.hp = 10000
 		enemy.max_hp = 10000
 		enemy.set_physics_process(false)
-		var numbers := INFO.attack_values(form, game.player.damage)
+		# The build page uses the equipped campaign/refit definition, not the legacy catalog.
+		var numbers := INFO.attack_values(game.player.weapon.definition, game.player.damage)
 		game.player.weapon.fire(1.0 if form.has("charge") else -1.0)
 		if form.mode == "melee" or form.mode == "chain":
 			check(is_equal_approx(10000 - enemy.hp, numbers.hit), "Displayed direct hit matches actual " + form.id)

@@ -7,8 +7,11 @@ const CARDS := [
 	{"stat": "mod_flow", "name": "改装方案 二", "tag": "武器改装 · 本局限选一次", "description": "重塑当前武器的攻击方式。"},
 ]
 
-static func definition(weapon: String, id: String) -> Dictionary:
+static func definition(weapon: String, id: String, campaign_version := 2) -> Dictionary:
 	var form: Dictionary = WEAPONS.find(weapon).duplicate(true)
+	# Campaign tuning changes the primary hit, never saved actor stats or skills.
+	if campaign_version < 2: return form
+	if form.mode == "gravity": form.damage = 2.8
 	if id not in IDS: return form
 	var focus := id == "mod_focus"
 	match form.mode:
