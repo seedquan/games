@@ -32,6 +32,8 @@ Godot 生成的 `.import` 元数据与资源一起保留；`.godot/` 导入缓�
 
 `cover_props.webp` 来自原作本地同名设备图集。`scripts/station_portrait.gd` 是本项目原创的矢量轨道站插画；`scripts/arena.gd` 的检修道、板材与舱壁也由原生绘制完成。
 
-`fonts/NotoSerifCJKsc-SemiBold.otf` 来自 Noto CJK 官方仓库的 `Serif/OTF/SimplifiedChinese/`，SIL OFL 1.1 授权，完整字体未做修改，与 `fonts/OFL.txt` 一同分发。
+0.30.0 的中文展示字体改用庆科黄油体 `fonts/ZCOOLQingKeHuangYou-Regular.ttf`，来自 [Google Fonts 字体目录](https://github.com/google/fonts/tree/main/ofl/zcoolqingkehuangyou)，由郑庆科设计，SIL OFL 1.1 授权；完整版权及许可保留在 `fonts/ZCOOL-OFL.txt`。方形结构、切角和紧凑重心用于标题、奖励名称和设置标题，不用于长段正文。
+
+仪表数字使用 `fonts/Oxanium.ttf`，来自 [Google Fonts 字体目录](https://github.com/google/fonts/tree/main/ofl/oxanium)，SIL OFL 1.1 授权，完整版权及许可在 `fonts/Oxanium-OFL.txt`。`Display.tres` 与 `Readout.tres` 均显式回退到已打包的 Noto Sans CJK，避免缺字依赖本机字体；数字资源采用 600 字重并开启等宽数字特性；实测 26px 下十个数字宽度均为 15px。三个字体均未修改，运行时无需联网。旧 Noto Serif 展示字体已从当前包移除，历史发行包保留原资源。
 
 九个短音 `gun/heavy/blade/bow/arc/impact/dash/ui/clear.wav` 是 `tools/make_audio.py` 生成的原创确定性 PCM 音频，没有第三方采样。可重新生成，运行时直接加载本地资源。

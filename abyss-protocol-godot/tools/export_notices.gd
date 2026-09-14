@@ -20,8 +20,11 @@ func _initialize() -> void:
 	names.sort()
 	for name in names:
 		file.store_string(str(name) + "\n============\n" + str(licenses[name]) + "\n\n")
-	file.store_string("Noto Sans CJK / Noto Serif CJK\n============\n")
+	file.store_string("Noto Sans CJK\n============\n")
 	file.store_string(FileAccess.get_file_as_string("res://assets/fonts/OFL.txt"))
+	for font in [["ZCOOL QingKe HuangYou", "ZCOOL-OFL.txt"], ["Oxanium", "Oxanium-OFL.txt"]]:
+		file.store_string("\n\n" + font[0] + "\n============\n")
+		file.store_string(FileAccess.get_file_as_string("res://assets/fonts/" + font[1]))
 	file.close()
 	print("ABYSS NOTICES: complete")
 	quit()
