@@ -20,7 +20,7 @@ func _ready() -> void:
 func equip(id: String) -> bool:
 	if not CATALOG.exists(id):
 		return false
-	definition = MODS.definition(id, actor.weapon_mod if is_instance_valid(actor) and actor.game.campaign_version >= 2 else "")
+	definition = MODS.definition(id, actor.weapon_mod if is_instance_valid(actor) else "", actor.game.campaign_version if is_instance_valid(actor) else 1)
 	cancel_charge()
 	combo = 0
 	combo_left = 0.0
