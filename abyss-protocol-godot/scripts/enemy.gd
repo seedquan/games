@@ -11,7 +11,7 @@ const ICE_FRAME := Vector2(64, 24)
 const MELEE_REACH := 105.0
 const MELEE_HALF_ANGLE := acos(0.1)
 const ATTACK_LABELS := {"ground": "地面锁定", "spread": "扇形齐射", "radial": "环形弹幕", "shot": "瞄准射击", "melee": "近身挥击", "cross": "十字交火",
-	"sweep": "盾阵横扫", "coolant": "冷凝封路", "lattice": "档案光栅", "heat_ring": "熔炉热环", "sequence": "协议重排"}
+	"sweep": "盾阵横扫", "coolant": "冷凝封路", "lattice": "档案光栅", "heat_ring": "双重热浪", "sequence": "协议重排"}
 
 var game
 var kind := "stalker"
