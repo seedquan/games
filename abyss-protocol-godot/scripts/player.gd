@@ -125,6 +125,13 @@ func try_dash(direction: Vector2) -> bool:
 	dash_cooldown = dash_recharge
 	game.effect(global_position, Color("67efe0"), 60.0)
 	game.sound.play_cue("dash", 0.24)
+	if game.campaign_version >= 2 and enchantments.get(game.PROGRESSION.DASH.ID, 0) == 1:
+		var echo = game.PROGRESSION.DASH.new()
+		echo.game = game
+		echo.position = global_position
+		echo.damage = damage * game.PROGRESSION.DASH.DAMAGE_FRACTION
+		echo.seat = seat
+		game.get_node("World/Projectiles").add_child(echo)
 	return true
 
 func try_slash() -> bool:
