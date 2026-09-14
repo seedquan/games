@@ -31,7 +31,9 @@ func snapshot(name: String) -> void:
 	if DisplayServer.get_name() == "headless" or game.verification_directory.is_empty():
 		return
 	await frame()
-	await RenderingServer.frame_post_draw
+	# A minimized native window may stop automatic draws indefinitely. Render the
+	# current scene without presenting it, then read that completed framebuffer.
+	RenderingServer.force_draw(false)
 	var path: String = game.verification_directory.path_join(name + ".png")
 	check(get_viewport().get_texture().get_image().save_png(path) == OK, "save rendered evidence " + name)
 
